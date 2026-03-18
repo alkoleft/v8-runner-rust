@@ -30,10 +30,15 @@ source-set:
 # Platform tools configuration (optional)
 tools:
   platform:
-    # Explicit path to 1cv8/1cv8c binary (auto-discovered if omitted)
+    # Installation hint can point either to a binary:
     # path: /opt/1cv8/x86_64/8.3.25.1234/1cv8
-    version: "8.3.25"
+    #
+    # ...or to an installation/bin directory:
+    # path: /opt/1cv8/x86_64
+    #
+    # Exact platform version for auto-discovery:
+    version: "8.3.25.1234"
 
   edt-cli:
-    # path: /opt/1cedtcli/1cedtcli
+    # path: /opt/1C/1CE/components/1c-edt-2025.1.0+656-x86_64/1cedt/1cedtcli
     auto-start: false

@@ -33,6 +33,18 @@ pub fn run() -> i32 {
         }
     };
 
+    if cli.clean_before_execution {
+        match crate::support::temp::platform_logs_dir(&config.work_path)
+            .and_then(|dir| crate::support::fs::clean_dir(&dir))
+        {
+            Ok(()) => {}
+            Err(e) => {
+                presenter.print_error(&format!("failed to clean platform logs: {e}"));
+                return crate::output::exit_codes::RUNTIME_ERROR;
+            }
+        }
+    }
+
     let result = match &cli.command {
         Command::Build(args) => crate::use_cases::build_project::execute(&config, args, &presenter),
         Command::Test(args) => crate::use_cases::run_tests::execute(&config, args, &presenter),

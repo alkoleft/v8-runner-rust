@@ -31,12 +31,12 @@
 
 ## Процессы и утилиты платформы
 
-- [ ] Реализовать `ProcessExecutor`
-- [ ] Реализовать захват `stdout/stderr/exit code`
-- [ ] Реализовать запись и чтение log-файлов платформы
-- [ ] Реализовать временные файлы для partial lists и YaXUnit config
-- [ ] Реализовать поиск бинарников `1cv8`, `1cv8c`, `ibcmd`, `1cedtcli`
-- [ ] Развести ответственность между locator и platform DSL
+- [x] Реализовать `ProcessExecutor`
+- [x] Реализовать захват `stdout/stderr/exit code`
+- [x] Реализовать запись и чтение log-файлов платформы
+- [x] Реализовать временные файлы для partial lists и YaXUnit config
+- [x] Реализовать поиск бинарников `1cv8`, `1cv8c`, `ibcmd`, `1cedtcli`
+- [x] Развести ответственность между locator и platform DSL
 
 ## Change detection
 
@@ -53,7 +53,7 @@
 
 ### Build
 
-- [ ] Реализовать `DesignerDsl`
+- [x] Реализовать `DesignerDsl`
 - [ ] Реализовать `build_project` use case
 - [ ] Реализовать `--full-rebuild` как очистку state cache
 - [ ] Реализовать выбор затронутых `source-set`
@@ -94,10 +94,10 @@
 
 ### Launch
 
-- [ ] Реализовать `launch --mode designer`
-- [ ] Реализовать `launch --mode thin`
-- [ ] Реализовать `launch --mode thick`
-- [ ] Возвращать статус запуска и доступные process details
+- [x] Реализовать `launch --mode designer`
+- [x] Реализовать `launch --mode thin`
+- [x] Реализовать `launch --mode thick`
+- [x] Возвращать статус запуска и доступные process details
 
 ## Волна 1: тестирование и документация
 

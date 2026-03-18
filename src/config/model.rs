@@ -81,10 +81,13 @@ pub struct ToolsConfig {
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct PlatformToolConfig {
-    /// Explicit path to 1cv8/1cv8c binary (optional, auto-discovered if absent)
+    /// Installation hint for platform utilities.
+    ///
+    /// May point either to a concrete binary (`1cv8`, `1cv8c`, `ibcmd`) or to an installation/bin
+    /// directory from which sibling binaries can be derived.
     pub path: Option<PathBuf>,
 
-    /// Platform version (e.g. "8.3.25.1234")
+    /// Exact platform version in `major.minor.patch.build` format, for example `8.3.25.1234`.
     pub version: Option<String>,
 }
 
