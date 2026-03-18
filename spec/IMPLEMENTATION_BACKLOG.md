@@ -266,6 +266,7 @@ Definition of done:
 3. Реализовать очистку логов перед выполнением.
 4. Реализовать поиск бинарников платформы.
 5. Выделить общий слой запуска platform commands.
+6. Реализовать управляемую схему рабочих директорий: `workPath/<sourceSetName>/...` для EDT-экспорта.
 
 Модули и файлы:
 
@@ -279,7 +280,8 @@ Definition of done:
 
 - можно запустить внешний процесс с захватом `stdout`, `stderr`, exit code;
 - можно создать временный файл для list file и YaXUnit config;
-- можно получить путь к `1cv8` и смежным утилитам из конфига или auto-discovery.
+- можно получить путь к `1cv8` и смежным утилитам из конфига или auto-discovery;
+- рабочая директория EDT создаётся по схеме `workPath/<sourceSetName>/` и управляется предсказуемо.
 
 ### Эпик 3. Change detection и persistent state
 
@@ -290,6 +292,7 @@ Definition of done:
 3. Реализовать JSON storage для hashes и timestamps.
 4. Реализовать группировку изменений по `source-set`.
 5. Реализовать safe fallback: при ошибке сканирования считать все измененным.
+6. Реализовать `SourceSetsService`: выдавать `SourceSetContext` для EDT и Designer, прикреплять отдельное hash storage к каждому логическому источнику. В режиме `DESIGNER` — один контекст; в режиме `EDT` — два независимых контекста (исходный EDT source-set и временный Designer source-set в `workPath`).
 
 Модули и файлы:
 
@@ -301,9 +304,10 @@ Definition of done:
 
 Definition of done:
 
-- state хранится в `workPath/hash-storages/*.json`;
+- state хранится в `workPath/hash-storages/*.json`, изолированно по имени логического source-set;
 - после успешного build state обновляется;
-- если изменений нет, build pipeline может быть пропущен.
+- если изменений нет, build pipeline может быть пропущен;
+- `SourceSetsService` корректно разделяет EDT и Designer контексты в EDT-режиме.
 
 ### Эпик 4. Designer backend и build pipeline
 
@@ -449,10 +453,11 @@ Definition of done:
 Задачи:
 
 1. Расширить config-модель полями `format = EDT`.
-2. Реализовать два логических контекста source-set:
+2. Реализовать `SourceSetsService`, который выдает `SourceSetContext` для EDT и Designer.
+3. Реализовать два логических контекста source-set:
    - EDT source-set;
    - временный Designer source-set в `workPath`.
-3. Реализовать change detection отдельно для EDT и Designer представления.
+4. Реализовать change detection отдельно для EDT и Designer представления.
 
 Модули и файлы:
 
@@ -464,6 +469,8 @@ Definition of done:
 Definition of done:
 
 - build pipeline корректно различает исходный EDT source-set и сгенерированный Designer source-set.
+- `SourceSetsService` корректно разделяет EDT и Designer контексты в EDT-режиме;
+- у каждого логического source-set свое hash storage.
 
 ### Эпик 11. Интерактивный EDT executor
 
@@ -501,7 +508,8 @@ Definition of done:
 
 Definition of done:
 
-- `build` в EDT-режиме сначала делает `EDT -> Designer export`, затем обычный Designer build.
+- `build` в EDT-режиме сначала делает `EDT -> Designer export`, затем обычный Designer build;
+- экспортные каталоги создаются и переиспользуются по схеме `workPath/<sourceSetName>/...`.
 
 ### Эпик 13. EDT syntax validate
 

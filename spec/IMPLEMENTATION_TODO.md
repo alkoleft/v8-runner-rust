@@ -47,6 +47,7 @@
 - [ ] Реализовать JSON storage в `workPath/hash-storages/*.json`
 - [ ] Реализовать fallback на "все изменено" при ошибке сканирования
 - [ ] Реализовать группировку изменений по `source-set`
+- [ ] Реализовать `SourceSetsService`: выдавать `SourceSetContext` для EDT и Designer, прикреплять отдельное hash storage к каждому логическому источнику; в EDT-режиме — два независимых контекста (исходный EDT и временный Designer в `workPath`)
 
 ## Волна 1: Designer MVP
 
@@ -57,6 +58,7 @@
 - [ ] Реализовать `--full-rebuild` как очистку state cache
 - [ ] Реализовать выбор затронутых `source-set`
 - [ ] Реализовать `PartialLoadListGenerator`
+- [ ] Для `.bsl`-файлов добавлять в list связанные XML и каталог объекта
 - [ ] Запретить partial при изменении `Configuration.xml`
 - [ ] Запретить partial при превышении порога числа файлов
 - [ ] Сохранять state только после успешного build
@@ -71,6 +73,7 @@
 - [ ] Реализовать parser JUnit XML
 - [ ] Реализовать parser `[ERR]` блоков YaXUnit-лога
 - [ ] Вернуть summary, suites, cases и extracted errors
+- [ ] Реализовать compact/full режим тестового ответа: compact скрывает passed-тесты и урезает stack trace
 
 ### Dump
 
@@ -85,6 +88,7 @@
 
 - [ ] Реализовать `syntax designer-config`
 - [ ] Реализовать `syntax designer-modules`
+- [ ] Валидировать, что для `syntax designer-modules` включён хотя бы один режим проверки
 - [ ] Реализовать parser designer validation logs
 - [ ] Вернуть structured issues вместо raw stdout
 
@@ -112,12 +116,14 @@
 - [ ] Ввести отдельные state storage для `edt` и `designer`
 - [ ] Реализовать `InteractiveProcessExecutor`
 - [ ] Реализовать ожидание prompt `1C:EDT>`
+- [ ] Реализовать мониторинг живости EDT-процесса и автоперезапуск при сбое
+- [ ] Реализовать single-flight инициализацию EDT-сессии
 - [ ] Реализовать `EdtDsl`
 - [ ] Реализовать экспорт только измененных EDT `source-set`
-- [ ] Реализовать временный Designer-каталог в `workPath`
+- [ ] Реализовать временный Designer-каталог в `workPath/<sourceSetName>/`
 - [ ] Встроить export как первую фазу EDT build
 - [ ] Реализовать `syntax edt`
-- [ ] Реализовать parser EDT validation logs
+- [ ] Реализовать parser EDT validation logs (TSV-подобный формат: каждая строка — отдельный issue)
 
 ## Волна 2: IBCMD
 
@@ -125,12 +131,14 @@
 - [ ] Реализовать build через `config import` и `config apply`
 - [ ] Реализовать dump `FULL` через `--force`
 - [ ] Реализовать dump `INCREMENTAL` через `--sync`
-- [ ] Валидировать ограничения IBCMD для connection type
+- [ ] Явно задокументировать: partial dump по объектам в IBCMD backend не поддерживается
+- [ ] Валидировать ограничения IBCMD для connection type (только файловая ИБ)
 - [ ] Задокументировать ограничения IBCMD backend
 
 ## Подготовка к следующему этапу
 
 - [ ] Нормализовать result types для build/test/dump/syntax/launch
 - [ ] Добавить `steps` в output envelope
+- [ ] Добавить `warnings` в output envelope
 - [ ] Убедиться, что use cases не зависят от CLI parsing
 - [ ] Оставить место для будущего transport adapter слоя
