@@ -13,6 +13,7 @@ A stage is complete when:
 - All tasks for that epic/group are marked completed
 - `cargo check` passes with no errors
 - Rust best practices review has been applied and issues fixed
+- `spec/IMPLEMENTATION_TODO.md` is updated: completed items marked with `[x]`
 
 ## Commit message format
 

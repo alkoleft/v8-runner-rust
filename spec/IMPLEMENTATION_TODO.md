@@ -2,32 +2,32 @@
 
 ## Foundation
 
-- [ ] Создать `Cargo.toml` для бинаря `v8-test-runner`
-- [ ] Добавить базовые зависимости: `clap`, `serde`, `serde_yaml`, `serde_json`, `thiserror`, `tracing`, `walkdir`, `sha2`, `quick-xml`, `tempfile`
-- [ ] Создать `src/main.rs`
-- [ ] Создать `src/app.rs`
-- [ ] Завести модульную структуру `cli`, `config`, `domain`, `use_cases`, `change_detection`, `platform`, `parsers`, `output`, `support`
+- [x] Создать `Cargo.toml` для бинаря `v8-test-runner`
+- [x] Добавить базовые зависимости: `clap`, `serde`, `serde_yaml`, `serde_json`, `thiserror`, `tracing`, `walkdir`, `sha2`, `quick-xml`, `tempfile`
+- [x] Создать `src/main.rs`
+- [x] Создать `src/app.rs`
+- [x] Завести модульную структуру `cli`, `config`, `domain`, `use_cases`, `change_detection`, `platform`, `parsers`, `output`, `support`
 
 ## CLI и output
 
-- [ ] Описать CLI API на `clap`
-- [ ] Добавить глобальные флаги `--config`, `--output`, `--log-level`, `--clean-before-execution`, `--no-color`, `--workdir`
-- [ ] Добавить subcommands `build`, `test`, `dump`, `syntax`, `launch`
-- [ ] Реализовать text presenter
-- [ ] Реализовать json presenter с единым envelope
-- [ ] Нормализовать exit codes для validation/runtime/platform errors
+- [x] Описать CLI API на `clap`
+- [x] Добавить глобальные флаги `--config`, `--output`, `--log-level`, `--clean-before-execution`, `--no-color`, `--workdir`
+- [x] Добавить subcommands `build`, `test`, `dump`, `syntax`, `launch`
+- [x] Реализовать text presenter
+- [x] Реализовать json presenter с единым envelope
+- [x] Нормализовать exit codes для validation/runtime/platform errors
 
 ## Конфигурация
 
-- [ ] Описать модель конфигурации приложения
-- [ ] Реализовать загрузку YAML-конфига
-- [ ] Валидировать `basePath`
-- [ ] Валидировать `workPath`
-- [ ] Валидировать `source-set`
-- [ ] Валидировать `format`
-- [ ] Валидировать `builder`
-- [ ] Валидировать строку подключения
-- [ ] Подготовить `examples/application.yaml`
+- [x] Описать модель конфигурации приложения
+- [x] Реализовать загрузку YAML-конфига
+- [x] Валидировать `basePath`
+- [x] Валидировать `workPath`
+- [x] Валидировать `source-set`
+- [x] Валидировать `format`
+- [x] Валидировать `builder`
+- [x] Валидировать строку подключения
+- [x] Подготовить `examples/application.yaml`
 
 ## Процессы и утилиты платформы
 
