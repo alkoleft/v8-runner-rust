@@ -22,6 +22,10 @@ pub fn parse(content: &str) -> Vec<Issue> {
             continue;
         }
 
+        if is_success_message(trimmed) {
+            continue;
+        }
+
         if let Some(issue) = parse_module_issue(trimmed) {
             if lines
                 .peek()
@@ -121,6 +125,11 @@ fn contains_issue_marker(message: &str) -> bool {
         || lower.contains("неразрешим")
 }
 
+fn is_success_message(line: &str) -> bool {
+    let lower = line.to_lowercase();
+    lower.contains("ошибок не обнаружено")
+}
+
 fn contains_warning_marker(lower_message: &str) -> bool {
     lower_message.contains("warning")
         || lower_message.contains("warn:")
@@ -211,6 +220,13 @@ mod tests {
     #[test]
     fn parses_empty_log() {
         let issues = parse("");
+
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn ignores_success_message() {
+        let issues = parse("Синтаксических ошибок не обнаружено!");
 
         assert!(issues.is_empty());
     }
