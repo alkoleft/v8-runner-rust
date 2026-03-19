@@ -26,6 +26,9 @@ pub enum ConfigValidationError {
     #[error("source-set name contains unsafe path or filename characters: {0}")]
     InvalidSourceSetName(String),
 
+    #[error("source-set name is reserved for internal work directories: {0}")]
+    ReservedSourceSetName(String),
+
     #[error("source-set resolved path must be unique, duplicate: {0}")]
     DuplicateSourceSetPath(String),
 
@@ -34,6 +37,9 @@ pub enum ConfigValidationError {
 
     #[error("IBCMD builder requires a file-based connection string (File=...)")]
     IbcmdRequiresFileConnection,
+
+    #[error("EDT format requires builder=DESIGNER")]
+    EdtRequiresDesignerBuilder,
 
     #[error("format EDT requires at least one source-set with a valid EDT project path")]
     EdtNoProjects,
@@ -52,6 +58,7 @@ pub enum ConfigValidationError {
 pub fn validate(config: &AppConfig) -> Result<(), ConfigValidationError> {
     validate_base_path(&config.base_path)?;
     validate_work_path(&config.work_path)?;
+    validate_matrix(config)?;
     validate_source_sets(config)?;
     validate_connection(config)?;
     validate_platform_version(config)?;
@@ -79,6 +86,10 @@ fn validate_work_path(path: &Path) -> Result<(), ConfigValidationError> {
 }
 
 fn validate_source_sets(config: &AppConfig) -> Result<(), ConfigValidationError> {
+    if config.format == SourceFormat::Edt && config.source_sets.is_empty() {
+        return Err(ConfigValidationError::EdtNoProjects);
+    }
+
     let has_config = config
         .source_sets
         .iter()
@@ -92,6 +103,11 @@ fn validate_source_sets(config: &AppConfig) -> Result<(), ConfigValidationError>
     let mut resolved_paths = HashSet::<String>::new();
     for ss in &config.source_sets {
         validate_source_set_name(&ss.name)?;
+        if config.format == SourceFormat::Edt && is_reserved_workdir_name(&ss.name) {
+            return Err(ConfigValidationError::ReservedSourceSetName(
+                ss.name.clone(),
+            ));
+        }
 
         if !names.insert(ss.name.clone()) {
             return Err(ConfigValidationError::DuplicateSourceSetName(
@@ -105,7 +121,9 @@ fn validate_source_sets(config: &AppConfig) -> Result<(), ConfigValidationError>
             config.base_path.join(&ss.path)
         };
 
-        if config.format == SourceFormat::Designer && !full_path.exists() {
+        if (config.format == SourceFormat::Designer || config.format == SourceFormat::Edt)
+            && !full_path.exists()
+        {
             return Err(ConfigValidationError::SourceSetPathInvalid {
                 name: ss.name.clone(),
                 path: full_path.display().to_string(),
@@ -142,6 +160,22 @@ fn validate_connection(config: &AppConfig) -> Result<(), ConfigValidationError> 
         if !conn.contains("file=") {
             return Err(ConfigValidationError::IbcmdRequiresFileConnection);
         }
+    }
+
+    Ok(())
+}
+
+fn is_reserved_workdir_name(name: &str) -> bool {
+    let normalized = name.to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "hash-storages" | "logs" | "temp" | "edt-workspace"
+    )
+}
+
+fn validate_matrix(config: &AppConfig) -> Result<(), ConfigValidationError> {
+    if config.format == SourceFormat::Edt && config.builder == BuilderBackend::Ibcmd {
+        return Err(ConfigValidationError::EdtRequiresDesignerBuilder);
     }
 
     Ok(())
@@ -390,6 +424,193 @@ mod tests {
         assert!(matches!(
             err,
             ConfigValidationError::InvalidTestExecutionTimeout
+        ));
+    }
+
+    #[test]
+    fn rejects_edt_with_ibcmd_builder() {
+        let base = tempdir().expect("base");
+        let work = tempdir().expect("work");
+        let source_dir = base.path().join("edt-main");
+        std::fs::create_dir_all(&source_dir).expect("source dir");
+
+        let config = AppConfig {
+            base_path: base.path().to_path_buf(),
+            work_path: work.path().to_path_buf(),
+            format: SourceFormat::Edt,
+            builder: BuilderBackend::Ibcmd,
+            connection: "File=/tmp/ib".to_owned(),
+            credentials: Default::default(),
+            source_sets: vec![SourceSetConfig {
+                name: "main".to_owned(),
+                purpose: SourceSetPurpose::Configuration,
+                path: source_dir
+                    .strip_prefix(base.path())
+                    .expect("relative")
+                    .to_path_buf(),
+            }],
+            build: BuildConfig::default(),
+            tools: ToolsConfig::default(),
+            tests: TestsConfig::default(),
+        };
+
+        let err = validate(&config).expect_err("expected invalid edt+ibcmd matrix");
+        assert!(matches!(
+            err,
+            ConfigValidationError::EdtRequiresDesignerBuilder
+        ));
+    }
+
+    #[test]
+    fn rejects_edt_without_source_sets() {
+        let base = tempdir().expect("base");
+        let work = tempdir().expect("work");
+
+        let config = AppConfig {
+            base_path: base.path().to_path_buf(),
+            work_path: work.path().to_path_buf(),
+            format: SourceFormat::Edt,
+            builder: BuilderBackend::Designer,
+            connection: "File=/tmp/ib".to_owned(),
+            credentials: Default::default(),
+            source_sets: vec![],
+            build: BuildConfig::default(),
+            tools: ToolsConfig::default(),
+            tests: TestsConfig::default(),
+        };
+
+        let err = validate(&config).expect_err("expected missing edt source sets");
+        assert!(matches!(err, ConfigValidationError::EdtNoProjects));
+    }
+
+    #[test]
+    fn rejects_reserved_source_set_name() {
+        let base = tempdir().expect("base");
+        let work = tempdir().expect("work");
+        let source_dir = base.path().join("src");
+        std::fs::create_dir_all(&source_dir).expect("source dir");
+
+        let config = AppConfig {
+            base_path: base.path().to_path_buf(),
+            work_path: work.path().to_path_buf(),
+            format: SourceFormat::Edt,
+            builder: BuilderBackend::Designer,
+            connection: "File=/tmp/ib".to_owned(),
+            credentials: Default::default(),
+            source_sets: vec![SourceSetConfig {
+                name: "hash-storages".to_owned(),
+                purpose: SourceSetPurpose::Configuration,
+                path: source_dir
+                    .strip_prefix(base.path())
+                    .expect("relative")
+                    .to_path_buf(),
+            }],
+            build: BuildConfig::default(),
+            tools: ToolsConfig::default(),
+            tests: TestsConfig::default(),
+        };
+
+        let err = validate(&config).expect_err("expected reserved source-set name");
+        assert!(matches!(
+            err,
+            ConfigValidationError::ReservedSourceSetName(name) if name == "hash-storages"
+        ));
+    }
+
+    #[test]
+    fn edt_ibcmd_returns_matrix_error_before_connection_check() {
+        let base = tempdir().expect("base");
+        let work = tempdir().expect("work");
+        let source_dir = base.path().join("edt-main");
+        std::fs::create_dir_all(&source_dir).expect("source dir");
+
+        let config = AppConfig {
+            base_path: base.path().to_path_buf(),
+            work_path: work.path().to_path_buf(),
+            format: SourceFormat::Edt,
+            builder: BuilderBackend::Ibcmd,
+            connection: "Srvr=localhost;Ref=ib".to_owned(),
+            credentials: Default::default(),
+            source_sets: vec![SourceSetConfig {
+                name: "main".to_owned(),
+                purpose: SourceSetPurpose::Configuration,
+                path: source_dir
+                    .strip_prefix(base.path())
+                    .expect("relative")
+                    .to_path_buf(),
+            }],
+            build: BuildConfig::default(),
+            tools: ToolsConfig::default(),
+            tests: TestsConfig::default(),
+        };
+
+        let err = validate(&config).expect_err("expected EDT matrix validation error");
+        assert!(matches!(
+            err,
+            ConfigValidationError::EdtRequiresDesignerBuilder
+        ));
+    }
+
+    #[test]
+    fn rejects_reserved_source_set_name_case_insensitively_for_edt() {
+        let base = tempdir().expect("base");
+        let work = tempdir().expect("work");
+        let source_dir = base.path().join("src");
+        std::fs::create_dir_all(&source_dir).expect("source dir");
+
+        let config = AppConfig {
+            base_path: base.path().to_path_buf(),
+            work_path: work.path().to_path_buf(),
+            format: SourceFormat::Edt,
+            builder: BuilderBackend::Designer,
+            connection: "File=/tmp/ib".to_owned(),
+            credentials: Default::default(),
+            source_sets: vec![SourceSetConfig {
+                name: "Logs".to_owned(),
+                purpose: SourceSetPurpose::Configuration,
+                path: source_dir
+                    .strip_prefix(base.path())
+                    .expect("relative")
+                    .to_path_buf(),
+            }],
+            build: BuildConfig::default(),
+            tools: ToolsConfig::default(),
+            tests: TestsConfig::default(),
+        };
+
+        let err = validate(&config).expect_err("expected reserved source-set name");
+        assert!(matches!(
+            err,
+            ConfigValidationError::ReservedSourceSetName(name) if name == "Logs"
+        ));
+    }
+
+    #[test]
+    fn edt_ibcmd_matrix_error_has_priority_over_source_set_path_validation() {
+        let base = tempdir().expect("base");
+        let work = tempdir().expect("work");
+
+        let config = AppConfig {
+            base_path: base.path().to_path_buf(),
+            work_path: work.path().to_path_buf(),
+            format: SourceFormat::Edt,
+            builder: BuilderBackend::Ibcmd,
+            connection: "File=/tmp/ib".to_owned(),
+            credentials: Default::default(),
+            source_sets: vec![SourceSetConfig {
+                name: "main".to_owned(),
+                purpose: SourceSetPurpose::Configuration,
+                path: std::path::PathBuf::from("missing-path"),
+            }],
+            build: BuildConfig::default(),
+            tools: ToolsConfig::default(),
+            tests: TestsConfig::default(),
+        };
+
+        let err = validate(&config).expect_err("expected EDT matrix error");
+        assert!(matches!(
+            err,
+            ConfigValidationError::EdtRequiresDesignerBuilder
         ));
     }
 }

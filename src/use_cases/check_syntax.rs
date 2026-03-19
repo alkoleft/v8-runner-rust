@@ -2,17 +2,19 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use crate::change_detection::source_sets::SourceSetsService;
 use crate::cli::args::{
     DesignerConfigSyntaxArgs, DesignerModulesSyntaxArgs, SyntaxArgs, SyntaxTarget,
 };
-use crate::config::model::{AppConfig, BuilderBackend, SourceFormat};
-use crate::domain::issue::{Issue, IssueSeverity, ObjectIssue};
+use crate::config::model::{AppConfig, BuilderBackend, SourceFormat, SourceSetConfig};
+use crate::domain::issue::{EdtIssue, Issue, IssueSeverity, ObjectIssue};
 use crate::domain::syntax::{SyntaxCheckResult, SyntaxCheckStatus, SyntaxIssueSummary};
 use crate::output::json::Envelope;
 use crate::output::presenter::Presenter;
 use crate::parsers::designer_validation;
-use crate::platform::connection::V8Connection;
+use crate::parsers::edt_validation;
 use crate::platform::designer::DesignerDsl;
+use crate::platform::edt::EdtDsl;
 use crate::platform::locator::UtilityType;
 use crate::platform::result::PlatformCommandResult;
 use crate::platform::utilities::PlatformUtilities;
@@ -21,9 +23,10 @@ use crate::support::temp::platform_logs_dir;
 use tracing::info;
 
 const SYNTAX_COMMAND: &str = "syntax";
-const SUPPORTED_SYNTAX_ERROR: &str =
+const SUPPORTED_DESIGNER_SYNTAX_ERROR: &str =
     "syntax currently supports only builder=DESIGNER and format=DESIGNER";
-const EDT_DEFERRED_ERROR: &str = "syntax edt is deferred to a later stage and is not implemented";
+const SUPPORTED_EDT_SYNTAX_ERROR: &str =
+    "syntax edt currently supports only builder=DESIGNER and format=EDT";
 static LOG_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub fn execute(
@@ -73,7 +76,6 @@ struct DesignerInvocation {
 enum DesignerCommandKind {
     Config,
     Modules,
-    Edt,
 }
 
 impl DesignerCommandKind {
@@ -81,7 +83,6 @@ impl DesignerCommandKind {
         match self {
             Self::Config => "designer-config",
             Self::Modules => "designer-modules",
-            Self::Edt => "edt",
         }
     }
 }
@@ -91,6 +92,10 @@ fn run_syntax(
     args: &SyntaxArgs,
 ) -> Result<SyntaxCheckResult, SyntaxExecutionFailure> {
     let started = Instant::now();
+    if let SyntaxTarget::Edt { projects } = &args.target {
+        return run_edt_syntax(config, projects, started);
+    }
+
     let invocation = match normalize_invocation(args) {
         Ok(invocation) => invocation,
         Err((kind, error)) => {
@@ -111,7 +116,7 @@ fn run_syntax(
         }
     };
 
-    if let Some(error) = validate_supported_matrix(config) {
+    if let Some(error) = validate_designer_supported_matrix(config) {
         return Err(SyntaxExecutionFailure {
             result: failed_result(
                 invocation.kind.check_name(),
@@ -192,7 +197,6 @@ fn run_syntax(
     let platform_result = match invocation.kind {
         DesignerCommandKind::Config => dsl.check_config(&flags),
         DesignerCommandKind::Modules => dsl.check_modules(&flags),
-        DesignerCommandKind::Edt => unreachable!("EDT syntax is rejected before execution"),
     };
 
     let platform_result = match platform_result {
@@ -222,7 +226,7 @@ fn run_syntax(
         SyntaxCheckStatus::IssuesFound | SyntaxCheckStatus::ToolFailed => {
             Err(SyntaxExecutionFailure {
                 error: AppError::Runtime(format!(
-                    "syntax check '{}' finished with status {:?} (designer exit code {})",
+                    "syntax check '{}' finished with status {:?} (exit code {})",
                     result.check_name, result.status, result.exit_code
                 )),
                 result,
@@ -254,10 +258,7 @@ fn normalize_invocation(
                 flags: normalize_modules_flags(module_args),
             })
         }
-        SyntaxTarget::Edt { .. } => Err((
-            DesignerCommandKind::Edt,
-            AppError::Validation(EDT_DEFERRED_ERROR.to_owned()),
-        )),
+        SyntaxTarget::Edt { .. } => unreachable!("EDT syntax is handled before normalization"),
     }
 }
 
@@ -389,11 +390,288 @@ fn modules_has_modes(args: &DesignerModulesSyntaxArgs) -> bool {
         || args.extended_modules_check
 }
 
-fn validate_supported_matrix(config: &AppConfig) -> Option<AppError> {
+fn validate_designer_supported_matrix(config: &AppConfig) -> Option<AppError> {
     if config.builder != BuilderBackend::Designer || config.format != SourceFormat::Designer {
-        Some(AppError::Validation(SUPPORTED_SYNTAX_ERROR.to_owned()))
+        Some(AppError::Validation(
+            SUPPORTED_DESIGNER_SYNTAX_ERROR.to_owned(),
+        ))
     } else {
         None
+    }
+}
+
+fn validate_edt_supported_matrix(config: &AppConfig) -> Option<AppError> {
+    if config.builder != BuilderBackend::Designer || config.format != SourceFormat::Edt {
+        Some(AppError::Validation(SUPPORTED_EDT_SYNTAX_ERROR.to_owned()))
+    } else {
+        None
+    }
+}
+
+fn run_edt_syntax(
+    config: &AppConfig,
+    projects: &[String],
+    started: Instant,
+) -> Result<SyntaxCheckResult, SyntaxExecutionFailure> {
+    if let Some(error) = validate_edt_supported_matrix(config) {
+        return Err(SyntaxExecutionFailure {
+            result: failed_result(
+                "edt",
+                SyntaxCheckStatus::ToolFailed,
+                -1,
+                started,
+                vec![],
+                None,
+                Some(error.to_string()),
+                None,
+            ),
+            error,
+        });
+    }
+
+    let source_sets = match resolve_edt_source_sets(config, projects) {
+        Ok(source_sets) => source_sets,
+        Err(error) => {
+            return Err(SyntaxExecutionFailure {
+                result: failed_result(
+                    "edt",
+                    SyntaxCheckStatus::ToolFailed,
+                    -1,
+                    started,
+                    vec![],
+                    None,
+                    Some(error.to_string()),
+                    None,
+                ),
+                error,
+            });
+        }
+    };
+
+    let log_dir = match platform_logs_dir(&config.work_path) {
+        Ok(dir) => dir,
+        Err(error) => {
+            let app_error = AppError::Runtime(format!(
+                "failed to prepare syntax platform logs directory '{}': {error}",
+                config.work_path.display()
+            ));
+            return Err(SyntaxExecutionFailure {
+                result: failed_result(
+                    "edt",
+                    SyntaxCheckStatus::ToolFailed,
+                    -1,
+                    started,
+                    vec![],
+                    None,
+                    Some(app_error.to_string()),
+                    None,
+                ),
+                error: app_error,
+            });
+        }
+    };
+
+    let mut utilities = PlatformUtilities::from_config(config);
+    let location = match utilities.locate(UtilityType::EdtCli) {
+        Ok(location) => location,
+        Err(error) => {
+            let message = error.to_string();
+            let app_error = AppError::Platform(message.clone());
+            return Err(SyntaxExecutionFailure {
+                result: failed_result(
+                    "edt",
+                    SyntaxCheckStatus::ToolFailed,
+                    -1,
+                    started,
+                    vec![],
+                    None,
+                    Some(message),
+                    None,
+                ),
+                error: app_error,
+            });
+        }
+    };
+
+    let runner = utilities.runner_for(UtilityType::EdtCli);
+    let dsl = EdtDsl::new(
+        location.path,
+        config.work_path.join("edt-workspace"),
+        runner,
+    );
+    let mut issues = Vec::new();
+    let mut status = SyntaxCheckStatus::Clean;
+    let mut exit_code = 0;
+    let mut stderr_lines = Vec::new();
+    let mut log_warnings = Vec::new();
+    let mut single_platform_log_path = None;
+    let single_source_set = source_sets.len() == 1;
+
+    for source_set in source_sets {
+        let source_path = resolve_source_set_path(config, source_set);
+        let log_path = unique_log_path(
+            &log_dir,
+            &format!("edt_{}", source_set.name.replace(' ', "_")),
+        );
+        let result = match dsl.validate_project(&source_path, &log_path) {
+            Ok(result) => result,
+            Err(error) => {
+                let message = error.to_string();
+                let app_error = AppError::Platform(message.clone());
+                return Err(SyntaxExecutionFailure {
+                    result: failed_result(
+                        "edt",
+                        SyntaxCheckStatus::ToolFailed,
+                        -1,
+                        started,
+                        vec![],
+                        None,
+                        Some(message),
+                        Some(log_path),
+                    ),
+                    error: app_error,
+                });
+            }
+        };
+
+        if single_source_set {
+            single_platform_log_path = Some(log_path);
+        }
+
+        if !result.process.stderr.trim().is_empty() {
+            stderr_lines.push(format!(
+                "{}: {}",
+                source_set.name,
+                result.process.stderr.trim()
+            ));
+        }
+        if let Some(log_warning) = &result.platform_log_read_error {
+            log_warnings.push(format!("{}: {log_warning}", source_set.name));
+        }
+
+        let project_issues = result
+            .platform_log
+            .as_deref()
+            .map(edt_validation::parse)
+            .unwrap_or_default();
+        let project_status = edt_status_from_result(result.process.exit_code, &project_issues);
+        status = combine_status(status, project_status.clone());
+
+        if project_status == SyntaxCheckStatus::ToolFailed {
+            exit_code = result.process.exit_code;
+        } else if exit_code == 0 && result.process.exit_code != 0 {
+            exit_code = result.process.exit_code;
+        }
+
+        if result.process.exit_code != 0 && project_issues.is_empty() {
+            issues.push(fallback_edt_issue(
+                &source_set.name,
+                result.process.exit_code,
+                if result.process.stderr.trim().is_empty() {
+                    None
+                } else {
+                    Some(result.process.stderr.as_str())
+                },
+                result.platform_log_read_error.as_deref(),
+                result.platform_log_path.as_deref(),
+            ));
+        } else {
+            issues.extend(project_issues);
+        }
+    }
+
+    let stderr = (!stderr_lines.is_empty()).then_some(stderr_lines.join("\n"));
+    let log_read_warning = (!log_warnings.is_empty()).then_some(log_warnings.join("\n"));
+    let result = SyntaxCheckResult {
+        status,
+        exit_code,
+        check_name: "edt".to_owned(),
+        summary: summarize_issues(&issues),
+        issues,
+        duration_ms: started.elapsed().as_millis() as u64,
+        platform_log_path: single_platform_log_path,
+        stderr,
+        log_read_warning,
+    };
+
+    match result.status {
+        SyntaxCheckStatus::Clean => Ok(result),
+        SyntaxCheckStatus::IssuesFound | SyntaxCheckStatus::ToolFailed => {
+            Err(SyntaxExecutionFailure {
+                error: AppError::Runtime(format!(
+                    "syntax check '{}' finished with status {:?} (exit code {})",
+                    result.check_name, result.status, result.exit_code
+                )),
+                result,
+            })
+        }
+    }
+}
+
+fn resolve_edt_source_sets<'a>(
+    config: &'a AppConfig,
+    projects: &[String],
+) -> Result<Vec<&'a SourceSetConfig>, AppError> {
+    let service = SourceSetsService::new(config);
+    let contexts = service.edt_contexts();
+    if contexts.is_empty() {
+        return Err(AppError::Validation(
+            "syntax edt requires at least one source-set".to_owned(),
+        ));
+    }
+
+    if projects.is_empty() {
+        return Ok(config.source_sets.iter().collect());
+    }
+
+    let mut selected = Vec::new();
+    let mut unknown = Vec::new();
+
+    for project in projects {
+        if let Some(source_set) = config.source_sets.iter().find(|ss| ss.name == *project) {
+            selected.push(source_set);
+        } else {
+            unknown.push(project.clone());
+        }
+    }
+
+    if !unknown.is_empty() {
+        return Err(AppError::Validation(format!(
+            "unknown EDT project(s): {}",
+            unknown.join(", ")
+        )));
+    }
+
+    Ok(selected)
+}
+
+fn resolve_source_set_path(config: &AppConfig, source_set: &SourceSetConfig) -> PathBuf {
+    if source_set.path.is_absolute() {
+        source_set.path.clone()
+    } else {
+        config.base_path.join(&source_set.path)
+    }
+}
+
+fn edt_status_from_result(exit_code: i32, issues: &[Issue]) -> SyntaxCheckStatus {
+    if exit_code == 0 && issues.is_empty() {
+        SyntaxCheckStatus::Clean
+    } else if !issues.is_empty() {
+        SyntaxCheckStatus::IssuesFound
+    } else {
+        SyntaxCheckStatus::ToolFailed
+    }
+}
+
+fn combine_status(current: SyntaxCheckStatus, next: SyntaxCheckStatus) -> SyntaxCheckStatus {
+    match (current, next) {
+        (SyntaxCheckStatus::ToolFailed, _) | (_, SyntaxCheckStatus::ToolFailed) => {
+            SyntaxCheckStatus::ToolFailed
+        }
+        (SyntaxCheckStatus::IssuesFound, _) | (_, SyntaxCheckStatus::IssuesFound) => {
+            SyntaxCheckStatus::IssuesFound
+        }
+        _ => SyntaxCheckStatus::Clean,
     }
 }
 
@@ -542,9 +820,46 @@ fn fallback_issue(
     })
 }
 
+fn fallback_edt_issue(
+    project_name: &str,
+    exit_code: i32,
+    stderr: Option<&str>,
+    log_read_warning: Option<&str>,
+    platform_log_path: Option<&Path>,
+) -> Issue {
+    let message = if let Some(log_read_warning) = log_read_warning {
+        format!(
+            "EDT check for project '{project_name}' exited with code {exit_code}; no parseable issues found; --file log unreadable: {log_read_warning}"
+        )
+    } else if let Some(stderr) = stderr.filter(|stderr| !stderr.trim().is_empty()) {
+        format!(
+            "EDT check for project '{project_name}' exited with code {exit_code}; no parseable issues found; stderr: {}",
+            stderr.trim()
+        )
+    } else if let Some(path) = platform_log_path {
+        format!(
+            "EDT check for project '{project_name}' exited with code {exit_code}; no parseable issues found in --file log '{}'",
+            path.display()
+        )
+    } else {
+        format!(
+            "EDT check for project '{project_name}' exited with code {exit_code}; no parseable issues found"
+        )
+    };
+
+    Issue::Edt(EdtIssue {
+        path: project_name.to_owned(),
+        line: None,
+        column: None,
+        message,
+        severity: IssueSeverity::Error,
+        check: None,
+    })
+}
+
 fn render_text_result(result: &SyntaxCheckResult, presenter: &Presenter) {
     let summary_line = format!(
-        "{}: {:?} (designer exit {}, errors {}, warnings {}, info {}, duration {} ms)",
+        "{}: {:?} (exit {}, errors {}, warnings {}, info {}, duration {} ms)",
         result.check_name,
         result.status,
         result.exit_code,
@@ -674,6 +989,24 @@ mod tests {
         write_script(path, &body);
     }
 
+    fn write_edt_script(
+        path: &Path,
+        check_log_body: Option<&str>,
+        stderr: Option<&str>,
+        exit_code: i32,
+    ) {
+        let log_branch = check_log_body
+            .map(|body| format!("if [ -n \"$out\" ]; then cat <<'LOG' > \"$out\"\n{body}\nLOG\nfi"))
+            .unwrap_or_default();
+        let stderr_branch = stderr
+            .map(|stderr| format!("printf '%s\\n' '{}' >&2", stderr.replace('\'', "'\\''")))
+            .unwrap_or_default();
+        let body = format!(
+            "out=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"--file\" ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\n{log_branch}\n{stderr_branch}\nexit {exit_code}"
+        );
+        write_script(path, &body);
+    }
+
     fn sample_config(base_path: &Path, work_path: &Path, platform_path: &Path) -> AppConfig {
         AppConfig {
             base_path: base_path.to_path_buf(),
@@ -694,6 +1027,38 @@ mod tests {
                     version: None,
                 },
                 edt_cli: Default::default(),
+            },
+            tests: TestsConfig::default(),
+        }
+    }
+
+    fn sample_edt_config(base_path: &Path, work_path: &Path, edt_cli_path: &Path) -> AppConfig {
+        AppConfig {
+            base_path: base_path.to_path_buf(),
+            work_path: work_path.to_path_buf(),
+            format: SourceFormat::Edt,
+            builder: BuilderBackend::Designer,
+            connection: "File=/tmp/ib".to_owned(),
+            credentials: Default::default(),
+            source_sets: vec![
+                SourceSetConfig {
+                    name: "main".to_owned(),
+                    purpose: SourceSetPurpose::Configuration,
+                    path: Path::new("main-edt").to_path_buf(),
+                },
+                SourceSetConfig {
+                    name: "ext".to_owned(),
+                    purpose: SourceSetPurpose::Extension,
+                    path: Path::new("ext-edt").to_path_buf(),
+                },
+            ],
+            build: BuildConfig::default(),
+            tools: ToolsConfig {
+                platform: Default::default(),
+                edt_cli: crate::config::model::EdtCliConfig {
+                    path: Some(edt_cli_path.to_path_buf()),
+                    auto_start: false,
+                },
             },
             tests: TestsConfig::default(),
         }
@@ -867,6 +1232,90 @@ mod tests {
         assert_eq!(failure.result.status, SyntaxCheckStatus::IssuesFound);
         assert!(failure.result.log_read_warning.is_some());
         assert_eq!(failure.result.issues.len(), 1);
+    }
+
+    #[test]
+    fn syntax_edt_runs_all_source_sets_when_projects_not_specified() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let main_dir = base.join("main-edt");
+        let ext_dir = base.join("ext-edt");
+        let binary = dir.path().join("edt").join("1cedtcli");
+        fs::create_dir_all(&work).expect("work");
+        fs::create_dir_all(&main_dir).expect("main");
+        fs::create_dir_all(&ext_dir).expect("ext");
+        write_edt_script(
+            &binary,
+            Some("ERROR\tCommonModules.Test\t1\t1\tCheck\tmessage"),
+            None,
+            1,
+        );
+        let config = sample_edt_config(&base, &work, &binary);
+        let args = SyntaxArgs {
+            target: SyntaxTarget::Edt { projects: vec![] },
+        };
+
+        let failure = run_syntax(&config, &args).expect_err("expected issues");
+
+        assert_eq!(failure.result.check_name, "edt");
+        assert_eq!(failure.result.status, SyntaxCheckStatus::IssuesFound);
+        assert_eq!(failure.result.summary.errors, 2);
+        assert!(failure.result.platform_log_path.is_none());
+    }
+
+    #[test]
+    fn syntax_edt_rejects_unknown_project_names() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let main_dir = base.join("main-edt");
+        let ext_dir = base.join("ext-edt");
+        let binary = dir.path().join("edt").join("1cedtcli");
+        fs::create_dir_all(&work).expect("work");
+        fs::create_dir_all(&main_dir).expect("main");
+        fs::create_dir_all(&ext_dir).expect("ext");
+        write_edt_script(&binary, None, None, 0);
+        let config = sample_edt_config(&base, &work, &binary);
+        let args = SyntaxArgs {
+            target: SyntaxTarget::Edt {
+                projects: vec!["unknown".to_owned()],
+            },
+        };
+
+        let failure = run_syntax(&config, &args).expect_err("expected validation failure");
+
+        assert!(matches!(failure.error, AppError::Validation(_)));
+        assert!(failure
+            .error
+            .to_string()
+            .contains("unknown EDT project(s): unknown"));
+    }
+
+    #[test]
+    fn syntax_edt_prefers_tool_failed_exit_code_in_aggregate() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let main_dir = base.join("main-edt");
+        let ext_dir = base.join("ext-edt");
+        let binary = dir.path().join("edt").join("1cedtcli");
+        fs::create_dir_all(&work).expect("work");
+        fs::create_dir_all(&main_dir).expect("main");
+        fs::create_dir_all(&ext_dir).expect("ext");
+        write_script(
+            &binary,
+            "out=\"\"\nargs=\"$*\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"--file\" ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif printf '%s' \"$args\" | grep -q -- 'main-edt'; then\n  if [ -n \"$out\" ]; then printf 'ERROR\\tCatalogs.Items\\t1\\t1\\tRule\\tmsg\\n' > \"$out\"; fi\n  exit 1\nfi\nexit 17",
+        );
+        let config = sample_edt_config(&base, &work, &binary);
+        let args = SyntaxArgs {
+            target: SyntaxTarget::Edt { projects: vec![] },
+        };
+
+        let failure = run_syntax(&config, &args).expect_err("expected failure");
+
+        assert_eq!(failure.result.status, SyntaxCheckStatus::ToolFailed);
+        assert_eq!(failure.result.exit_code, 17);
     }
 
     #[test]

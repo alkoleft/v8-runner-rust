@@ -1,1 +1,226 @@
-// EDT DSL — stub for Wave 2 implementation
+use std::path::{Path, PathBuf};
+
+use thiserror::Error;
+
+use crate::platform::process::{ProcessError, ProcessRequest, ProcessRunner};
+use crate::platform::result::PlatformCommandResult;
+
+#[derive(Debug, Error)]
+pub enum EdtError {
+    #[error("failed to execute edt process: {0}")]
+    Spawn(ProcessError),
+}
+
+/// Low-level DSL for invoking `1cedtcli`.
+pub struct EdtDsl<'a> {
+    binary: PathBuf,
+    workspace: PathBuf,
+    runner: &'a dyn ProcessRunner,
+}
+
+impl<'a> EdtDsl<'a> {
+    /// Create a new EDT DSL bound to one executable path and runner.
+    pub fn new(binary: PathBuf, workspace: PathBuf, runner: &'a dyn ProcessRunner) -> Self {
+        Self {
+            binary,
+            workspace,
+            runner,
+        }
+    }
+
+    /// `-command export --project <source> --configuration-files <target>`
+    pub fn export_project(
+        &self,
+        source: &Path,
+        target: &Path,
+    ) -> Result<PlatformCommandResult, EdtError> {
+        let args = vec![
+            "-data".to_owned(),
+            self.workspace.display().to_string(),
+            "-command".to_owned(),
+            "export".to_owned(),
+            "--project".to_owned(),
+            source.display().to_string(),
+            "--configuration-files".to_owned(),
+            target.display().to_string(),
+        ];
+        self.run(&args, None)
+    }
+
+    /// `-command validate --file <out_log> --project-list <source>`
+    pub fn validate_project(
+        &self,
+        source: &Path,
+        out_log: &Path,
+    ) -> Result<PlatformCommandResult, EdtError> {
+        let args = vec![
+            "-data".to_owned(),
+            self.workspace.display().to_string(),
+            "-command".to_owned(),
+            "validate".to_owned(),
+            "--file".to_owned(),
+            out_log.display().to_string(),
+            "--project-list".to_owned(),
+            source.display().to_string(),
+        ];
+        self.run(&args, Some(out_log))
+    }
+
+    fn run(
+        &self,
+        args: &[String],
+        out_log: Option<&Path>,
+    ) -> Result<PlatformCommandResult, EdtError> {
+        if let Some(path) = out_log {
+            let _ = std::fs::remove_file(path);
+        }
+
+        let process = self
+            .runner
+            .run(&ProcessRequest {
+                program: self.binary.clone(),
+                args: args.to_vec(),
+                workdir: None,
+                stdout_log_path: None,
+                stderr_log_path: None,
+                startup_probe: None,
+            })
+            .map_err(EdtError::Spawn)?;
+
+        let (platform_log_path, platform_log, platform_log_read_error) = if let Some(path) = out_log
+        {
+            match std::fs::read_to_string(path) {
+                Ok(contents) => (Some(path.to_path_buf()), Some(contents), None),
+                Err(error) => (
+                    Some(path.to_path_buf()),
+                    None,
+                    Some(format!(
+                        "failed to read edt --file log '{}': {error}",
+                        path.display()
+                    )),
+                ),
+            }
+        } else {
+            (None, None, None)
+        };
+
+        Ok(PlatformCommandResult {
+            process,
+            platform_log_path,
+            platform_log,
+            platform_log_read_error,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EdtDsl;
+    use crate::platform::process::{ProcessExecutor, ProcessRunner};
+    use std::fs;
+    use std::path::Path;
+    use tempfile::tempdir;
+
+    #[cfg(unix)]
+    fn make_executable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut perms = fs::metadata(path).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms).expect("chmod");
+    }
+
+    #[cfg(unix)]
+    fn write_script(path: &Path, body: &str) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create dirs");
+        }
+        fs::write(path, format!("#!/bin/sh\n{body}\n")).expect("write script");
+        make_executable(path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn export_project_passes_expected_arguments() {
+        let dir = tempdir().expect("tempdir");
+        let script = dir.path().join("1cedtcli");
+        let args_log = dir.path().join("args.log");
+        write_script(
+            &script,
+            &format!("printf '%s\n' \"$@\" > \"{}\"\nexit 0", args_log.display()),
+        );
+
+        let runner = ProcessExecutor;
+        let dsl = EdtDsl::new(script, dir.path().join("ws"), &runner as &dyn ProcessRunner);
+
+        let result = dsl
+            .export_project(Path::new("/tmp/project"), Path::new("/tmp/out"))
+            .expect("export project");
+
+        assert_eq!(result.process.exit_code, 0);
+        assert!(result.platform_log.is_none());
+        let args = fs::read_to_string(args_log).expect("args log");
+        assert!(args.contains("-command"));
+        assert!(args.contains("export"));
+        assert!(args.contains("--project"));
+        assert!(args.contains("/tmp/project"));
+        assert!(args.contains("--configuration-files"));
+        assert!(args.contains("/tmp/out"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validate_project_reads_out_log() {
+        let dir = tempdir().expect("tempdir");
+        let script = dir.path().join("1cedtcli");
+        let args_log = dir.path().join("args.log");
+        write_script(
+            &script,
+            &format!(
+                "printf '%s\n' \"$@\" > \"{}\"\nout=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"--file\" ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$out\" ]; then printf 'line1\\nline2\\n' > \"$out\"; fi\nexit 2",
+                args_log.display()
+            ),
+        );
+        let out_log = dir.path().join("validate.log");
+
+        let runner = ProcessExecutor;
+        let dsl = EdtDsl::new(script, dir.path().join("ws"), &runner as &dyn ProcessRunner);
+        let result = dsl
+            .validate_project(Path::new("/tmp/project"), &out_log)
+            .expect("validate project");
+
+        assert_eq!(result.process.exit_code, 2);
+        assert_eq!(result.platform_log_path.as_deref(), Some(out_log.as_path()));
+        assert_eq!(result.platform_log.as_deref(), Some("line1\nline2\n"));
+        assert!(result.platform_log_read_error.is_none());
+        let args = fs::read_to_string(args_log).expect("args log");
+        assert!(args.contains("-command"));
+        assert!(args.contains("validate"));
+        assert!(args.contains("--file"));
+        assert!(args.contains("--project-list"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validate_project_keeps_process_result_when_out_log_is_unreadable() {
+        let dir = tempdir().expect("tempdir");
+        let script = dir.path().join("1cedtcli");
+        write_script(&script, "exit 1");
+        let out_log = dir.path().join("missing").join("validate.log");
+
+        let runner = ProcessExecutor;
+        let dsl = EdtDsl::new(script, dir.path().join("ws"), &runner as &dyn ProcessRunner);
+        let result = dsl
+            .validate_project(Path::new("/tmp/project"), &out_log)
+            .expect("validate project");
+
+        assert_eq!(result.process.exit_code, 1);
+        assert_eq!(result.platform_log_path.as_deref(), Some(out_log.as_path()));
+        assert!(result.platform_log.is_none());
+        assert!(result
+            .platform_log_read_error
+            .as_deref()
+            .expect("log read error")
+            .contains("failed to read edt --file log"));
+    }
+}

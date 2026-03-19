@@ -199,7 +199,7 @@ impl Locator {
     }
 
     #[cfg(test)]
-    fn with_roots(
+    pub(crate) fn with_roots(
         platform_hint: Option<PathBuf>,
         platform_version: Option<PlatformVersion>,
         edt_hint: Option<PathBuf>,

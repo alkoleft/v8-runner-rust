@@ -14,19 +14,21 @@ use crate::domain::build::{BuildMode, BuildResult, BuildStep};
 use crate::domain::source_set::SourceSetContext;
 use crate::output::json::Envelope;
 use crate::output::presenter::Presenter;
-use crate::platform::connection::V8Connection;
 use crate::platform::designer::DesignerDsl;
+use crate::platform::edt::EdtDsl;
 use crate::platform::locator::UtilityType;
 use crate::platform::process::ProcessRunner;
 use crate::platform::result::PlatformCommandResult;
 use crate::platform::utilities::PlatformUtilities;
 use crate::support::error::AppError;
-use crate::support::temp::{partial_list_file, platform_logs_dir};
+use crate::support::temp::{partial_list_file, platform_logs_dir, reserved_source_set_dir};
 use tracing::info;
 
 const BUILD_COMMAND: &str = "build";
-const SUPPORTED_BUILD_ERROR: &str =
+const SUPPORTED_DESIGNER_BUILD_ERROR: &str =
     "build currently supports only builder=DESIGNER and format=DESIGNER";
+const SUPPORTED_EDT_BUILD_ERROR: &str =
+    "build with format=EDT currently supports only builder=DESIGNER";
 
 pub fn execute(
     config: &AppConfig,
@@ -87,8 +89,12 @@ pub(crate) fn run_build(
     config: &AppConfig,
     args: &BuildArgs,
 ) -> Result<BuildResult, BuildExecutionFailure> {
+    if config.format == SourceFormat::Edt {
+        return run_build_edt(config, args);
+    }
+
     info!(full_rebuild = args.full_rebuild, "preparing build plan");
-    if let Some(error) = validate_supported_matrix(config) {
+    if let Some(error) = validate_designer_supported_matrix(config) {
         return Err(BuildExecutionFailure {
             error,
             result: BuildResult {
@@ -290,6 +296,7 @@ pub(crate) fn run_build(
                     utilities.runner_for(UtilityType::V8),
                     source_set,
                     &context,
+                    &context,
                     index,
                     partial_paths.as_deref(),
                     &commit,
@@ -352,12 +359,300 @@ fn log_change_analysis(source_set_name: &str, changes: &[analyzer::FileChange]) 
     );
 }
 
-fn validate_supported_matrix(config: &AppConfig) -> Option<AppError> {
+fn validate_designer_supported_matrix(config: &AppConfig) -> Option<AppError> {
     if config.builder == BuilderBackend::Designer && config.format == SourceFormat::Designer {
         None
     } else {
-        Some(AppError::Validation(SUPPORTED_BUILD_ERROR.to_owned()))
+        Some(AppError::Validation(
+            SUPPORTED_DESIGNER_BUILD_ERROR.to_owned(),
+        ))
     }
+}
+
+fn validate_edt_supported_matrix(config: &AppConfig) -> Option<AppError> {
+    if config.builder == BuilderBackend::Designer && config.format == SourceFormat::Edt {
+        None
+    } else {
+        Some(AppError::Validation(SUPPORTED_EDT_BUILD_ERROR.to_owned()))
+    }
+}
+
+fn run_build_edt(
+    config: &AppConfig,
+    args: &BuildArgs,
+) -> Result<BuildResult, BuildExecutionFailure> {
+    info!(full_rebuild = args.full_rebuild, "preparing edt build plan");
+    if let Some(error) = validate_edt_supported_matrix(config) {
+        return Err(BuildExecutionFailure {
+            error,
+            result: BuildResult {
+                ok: false,
+                steps: vec![],
+                duration_ms: 0,
+            },
+        });
+    }
+
+    let started = Instant::now();
+    let service = SourceSetsService::new(config);
+    let edt_contexts = service.edt_contexts();
+    let designer_contexts = service.designer_contexts();
+    let edt_contexts_by_name: HashMap<String, SourceSetContext> = edt_contexts
+        .into_iter()
+        .map(|context| (context.name().to_owned(), context))
+        .collect();
+    let designer_contexts_by_name: HashMap<String, SourceSetContext> = designer_contexts
+        .into_iter()
+        .map(|context| (context.name().to_owned(), context))
+        .collect();
+    let ordered_source_sets = ordered_source_sets(config);
+
+    let analysis_by_name = if args.full_rebuild {
+        None
+    } else {
+        Some(analyze_contexts_by_name(
+            &service,
+            &edt_contexts_by_name.values().cloned().collect::<Vec<_>>(),
+        ))
+    };
+
+    let mut utilities = PlatformUtilities::from_config(config);
+    let mut designer_binary: Option<PathBuf> = None;
+    let mut edt_binary: Option<PathBuf> = None;
+    let mut steps = Vec::new();
+
+    for (index, source_set) in ordered_source_sets.iter().enumerate() {
+        let Some(edt_context) = edt_contexts_by_name.get(&source_set.name).cloned() else {
+            continue;
+        };
+        let Some(designer_context) = designer_contexts_by_name.get(&source_set.name).cloned()
+        else {
+            continue;
+        };
+
+        let plan = if args.full_rebuild {
+            StepPlan::Execute {
+                mode: BuildMode::Full,
+                message: "full load from EDT export (--full-rebuild)".to_owned(),
+                partial_paths: None,
+                commit: StepCommit::RescanFull {
+                    recover_storage: true,
+                },
+            }
+        } else {
+            match analysis_by_name
+                .as_ref()
+                .and_then(|analysis| analysis.get(&source_set.name))
+                .cloned()
+                .expect("every source-set must have an EDT analysis result")
+            {
+                Ok(AnalysisOutcome::NoChanges { .. }) => {
+                    info!(
+                        source_set = source_set.name.as_str(),
+                        found_changes = 0,
+                        "edt change analysis result: found 0 change(s)"
+                    );
+                    StepPlan::Skip {
+                        message: "no changes".to_owned(),
+                        ok: true,
+                    }
+                }
+                Ok(AnalysisOutcome::Fallback) => {
+                    info!(
+                        source_set = source_set.name.as_str(),
+                        "edt change analysis result: fallback to full export/load after recoverable issue"
+                    );
+                    StepPlan::Execute {
+                        mode: BuildMode::Full,
+                        message:
+                            "fallback to full export/load after recoverable change-detection issue"
+                                .to_owned(),
+                        partial_paths: None,
+                        commit: StepCommit::RescanFull {
+                            recover_storage: false,
+                        },
+                    }
+                }
+                Ok(AnalysisOutcome::Changes { changes, prepared }) => {
+                    log_change_analysis(source_set.name.as_str(), &changes);
+                    StepPlan::Execute {
+                        mode: BuildMode::Full,
+                        message: "full load from EDT export after change detection".to_owned(),
+                        partial_paths: None,
+                        commit: StepCommit::Prepared(prepared),
+                    }
+                }
+                Err(error) => {
+                    let result = fail_with_remaining_steps(
+                        started,
+                        steps,
+                        ordered_source_sets
+                            .iter()
+                            .skip(index)
+                            .copied()
+                            .collect::<Vec<_>>(),
+                        source_set,
+                        BuildMode::Skipped,
+                        error.to_string(),
+                    );
+                    return Err(BuildExecutionFailure {
+                        error: AppError::Runtime(error.to_string()),
+                        result,
+                    });
+                }
+            }
+        };
+
+        match plan {
+            StepPlan::Skip { message, ok } => {
+                steps.push(BuildStep {
+                    source_set: source_set.name.clone(),
+                    mode: BuildMode::Skipped,
+                    ok,
+                    message: Some(message),
+                    duration_ms: 0,
+                });
+            }
+            StepPlan::Execute {
+                mode,
+                message,
+                partial_paths: _,
+                commit,
+            } => {
+                let edt = match edt_binary.clone() {
+                    Some(path) => path,
+                    None => {
+                        let location = match utilities.locate(UtilityType::EdtCli) {
+                            Ok(location) => location,
+                            Err(error) => {
+                                let result = fail_with_remaining_steps(
+                                    started,
+                                    steps,
+                                    ordered_source_sets
+                                        .iter()
+                                        .skip(index)
+                                        .copied()
+                                        .collect::<Vec<_>>(),
+                                    source_set,
+                                    BuildMode::EdtExport,
+                                    error.to_string(),
+                                );
+                                return Err(BuildExecutionFailure {
+                                    error: AppError::Platform(error.to_string()),
+                                    result,
+                                });
+                            }
+                        };
+                        edt_binary = Some(location.path.clone());
+                        location.path
+                    }
+                };
+
+                let export_started = Instant::now();
+                if let Err(error) = execute_edt_export_step(
+                    config,
+                    &edt,
+                    utilities.runner_for(UtilityType::EdtCli),
+                    source_set,
+                    &edt_context,
+                    &designer_context,
+                ) {
+                    let result = fail_with_remaining_steps(
+                        started,
+                        steps,
+                        ordered_source_sets
+                            .iter()
+                            .skip(index)
+                            .copied()
+                            .collect::<Vec<_>>(),
+                        source_set,
+                        BuildMode::EdtExport,
+                        error.to_string(),
+                    );
+                    return Err(BuildExecutionFailure { error, result });
+                }
+
+                steps.push(BuildStep {
+                    source_set: source_set.name.clone(),
+                    mode: BuildMode::EdtExport,
+                    ok: true,
+                    message: Some("EDT export completed".to_owned()),
+                    duration_ms: export_started.elapsed().as_millis() as u64,
+                });
+
+                let designer = match designer_binary.clone() {
+                    Some(path) => path,
+                    None => {
+                        let location = match utilities.locate(UtilityType::V8) {
+                            Ok(location) => location,
+                            Err(error) => {
+                                let result = fail_with_remaining_steps(
+                                    started,
+                                    steps,
+                                    ordered_source_sets
+                                        .iter()
+                                        .skip(index)
+                                        .copied()
+                                        .collect::<Vec<_>>(),
+                                    source_set,
+                                    mode.clone(),
+                                    error.to_string(),
+                                );
+                                return Err(BuildExecutionFailure {
+                                    error: AppError::Platform(error.to_string()),
+                                    result,
+                                });
+                            }
+                        };
+                        designer_binary = Some(location.path.clone());
+                        location.path
+                    }
+                };
+
+                let load_started = Instant::now();
+                match execute_source_set_step(
+                    config,
+                    &designer,
+                    utilities.runner_for(UtilityType::V8),
+                    source_set,
+                    &designer_context,
+                    &edt_context,
+                    index,
+                    None,
+                    &commit,
+                ) {
+                    Ok(()) => steps.push(BuildStep {
+                        source_set: source_set.name.clone(),
+                        mode,
+                        ok: true,
+                        message: Some(message),
+                        duration_ms: load_started.elapsed().as_millis() as u64,
+                    }),
+                    Err(error) => {
+                        let result = fail_with_remaining_steps(
+                            started,
+                            steps,
+                            ordered_source_sets
+                                .iter()
+                                .skip(index)
+                                .copied()
+                                .collect::<Vec<_>>(),
+                            source_set,
+                            mode,
+                            error.to_string(),
+                        );
+                        return Err(BuildExecutionFailure { error, result });
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(BuildResult {
+        ok: true,
+        steps,
+        duration_ms: started.elapsed().as_millis() as u64,
+    })
 }
 
 fn analyze_contexts_by_name(
@@ -386,12 +681,44 @@ fn ordered_source_sets(config: &AppConfig) -> Vec<&SourceSetConfig> {
     configuration
 }
 
+fn execute_edt_export_step(
+    config: &AppConfig,
+    binary: &Path,
+    runner: &dyn ProcessRunner,
+    source_set: &SourceSetConfig,
+    edt_context: &SourceSetContext,
+    designer_context: &SourceSetContext,
+) -> Result<(), AppError> {
+    let export_target = reserved_source_set_dir(&config.work_path, &source_set.name);
+    recreate_directory(&export_target).map_err(|error| {
+        AppError::Runtime(format!(
+            "failed to prepare EDT export directory '{}': {error}",
+            export_target.display()
+        ))
+    })?;
+    let dsl = EdtDsl::new(
+        binary.to_path_buf(),
+        config.work_path.join("edt-workspace"),
+        runner,
+    );
+    let export_result = dsl
+        .export_project(edt_context.path(), designer_context.path())
+        .map_err(|error| AppError::Platform(error.to_string()))?;
+    ensure_platform_success("edt_export", source_set, &export_result)
+}
+
+fn recreate_directory(path: &Path) -> std::io::Result<()> {
+    remove_storage_path(path)?;
+    std::fs::create_dir_all(path)
+}
+
 fn execute_source_set_step(
     config: &AppConfig,
     binary: &Path,
     runner: &dyn ProcessRunner,
     source_set: &SourceSetConfig,
-    context: &SourceSetContext,
+    load_context: &SourceSetContext,
+    commit_context: &SourceSetContext,
     step_index: usize,
     partial_paths: Option<&[PathBuf]>,
     commit: &StepCommit,
@@ -405,19 +732,19 @@ fn execute_source_set_step(
         let list_file = partial_list_file(&config.work_path).map_err(|error| {
             AppError::Runtime(format!("failed to create partial list file: {error}"))
         })?;
-        partial_load::write_list_file(paths, context.path(), list_file.path()).map_err(
+        partial_load::write_list_file(paths, load_context.path(), list_file.path()).map_err(
             |error| AppError::Runtime(format!("failed to write partial load list: {error}")),
         )?;
         build_designer_dsl(config, binary, runner, &source_set.name, step_index, "load")?
             .load_config_from_files_partial(
-                context.path(),
+                load_context.path(),
                 list_file.path(),
                 extension_name(source_set),
             )
             .map_err(|error| AppError::Platform(error.to_string()))?
     } else {
         build_designer_dsl(config, binary, runner, &source_set.name, step_index, "load")?
-            .load_config_from_files_full(context.path(), extension_name(source_set))
+            .load_config_from_files_full(load_context.path(), extension_name(source_set))
             .map_err(|error| AppError::Platform(error.to_string()))?
     };
     ensure_platform_success("load", source_set, &load_result)?;
@@ -444,7 +771,7 @@ fn execute_source_set_step(
                 source_set = source_set.name.as_str(),
                 "committing prepared change-detection state"
             );
-            analyzer::commit_success(context, &config.work_path, prepared)
+            analyzer::commit_success(commit_context, &config.work_path, prepared)
                 .map_err(|error| AppError::Runtime(error.to_string()))
         }
         StepCommit::RescanFull { recover_storage } => {
@@ -452,7 +779,7 @@ fn execute_source_set_step(
                 source_set = source_set.name.as_str(),
                 recover_storage, "rescanning source-set state after full build"
             );
-            commit_full_rescan(context, &config.work_path, *recover_storage)
+            commit_full_rescan(commit_context, &config.work_path, *recover_storage)
         }
     }
 }
@@ -602,6 +929,7 @@ fn fail_with_remaining_steps(
 fn render_text_result(result: &BuildResult, presenter: &Presenter, succeeded: bool) {
     for step in &result.steps {
         let mode = match &step.mode {
+            BuildMode::EdtExport => "edt_export",
             BuildMode::Full => "full",
             BuildMode::Partial { file_count } => {
                 presenter.print_info(&format!(
@@ -636,7 +964,7 @@ fn render_text_result(result: &BuildResult, presenter: &Presenter, succeeded: bo
 
 #[cfg(test)]
 mod tests {
-    use super::{run_build, BUILD_COMMAND, SUPPORTED_BUILD_ERROR};
+    use super::{run_build, BUILD_COMMAND, SUPPORTED_DESIGNER_BUILD_ERROR};
     use crate::change_detection::hash_storage::HashStorage;
     use crate::change_detection::source_sets::SourceSetsService;
     use crate::cli::args::BuildArgs;
@@ -672,6 +1000,29 @@ mod tests {
             .unwrap_or_default();
         let body = format!(
             "args=\"$*\"\nout=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"/Out\" ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$out\" ]; then printf 'designer log for %s\\n' \"$args\" > \"$out\"; fi\nprintf '%s\\n' \"$args\" >> \"{}\"\n{}\nexit 0",
+            calls_log.display(),
+            pattern_branch
+        );
+
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create dirs");
+        }
+        fs::write(path, format!("#!/bin/sh\n{body}\n")).expect("write script");
+        make_executable(path);
+    }
+
+    #[cfg(unix)]
+    fn write_edt_script(path: &Path, calls_log: &Path, fail_pattern: Option<&str>) {
+        let pattern_branch = fail_pattern
+            .map(|pattern| {
+                format!(
+                    "if printf '%s' \"$args\" | grep -F -q -- '{}'; then exit 19; fi",
+                    pattern
+                )
+            })
+            .unwrap_or_default();
+        let body = format!(
+            "args=\"$*\"\nproject=\"\"\ntarget=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"--project\" ]; then project=\"$arg\"; fi\n  if [ \"$prev\" = \"--configuration-files\" ]; then target=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$target\" ]; then mkdir -p \"$target\"; printf 'exported from %s\\n' \"$project\" > \"$target/exported.txt\"; fi\nprintf '%s\\n' \"$args\" >> \"{}\"\n{}\nexit 0",
             calls_log.display(),
             pattern_branch
         );
@@ -724,6 +1075,48 @@ mod tests {
         }
     }
 
+    fn build_edt_config(
+        base_path: &Path,
+        work_path: &Path,
+        platform_path: &Path,
+        edt_cli_path: &Path,
+    ) -> AppConfig {
+        AppConfig {
+            base_path: base_path.to_path_buf(),
+            work_path: work_path.to_path_buf(),
+            format: SourceFormat::Edt,
+            builder: BuilderBackend::Designer,
+            connection: "File=/tmp/ib".to_owned(),
+            credentials: Default::default(),
+            source_sets: vec![
+                SourceSetConfig {
+                    name: "main".to_owned(),
+                    purpose: SourceSetPurpose::Configuration,
+                    path: PathBuf::from("main"),
+                },
+                SourceSetConfig {
+                    name: "ext".to_owned(),
+                    purpose: SourceSetPurpose::Extension,
+                    path: PathBuf::from("ext"),
+                },
+            ],
+            build: BuildConfig {
+                partial_load_threshold: 20,
+            },
+            tools: ToolsConfig {
+                platform: PlatformToolConfig {
+                    path: Some(platform_path.to_path_buf()),
+                    version: None,
+                },
+                edt_cli: crate::config::model::EdtCliConfig {
+                    path: Some(edt_cli_path.to_path_buf()),
+                    auto_start: false,
+                },
+            },
+            tests: TestsConfig::default(),
+        }
+    }
+
     fn create_source_tree(base_path: &Path) {
         fs::create_dir_all(base_path.join("main").join("Catalogs.Items")).expect("main dir");
         fs::create_dir_all(base_path.join("ext").join("CommonModules")).expect("ext dir");
@@ -761,6 +1154,14 @@ mod tests {
         }
     }
 
+    fn prime_edt_snapshots(config: &AppConfig) {
+        let service = SourceSetsService::new(config);
+        for context in service.edt_contexts() {
+            crate::change_detection::analyzer::rescan_and_commit_full(&context, &config.work_path)
+                .expect("prime edt snapshot");
+        }
+    }
+
     fn storage_generation(config: &AppConfig, source_set_name: &str) -> u64 {
         let service = SourceSetsService::new(config);
         let context = service
@@ -768,6 +1169,19 @@ mod tests {
             .into_iter()
             .find(|context| context.name() == source_set_name)
             .expect("context");
+        HashStorage::new(context.storage_path(&config.work_path))
+            .load_snapshot()
+            .expect("snapshot")
+            .generation
+    }
+
+    fn edt_storage_generation(config: &AppConfig, source_set_name: &str) -> u64 {
+        let service = SourceSetsService::new(config);
+        let context = service
+            .edt_contexts()
+            .into_iter()
+            .find(|context| context.name() == source_set_name)
+            .expect("edt context");
         HashStorage::new(context.storage_path(&config.work_path))
             .load_snapshot()
             .expect("snapshot")
@@ -786,8 +1200,8 @@ mod tests {
             dir.path().join("work").as_path(),
             &script,
             20,
-            SourceFormat::Edt,
-            BuilderBackend::Designer,
+            SourceFormat::Designer,
+            BuilderBackend::Ibcmd,
         );
 
         let failure = run_build(
@@ -798,9 +1212,93 @@ mod tests {
         )
         .expect_err("failure");
         assert!(
-            matches!(failure.error, AppError::Validation(ref msg) if msg == SUPPORTED_BUILD_ERROR)
+            matches!(failure.error, AppError::Validation(ref msg) if msg == SUPPORTED_DESIGNER_BUILD_ERROR)
         );
         assert!(!calls.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn edt_build_exports_then_loads_from_work_path_and_commits_edt_snapshot() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let platform_script = dir.path().join("platform").join("bin").join("1cv8");
+        let edt_script = dir.path().join("edt").join("1cedtcli");
+        let designer_calls = dir.path().join("designer-calls.log");
+        let edt_calls = dir.path().join("edt-calls.log");
+        create_source_tree(&base);
+        write_designer_script(&platform_script, &designer_calls, None);
+        write_edt_script(&edt_script, &edt_calls, None);
+        let config = build_edt_config(&base, &work, &dir.path().join("platform"), &edt_script);
+        prime_edt_snapshots(&config);
+
+        fs::write(
+            base.join("main")
+                .join("Catalogs.Items")
+                .join("ObjectModule.bsl"),
+            "procedure Test()\n  // changed in edt\nendprocedure",
+        )
+        .expect("modify edt main");
+
+        let result = run_build(
+            &config,
+            &BuildArgs {
+                full_rebuild: false,
+            },
+        )
+        .expect("build");
+        let edt_calls_text = fs::read_to_string(&edt_calls).expect("edt calls");
+        let designer_calls_text = fs::read_to_string(&designer_calls).expect("designer calls");
+
+        assert!(result.ok);
+        assert!(result
+            .steps
+            .iter()
+            .any(|step| matches!(step.mode, BuildMode::EdtExport) && step.ok));
+        assert!(edt_calls_text.contains("export --project"));
+        assert!(edt_calls_text.contains(base.join("main").display().to_string().as_str()));
+        assert!(designer_calls_text.contains("/LoadConfigFromFiles"));
+        assert!(designer_calls_text.contains(work.join("main").display().to_string().as_str()));
+        assert_eq!(edt_storage_generation(&config, "main"), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn edt_export_failure_stops_pipeline_before_designer_load() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let platform_script = dir.path().join("platform").join("bin").join("1cv8");
+        let edt_script = dir.path().join("edt").join("1cedtcli");
+        let designer_calls = dir.path().join("designer-calls.log");
+        let edt_calls = dir.path().join("edt-calls.log");
+        create_source_tree(&base);
+        write_designer_script(&platform_script, &designer_calls, None);
+        write_edt_script(&edt_script, &edt_calls, Some("export --project"));
+        let config = build_edt_config(&base, &work, &dir.path().join("platform"), &edt_script);
+        prime_edt_snapshots(&config);
+
+        fs::write(
+            base.join("main")
+                .join("Catalogs.Items")
+                .join("ObjectModule.bsl"),
+            "procedure Test()\n  // changed in edt\nendprocedure",
+        )
+        .expect("modify edt main");
+
+        let failure = run_build(
+            &config,
+            &BuildArgs {
+                full_rebuild: false,
+            },
+        )
+        .expect_err("expected failure");
+
+        assert!(!failure.result.ok);
+        assert!(matches!(failure.result.steps[0].mode, BuildMode::EdtExport));
+        assert!(!failure.result.steps[0].ok);
+        assert!(!designer_calls.exists());
     }
 
     #[cfg(unix)]

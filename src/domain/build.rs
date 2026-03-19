@@ -19,6 +19,7 @@ pub struct BuildStep {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BuildMode {
+    EdtExport,
     Full,
     Partial { file_count: usize },
     Skipped,

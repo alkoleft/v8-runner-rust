@@ -46,4 +46,58 @@ impl PlatformUtilities {
     pub fn runner_for(&self, _utility: UtilityType) -> &dyn ProcessRunner {
         &self.standard_runner
     }
+
+    #[cfg(test)]
+    fn with_locator(locator: Locator) -> Self {
+        Self {
+            locator,
+            standard_runner: ProcessExecutor,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PlatformUtilities;
+    use crate::platform::locator::{Locator, LocatorError, UtilityType};
+    use std::fs;
+    use std::path::Path;
+    use tempfile::tempdir;
+
+    #[cfg(unix)]
+    fn make_executable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut perms = fs::metadata(path).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms).expect("chmod");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn locate_edt_cli_uses_configured_binary_path() {
+        let dir = tempdir().expect("tempdir");
+        let binary = dir.path().join("1cedtcli");
+        fs::write(&binary, "#!/bin/sh\nexit 0\n").expect("write");
+        make_executable(&binary);
+        let locator = Locator::with_roots(None, None, Some(binary.clone()), vec![], vec![]);
+        let mut utilities = PlatformUtilities::with_locator(locator);
+
+        let location = utilities.locate(UtilityType::EdtCli).expect("locate edt");
+
+        assert_eq!(location.path, binary);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn locate_edt_cli_returns_not_found_when_unconfigured() {
+        let locator = Locator::with_roots(None, None, None, vec![], vec![]);
+        let mut utilities = PlatformUtilities::with_locator(locator);
+
+        let error = utilities
+            .locate(UtilityType::EdtCli)
+            .expect_err("expected not found");
+
+        assert!(matches!(error, LocatorError::NotFound(UtilityType::EdtCli)));
+    }
 }

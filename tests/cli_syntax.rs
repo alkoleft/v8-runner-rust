@@ -22,12 +22,24 @@ fn write_script(path: &Path, body: &str) {
     make_executable(path);
 }
 
-fn write_config(path: &Path, base_path: &Path, work_path: &Path, platform_path: &Path) {
+fn write_config(
+    path: &Path,
+    base_path: &Path,
+    work_path: &Path,
+    platform_path: &Path,
+    format: &str,
+    edt_cli_path: Option<&Path>,
+) {
+    let edt_section = edt_cli_path
+        .map(|path| format!("  edt-cli:\n    path: '{}'\n", path.display()))
+        .unwrap_or_default();
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: .\ntools:\n  platform:\n    path: '{}'\n",
+        "basePath: '{}'\nworkPath: '{}'\nformat: {}\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: .\ntools:\n  platform:\n    path: '{}'\n{}",
         base_path.display(),
         work_path.display(),
+        format,
         platform_path.display(),
+        edt_section
     );
     fs::write(path, config).expect("config");
 }
@@ -42,7 +54,38 @@ fn setup_project(script_body: &str) -> (tempfile::TempDir, PathBuf) {
     fs::create_dir_all(&base_path).expect("base");
     fs::create_dir_all(&work_path).expect("work");
     write_script(&install_dir.join("bin").join("1cv8"), script_body);
-    write_config(&config_path, &base_path, &work_path, &install_dir);
+    write_config(
+        &config_path,
+        &base_path,
+        &work_path,
+        &install_dir,
+        "DESIGNER",
+        None,
+    );
+
+    (dir, config_path)
+}
+
+fn setup_edt_project(script_body: &str) -> (tempfile::TempDir, PathBuf) {
+    let dir = tempdir().expect("tempdir");
+    let base_path = dir.path().join("project");
+    let work_path = dir.path().join("work");
+    let install_dir = dir.path().join("platform");
+    let edt_cli = dir.path().join("edt").join("1cedtcli");
+    let config_path = dir.path().join("application.yaml");
+
+    fs::create_dir_all(&base_path).expect("base");
+    fs::create_dir_all(&work_path).expect("work");
+    write_script(&install_dir.join("bin").join("1cv8"), "exit 0");
+    write_script(&edt_cli, script_body);
+    write_config(
+        &config_path,
+        &base_path,
+        &work_path,
+        &install_dir,
+        "EDT",
+        Some(&edt_cli),
+    );
 
     (dir, config_path)
 }
@@ -135,4 +178,35 @@ fn syntax_text_output_hides_raw_stdout_and_prints_structured_issue() {
     assert!(stdout.contains("designer-modules"));
     assert!(stdout.contains("WARNING CommonModules.TestModule"));
     assert!(!stdout.contains("RAW_STDOUT"));
+}
+
+#[test]
+fn syntax_edt_json_returns_structured_edt_issues() {
+    let (_dir, config_path) = setup_edt_project(
+        "out=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"--file\" ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$out\" ]; then cat <<'LOG' > \"$out\"\nERROR\tCommonModules.Test\t7\t2\tRule\tbad call\nLOG\nfi\nexit 1",
+    );
+
+    let output = std::process::Command::cargo_bin("v8-test-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--output",
+            "json",
+            "syntax",
+            "edt",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(3));
+
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(payload["ok"], false);
+    assert_eq!(payload["data"]["check_name"], "edt");
+    assert_eq!(payload["data"]["status"], "issues_found");
+    assert_eq!(payload["data"]["summary"]["errors"], 1);
+    assert_eq!(payload["data"]["issues"][0]["kind"], "edt");
+    assert_eq!(payload["data"]["issues"][0]["path"], "CommonModules.Test");
 }
