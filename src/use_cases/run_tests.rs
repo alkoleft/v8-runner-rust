@@ -647,17 +647,9 @@ fn enterprise_error_kind(error: EnterpriseError) -> (TestErrorKind, AppError) {
 }
 
 fn retain_run_artifacts(
-    config: &AppConfig,
+    _config: &AppConfig,
     artifacts: &RunArtifacts,
 ) -> std::io::Result<RetainedPaths> {
-    if let Err(error) = sanitize_file_in_place(&artifacts.config_json, config)
-        .and_then(|()| sanitize_file_in_place(&artifacts.junit_xml, config))
-        .and_then(|()| sanitize_file_in_place(&artifacts.yaxunit_log, config))
-        .and_then(|()| sanitize_file_in_place(&artifacts.platform_log, config))
-    {
-        let _ = fs::remove_dir_all(&artifacts.run_dir);
-        return Err(error);
-    }
     Ok(RetainedPaths {
         run_dir: artifacts.run_dir.clone(),
         config_json: artifacts.config_json.clone(),
@@ -671,16 +663,6 @@ fn retain_run_artifacts(
 fn cleanup_run_dir(artifacts: &RunArtifacts) {
     let _ = fs::remove_file(&artifacts.sentinel);
     let _ = fs::remove_dir_all(&artifacts.run_dir);
-}
-
-fn sanitize_file_in_place(path: &Path, config: &AppConfig) -> std::io::Result<()> {
-    if !path.exists() {
-        return Ok(());
-    }
-    let raw = fs::read(path)?;
-    let sanitized = sanitize_text_full(&String::from_utf8_lossy(&raw), config);
-    fs::write(path, sanitized)?;
-    set_file_permissions(path)
 }
 
 fn sanitize_text(text: &str, config: &AppConfig) -> String {
@@ -867,43 +849,6 @@ mod tests {
         assert!(!sanitized.contains("C:\\Secrets\\ib"));
         assert!(!sanitized.contains("C:\\Program Files\\1cv8\\conf"));
         assert!(sanitized.contains("<path>"));
-    }
-
-    #[test]
-    fn retain_run_artifacts_sanitizes_lossy_utf8_logs() {
-        let dir = tempdir().expect("tempdir");
-        let config = config(dir.path());
-        let artifacts = create_run_artifacts(&config).expect("artifacts");
-
-        fs::write(
-            &artifacts.platform_log,
-            b"prefix\xff /P \"secret\" C:\\Secrets\\ib /home/user/project",
-        )
-        .expect("platform log");
-
-        let retained = retain_run_artifacts(&config, &artifacts).expect("retained");
-        let sanitized = fs::read_to_string(retained.platform_log).expect("sanitized");
-
-        assert!(!sanitized.contains("secret"));
-        assert!(!sanitized.contains("C:\\Secrets\\ib"));
-        assert!(!sanitized.contains("/home/user/project"));
-        assert!(sanitized.contains("<path>"));
-    }
-
-    #[test]
-    fn retained_artifacts_are_not_truncated() {
-        let dir = tempdir().expect("tempdir");
-        let config = config(dir.path());
-        let artifacts = create_run_artifacts(&config).expect("artifacts");
-        let payload = format!("prefix {} suffix", "x".repeat(1_500));
-
-        fs::write(&artifacts.platform_log, payload).expect("platform log");
-
-        let retained = retain_run_artifacts(&config, &artifacts).expect("retained");
-        let sanitized = fs::read_to_string(retained.platform_log).expect("sanitized");
-
-        assert!(!sanitized.contains("(truncated)"));
-        assert!(sanitized.len() > 1_000);
     }
 
     #[test]
