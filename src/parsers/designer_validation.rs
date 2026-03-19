@@ -51,7 +51,9 @@ pub fn parse_path(path: &Path) -> std::io::Result<Vec<Issue>> {
 
 fn parse_module_issue(line: &str) -> Option<Issue> {
     let captures = MODULE_ISSUE_RE.captures(line)?;
-    let extension = captures.name("extension").map(|m| format!("{} ", m.as_str()));
+    let extension = captures
+        .name("extension")
+        .map(|m| format!("{} ", m.as_str()));
     let path = format!(
         "{}{}",
         extension.as_deref().unwrap_or(""),
@@ -116,6 +118,7 @@ fn contains_issue_marker(message: &str) -> bool {
         || lower.contains("error")
         || lower.contains("ошиб")
         || lower.contains("fatal")
+        || lower.contains("неразрешим")
 }
 
 fn contains_warning_marker(lower_message: &str) -> bool {
@@ -177,7 +180,8 @@ mod tests {
 
     #[test]
     fn keeps_issue_after_module_issue_when_no_context_line_exists() {
-        let issues = parse("{CommonModules.A(1,1)}: Ошибка компиляции\nКонфигурация Ошибка проверки");
+        let issues =
+            parse("{CommonModules.A(1,1)}: Ошибка компиляции\nКонфигурация Ошибка проверки");
 
         assert_eq!(issues.len(), 2);
         match &issues[1] {
@@ -219,5 +223,19 @@ mod tests {
         let issues = parse_path(&path).expect("parse path");
 
         assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn parses_unresolvable_references_issue() {
+        let issues = parse("ОбщаяФорма.НастройкиРегистрации.Справка Неразрешимые ссылки на объекты метаданных (1)");
+
+        assert_eq!(issues.len(), 1);
+        match &issues[0] {
+            Issue::Object(issue) => {
+                assert_eq!(issue.object, "ОбщаяФорма.НастройкиРегистрации.Справка");
+                assert_eq!(issue.severity, IssueSeverity::Error);
+            }
+            _ => panic!("expected object issue"),
+        }
     }
 }
