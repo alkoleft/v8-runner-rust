@@ -77,20 +77,20 @@
 
 ### Dump
 
-- [ ] Реализовать `dump --mode full`
-- [ ] Реализовать `dump --mode incremental`
+- [x] Реализовать `dump --mode full`
+- [x] Реализовать `dump --mode incremental`
 - [ ] Реализовать `dump --mode partial`
 - [ ] Валидировать, что `partial` требует минимум один `--object`
-- [ ] Поддержать выбор `source-set`
-- [ ] Поддержать выбор `extension`
+- [x] Поддержать выбор `source-set`
+- [x] Поддержать выбор `extension`
 
 ### Syntax
 
-- [ ] Реализовать `syntax designer-config`
-- [ ] Реализовать `syntax designer-modules`
-- [ ] Валидировать, что для `syntax designer-modules` включён хотя бы один режим проверки
-- [ ] Реализовать parser designer validation logs
-- [ ] Вернуть structured issues вместо raw stdout
+- [x] Реализовать `syntax designer-config`
+- [x] Реализовать `syntax designer-modules`
+- [x] Валидировать, что для `syntax designer-modules` включён хотя бы один режим проверки
+- [x] Реализовать parser designer validation logs
+- [x] Вернуть structured issues вместо raw stdout
 
 ### Launch
 
@@ -105,7 +105,7 @@
 - [ ] Добавить unit-тесты на `PartialLoadListGenerator`
 - [ ] Добавить unit-тесты на JUnit parser
 - [ ] Добавить unit-тесты на YaXUnit log parser
-- [ ] Добавить unit-тесты на designer validation parser
+- [x] Добавить unit-тесты на designer validation parser
 - [ ] Добавить integration tests для CLI команд
 - [ ] Подготовить fixture-наборы логов и XML
 - [ ] Обновить `README.md`
