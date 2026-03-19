@@ -104,7 +104,10 @@ fn syntax_designer_modules_json_returns_structured_validation_failure() {
     assert_eq!(payload["data"]["exit_code"], 101);
     assert_eq!(payload["data"]["summary"]["errors"], 1);
     assert_eq!(payload["data"]["issues"][0]["kind"], "module");
-    assert_eq!(payload["data"]["issues"][0]["path"], "CommonModules.TestModule");
+    assert_eq!(
+        payload["data"]["issues"][0]["path"],
+        "CommonModules.TestModule"
+    );
 }
 
 #[test]

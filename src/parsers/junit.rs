@@ -81,7 +81,9 @@ pub fn parse<R: BufRead>(reader: R) -> Result<TestReport, JunitError> {
                         name: attr_value(event, b"name"),
                         class_name: option_attr_value(event, b"classname"),
                         status: TestStatus::Passed,
-                        duration_ms: seconds_attr_to_ms(option_attr_value(event, b"time").as_deref()),
+                        duration_ms: seconds_attr_to_ms(
+                            option_attr_value(event, b"time").as_deref(),
+                        ),
                         failure_message: None,
                         stack_trace: None,
                     });

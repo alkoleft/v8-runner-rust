@@ -145,7 +145,8 @@ pub(crate) fn run_build(
                 Ok(AnalysisOutcome::NoChanges { .. }) => {
                     info!(
                         source_set = source_set.name.as_str(),
-                        "change analysis result: no changes detected"
+                        found_changes = 0,
+                        "change analysis result: found 0 change(s)"
                     );
                     StepPlan::Skip {
                         message: "no changes".to_owned(),
@@ -343,10 +344,11 @@ fn log_change_analysis(source_set_name: &str, changes: &[analyzer::FileChange]) 
     info!(
         source_set = source_set_name,
         changed_files = changes.len(),
+        found_changes = changes.len(),
         added,
         modified,
         deleted,
-        "change analysis result: changes detected"
+        "change analysis result: found change(s)"
     );
 }
 

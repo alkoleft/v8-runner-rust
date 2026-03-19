@@ -3,7 +3,9 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use chrono::Utc;
 use thiserror::Error;
+use tracing_subscriber::fmt::time::FormatTime;
 use tracing_subscriber::EnvFilter;
 
 const ACTION_LOG_FILE_ENV: &str = "V8TR_ACTION_LOG_FILE";
@@ -31,9 +33,9 @@ pub fn init_action_logging(
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_new(level).unwrap_or_else(|_| EnvFilter::new("info")))
         .with_writer(writer)
+        .with_timer(UtcTimer)
         .with_ansi(false)
         .with_target(false)
-        .without_time()
         .try_init()
         .map_err(|error| LoggingInitError::Install(error.to_string()))?;
 
@@ -87,6 +89,8 @@ struct ActionLogWriter {
     file: Option<Arc<Mutex<File>>>,
 }
 
+struct UtcTimer;
+
 impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for ActionLogMakeWriter {
     type Writer = ActionLogWriter;
 
@@ -95,6 +99,15 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for ActionLogMakeWriter {
             stdout_enabled: self.stdout_enabled,
             file: self.file.clone(),
         }
+    }
+}
+
+impl FormatTime for UtcTimer {
+    fn format_time(
+        &self,
+        writer: &mut tracing_subscriber::fmt::format::Writer<'_>,
+    ) -> std::fmt::Result {
+        write!(writer, "{}", Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ"))
     }
 }
 

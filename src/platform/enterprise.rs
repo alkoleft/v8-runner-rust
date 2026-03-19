@@ -124,9 +124,8 @@ mod tests {
             Duration::from_secs(5),
         );
 
-        let args = dsl.build_run_unit_tests_args(Path::new(
-            "/tmp/path with space/тест config.json",
-        ));
+        let args =
+            dsl.build_run_unit_tests_args(Path::new("/tmp/path with space/тест config.json"));
 
         assert_eq!(args[0], "ENTERPRISE");
         assert!(args.iter().any(|arg| arg == "/C"));

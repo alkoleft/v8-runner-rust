@@ -104,8 +104,8 @@ pub enum TestStatus {
 
 impl TestRunResult {
     pub fn has_failures(&self) -> bool {
-        self.report.as_ref().is_some_and(|report| {
-            report.summary.failed > 0 || report.summary.errors > 0
-        })
+        self.report
+            .as_ref()
+            .is_some_and(|report| report.summary.failed > 0 || report.summary.errors > 0)
     }
 }

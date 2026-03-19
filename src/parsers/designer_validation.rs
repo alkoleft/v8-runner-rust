@@ -243,7 +243,9 @@ mod tests {
 
     #[test]
     fn parses_unresolvable_references_issue() {
-        let issues = parse("ОбщаяФорма.НастройкиРегистрации.Справка Неразрешимые ссылки на объекты метаданных (1)");
+        let issues = parse(
+            "ОбщаяФорма.НастройкиРегистрации.Справка Неразрешимые ссылки на объекты метаданных (1)",
+        );
 
         assert_eq!(issues.len(), 1);
         match &issues[0] {

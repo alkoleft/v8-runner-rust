@@ -160,6 +160,8 @@ fn build_text_stdout_includes_action_logs() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("starting command"));
+    assert!(stdout.contains("T"));
+    assert!(stdout.contains("found_changes="));
     assert!(stdout.contains("executing build step"));
     assert!(stdout.contains("running process"));
 }
