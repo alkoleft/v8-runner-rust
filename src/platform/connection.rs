@@ -34,8 +34,10 @@ impl V8Connection {
             args.push(user.clone());
         }
         if let Some(password) = &self.password {
-            args.push("/P".to_owned());
-            args.push(password.clone());
+            if !password.is_empty() {
+                args.push("/P".to_owned());
+                args.push(password.clone());
+            }
         }
         args
     }

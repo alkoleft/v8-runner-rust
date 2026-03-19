@@ -183,7 +183,7 @@ fn run_syntax(
     let runner = utilities.runner_for(UtilityType::V8);
     let dsl = DesignerDsl::new(
         location.path,
-        V8Connection::from_connection_string(&config.connection),
+        config.v8_connection(),
         runner,
         Some(log_path.clone()),
     );
@@ -681,6 +681,7 @@ mod tests {
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             connection: "File=/tmp/ib".to_owned(),
+            credentials: Default::default(),
             source_sets: vec![SourceSetConfig {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,

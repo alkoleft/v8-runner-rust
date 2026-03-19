@@ -112,6 +112,7 @@ mod tests {
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             connection: "File=/tmp/ib".to_owned(),
+            credentials: Default::default(),
             source_sets: vec![SourceSetConfig {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,

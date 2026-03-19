@@ -197,6 +197,7 @@ mod tests {
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             connection: "File=/tmp/ib".to_owned(),
+            credentials: Default::default(),
             source_sets: vec![SourceSetConfig {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
@@ -236,6 +237,7 @@ mod tests {
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             connection: "File=/tmp/ib".to_owned(),
+            credentials: Default::default(),
             source_sets: vec![SourceSetConfig {
                 name: "../outside".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
@@ -269,6 +271,7 @@ mod tests {
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             connection: "File=/tmp/ib".to_owned(),
+            credentials: Default::default(),
             source_sets: vec![SourceSetConfig {
                 name: "bad/name".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
@@ -302,6 +305,7 @@ mod tests {
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             connection: "File=/tmp/ib".to_owned(),
+            credentials: Default::default(),
             source_sets: vec![SourceSetConfig {
                 name: "main-config_01".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
@@ -331,6 +335,7 @@ mod tests {
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             connection: "File=/tmp/ib".to_owned(),
+            credentials: Default::default(),
             source_sets: vec![SourceSetConfig {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
@@ -366,6 +371,7 @@ mod tests {
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             connection: "File=/tmp/ib".to_owned(),
+            credentials: Default::default(),
             source_sets: vec![SourceSetConfig {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
@@ -381,6 +387,9 @@ mod tests {
         config.tests.execution_timeout_seconds = 0;
 
         let err = validate(&config).expect_err("expected invalid timeout");
-        assert!(matches!(err, ConfigValidationError::InvalidTestExecutionTimeout));
+        assert!(matches!(
+            err,
+            ConfigValidationError::InvalidTestExecutionTimeout
+        ));
     }
 }

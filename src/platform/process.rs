@@ -319,7 +319,18 @@ fn terminate_child_group(child: &mut std::process::Child) {
 fn render_command(request: &ProcessRequest) -> String {
     let mut parts = Vec::with_capacity(request.args.len() + 1);
     parts.push(request.program.display().to_string());
-    parts.extend(request.args.iter().cloned());
+    let mut skip_next = false;
+    for arg in &request.args {
+        if skip_next {
+            parts.push("***".to_owned());
+            skip_next = false;
+        } else if arg.eq_ignore_ascii_case("/P") {
+            parts.push(arg.clone());
+            skip_next = true;
+        } else {
+            parts.push(arg.clone());
+        }
+    }
     parts.join(" ")
 }
 

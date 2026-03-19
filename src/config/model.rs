@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::platform::connection::V8Connection;
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
@@ -21,6 +23,10 @@ pub struct AppConfig {
     /// Connection string to the infobase
     pub connection: String,
 
+    /// Optional credentials for infobase authentication
+    #[serde(default)]
+    pub credentials: CredentialsConfig,
+
     /// Source sets (configuration + extensions)
     #[serde(rename = "source-set")]
     pub source_sets: Vec<SourceSetConfig>,
@@ -36,6 +42,21 @@ pub struct AppConfig {
     /// Test pipeline configuration
     #[serde(default)]
     pub tests: TestsConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct CredentialsConfig {
+    pub user: Option<String>,
+    pub password: Option<String>,
+}
+
+impl AppConfig {
+    pub fn v8_connection(&self) -> V8Connection {
+        let mut conn = V8Connection::from_connection_string(&self.connection);
+        conn.user = self.credentials.user.clone();
+        conn.password = self.credentials.password.clone();
+        conn
+    }
 }
 
 fn default_format() -> SourceFormat {

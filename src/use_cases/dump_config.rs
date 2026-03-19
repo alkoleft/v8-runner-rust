@@ -671,7 +671,7 @@ fn build_designer_dsl<'a>(
 
     Ok(DesignerDsl::new(
         binary.to_path_buf(),
-        V8Connection::from_connection_string(&config.connection),
+        config.v8_connection(),
         runner,
         Some(log_file),
     ))
@@ -827,6 +827,7 @@ mod tests {
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             connection: "File=/tmp/ib".to_owned(),
+            credentials: Default::default(),
             source_sets: vec![
                 SourceSetConfig {
                     name: "main".to_owned(),

@@ -142,39 +142,67 @@ pub(crate) fn run_build(
                 .cloned()
                 .expect("every source-set must have an analysis result")
             {
-                Ok(AnalysisOutcome::NoChanges { .. }) => StepPlan::Skip {
-                    message: "no changes".to_owned(),
-                    ok: true,
-                },
-                Ok(AnalysisOutcome::Fallback) => StepPlan::Execute {
-                    mode: BuildMode::Full,
-                    message: "fallback to full load after recoverable change-detection issue"
-                        .to_owned(),
-                    partial_paths: None,
-                    commit: StepCommit::RescanFull {
-                        recover_storage: false,
-                    },
-                },
+                Ok(AnalysisOutcome::NoChanges { .. }) => {
+                    info!(
+                        source_set = source_set.name.as_str(),
+                        "change analysis result: no changes detected"
+                    );
+                    StepPlan::Skip {
+                        message: "no changes".to_owned(),
+                        ok: true,
+                    }
+                }
+                Ok(AnalysisOutcome::Fallback) => {
+                    info!(
+                        source_set = source_set.name.as_str(),
+                        "change analysis result: fallback to full load after recoverable issue"
+                    );
+                    StepPlan::Execute {
+                        mode: BuildMode::Full,
+                        message: "fallback to full load after recoverable change-detection issue"
+                            .to_owned(),
+                        partial_paths: None,
+                        commit: StepCommit::RescanFull {
+                            recover_storage: false,
+                        },
+                    }
+                }
                 Ok(AnalysisOutcome::Changes { changes, prepared }) => {
+                    log_change_analysis(source_set.name.as_str(), &changes);
                     match partial_load::decide(
                         &changes,
                         context.path(),
                         config.build.partial_load_threshold,
                     ) {
-                        LoadDecision::Partial(paths) => StepPlan::Execute {
-                            mode: BuildMode::Partial {
-                                file_count: paths.len(),
-                            },
-                            message: format!("partial load of {} files", paths.len()),
-                            partial_paths: Some(paths),
-                            commit: StepCommit::Prepared(prepared),
-                        },
-                        LoadDecision::Full => StepPlan::Execute {
-                            mode: BuildMode::Full,
-                            message: "full load selected by partial-load rules".to_owned(),
-                            partial_paths: None,
-                            commit: StepCommit::Prepared(prepared),
-                        },
+                        LoadDecision::Partial(paths) => {
+                            info!(
+                                source_set = source_set.name.as_str(),
+                                partial_file_count = paths.len(),
+                                threshold = config.build.partial_load_threshold,
+                                "change analysis decision: partial load"
+                            );
+                            StepPlan::Execute {
+                                mode: BuildMode::Partial {
+                                    file_count: paths.len(),
+                                },
+                                message: format!("partial load of {} files", paths.len()),
+                                partial_paths: Some(paths),
+                                commit: StepCommit::Prepared(prepared),
+                            }
+                        }
+                        LoadDecision::Full => {
+                            info!(
+                                source_set = source_set.name.as_str(),
+                                threshold = config.build.partial_load_threshold,
+                                "change analysis decision: full load"
+                            );
+                            StepPlan::Execute {
+                                mode: BuildMode::Full,
+                                message: "full load selected by partial-load rules".to_owned(),
+                                partial_paths: None,
+                                commit: StepCommit::Prepared(prepared),
+                            }
+                        }
                     }
                 }
                 Err(error) => {
@@ -297,6 +325,29 @@ pub(crate) fn run_build(
         steps,
         duration_ms: started.elapsed().as_millis() as u64,
     })
+}
+
+fn log_change_analysis(source_set_name: &str, changes: &[analyzer::FileChange]) {
+    let mut added = 0usize;
+    let mut modified = 0usize;
+    let mut deleted = 0usize;
+
+    for change in changes {
+        match change.kind {
+            analyzer::ChangeKind::Added => added += 1,
+            analyzer::ChangeKind::Modified => modified += 1,
+            analyzer::ChangeKind::Deleted => deleted += 1,
+        }
+    }
+
+    info!(
+        source_set = source_set_name,
+        changed_files = changes.len(),
+        added,
+        modified,
+        deleted,
+        "change analysis result: changes detected"
+    );
 }
 
 fn validate_supported_matrix(config: &AppConfig) -> Option<AppError> {
@@ -467,7 +518,7 @@ fn build_designer_dsl<'a>(
 
     Ok(DesignerDsl::new(
         binary.to_path_buf(),
-        V8Connection::from_connection_string(&config.connection),
+        config.v8_connection(),
         runner,
         Some(log_file),
     ))
@@ -644,6 +695,7 @@ mod tests {
             format,
             builder,
             connection: "File=/tmp/ib".to_owned(),
+            credentials: Default::default(),
             source_sets: vec![
                 SourceSetConfig {
                     name: "main".to_owned(),

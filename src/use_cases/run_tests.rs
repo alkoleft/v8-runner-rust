@@ -510,7 +510,7 @@ fn build_enterprise_dsl<'a>(
         .map_err(|error| AppError::Platform(error.to_string()))?;
     Ok(EnterpriseDsl::new(
         location.path,
-        V8Connection::from_connection_string(&config.connection),
+        config.v8_connection(),
         runner,
         artifacts.platform_log.clone(),
         Duration::from_secs(config.tests.execution_timeout_seconds),
@@ -812,6 +812,7 @@ mod tests {
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
             connection: "File=/tmp/ib".to_owned(),
+            credentials: Default::default(),
             source_sets: vec![SourceSetConfig {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
