@@ -32,6 +32,10 @@ pub struct AppConfig {
     /// Platform tools configuration
     #[serde(default)]
     pub tools: ToolsConfig,
+
+    /// Test pipeline configuration
+    #[serde(default)]
+    pub tests: TestsConfig,
 }
 
 fn default_format() -> SourceFormat {
@@ -100,6 +104,24 @@ pub struct ToolsConfig {
 
     #[serde(rename = "edt-cli", default)]
     pub edt_cli: EdtCliConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TestsConfig {
+    #[serde(default = "default_test_execution_timeout_seconds")]
+    pub execution_timeout_seconds: u64,
+}
+
+impl Default for TestsConfig {
+    fn default() -> Self {
+        Self {
+            execution_timeout_seconds: default_test_execution_timeout_seconds(),
+        }
+    }
+}
+
+fn default_test_execution_timeout_seconds() -> u64 {
+    300
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]

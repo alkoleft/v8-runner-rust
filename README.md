@@ -20,3 +20,23 @@ build:
 
 - `partialLoadThreshold` controls when partial load falls back to full load.
 - `Configuration.xml` changes and deletions always force a full load.
+
+## Tests
+
+Current `test` support is limited to `builder=DESIGNER` and `format=DESIGNER`.
+
+- `v8-test-runner test all` always runs `build` first, then launches YaXUnit via `1cv8c`.
+- `v8-test-runner test module <MODULE_NAME>` does the same, but writes `filter.modules = ["<MODULE_NAME>"]` into the temporary YaXUnit config.
+- `v8-test-runner test --full ...` keeps passed test cases and full stack traces.
+- Compact mode hides passed cases and truncates stack traces.
+- If the run fails or the JUnit report cannot be parsed, sanitized retained artifacts stay under `workPath/temp/yaxunit/runs/<run-id>/`.
+- YaXUnit must already be installed and callable from the target infobase.
+
+Optional YAML settings:
+
+```yaml
+tests:
+  execution_timeout_seconds: 300
+```
+
+- `execution_timeout_seconds` controls the hard timeout for the Enterprise test run.

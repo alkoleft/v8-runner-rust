@@ -100,7 +100,7 @@ mod tests {
     use super::SourceSetsService;
     use crate::config::model::{
         AppConfig, BuildConfig, BuilderBackend, SourceFormat, SourceSetConfig, SourceSetPurpose,
-        ToolsConfig,
+        TestsConfig, ToolsConfig,
     };
     use std::path::Path;
 
@@ -119,6 +119,7 @@ mod tests {
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig::default(),
+            tests: TestsConfig::default(),
         };
 
         let service = SourceSetsService::new(&config);

@@ -7,13 +7,11 @@ pub struct Envelope<T: Serialize> {
     pub command: String,
     pub duration_ms: u64,
     pub data: T,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub steps: Vec<StepResult>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct StepResult {
     pub name: String,
     pub ok: bool,

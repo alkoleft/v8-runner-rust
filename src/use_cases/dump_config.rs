@@ -748,7 +748,7 @@ mod tests {
     use crate::cli::args::DumpArgs;
     use crate::config::model::{
         AppConfig, BuildConfig, BuilderBackend, PlatformToolConfig, SourceFormat, SourceSetConfig,
-        SourceSetPurpose, ToolsConfig,
+        SourceSetPurpose, TestsConfig, ToolsConfig,
     };
     use crate::domain::dump::DumpMode;
     use crate::output::json::Envelope;
@@ -828,6 +828,7 @@ mod tests {
                 },
                 ..ToolsConfig::default()
             },
+            tests: TestsConfig::default(),
         }
     }
 

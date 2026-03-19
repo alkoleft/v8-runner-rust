@@ -1,1 +1,137 @@
-// Enterprise DSL — stub for Wave 1 implementation
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use thiserror::Error;
+
+use crate::platform::connection::V8Connection;
+use crate::platform::process::{ProcessError, ProcessRequest, ProcessRunner};
+use crate::platform::result::PlatformCommandResult;
+
+#[derive(Debug, Error)]
+pub enum EnterpriseError {
+    #[error("failed to execute enterprise process: {0}")]
+    Spawn(ProcessError),
+}
+
+pub struct EnterpriseDsl<'a> {
+    binary: PathBuf,
+    connection: V8Connection,
+    runner: &'a dyn ProcessRunner,
+    log_file: PathBuf,
+    timeout: Duration,
+}
+
+impl<'a> EnterpriseDsl<'a> {
+    pub fn new(
+        binary: PathBuf,
+        connection: V8Connection,
+        runner: &'a dyn ProcessRunner,
+        log_file: PathBuf,
+        timeout: Duration,
+    ) -> Self {
+        Self {
+            binary,
+            connection,
+            runner,
+            log_file,
+            timeout,
+        }
+    }
+
+    pub fn run_unit_tests(
+        &self,
+        config_path: &Path,
+    ) -> Result<PlatformCommandResult, EnterpriseError> {
+        let args = self.build_run_unit_tests_args(config_path);
+        let process = self
+            .runner
+            .run_with_timeout(
+                &ProcessRequest {
+                    program: self.binary.clone(),
+                    args,
+                    workdir: None,
+                    stdout_log_path: None,
+                    stderr_log_path: None,
+                    startup_probe: None,
+                },
+                self.timeout,
+            )
+            .map_err(EnterpriseError::Spawn)?;
+
+        let (platform_log_path, platform_log, platform_log_read_error) =
+            match std::fs::read_to_string(&self.log_file) {
+                Ok(contents) => (Some(self.log_file.clone()), Some(contents), None),
+                Err(error) => (
+                    Some(self.log_file.clone()),
+                    None,
+                    Some(format!(
+                        "failed to read enterprise /Out log '{}': {error}",
+                        self.log_file.display()
+                    )),
+                ),
+            };
+
+        Ok(PlatformCommandResult {
+            process,
+            platform_log_path,
+            platform_log,
+            platform_log_read_error,
+        })
+    }
+
+    fn build_run_unit_tests_args(&self, config_path: &Path) -> Vec<String> {
+        let mut args = vec!["ENTERPRISE".to_owned()];
+        args.extend(self.connection.args());
+        args.push("/C".to_owned());
+        args.push(format!(
+            "RunUnitTests=\"{}\"",
+            normalize_c_payload_path(config_path)
+        ));
+        args.push("/Out".to_owned());
+        args.push(self.log_file.display().to_string());
+        args
+    }
+}
+
+fn normalize_c_payload_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{normalize_c_payload_path, EnterpriseDsl};
+    use crate::platform::connection::V8Connection;
+    use crate::platform::process::{ProcessExecutor, ProcessRunner};
+    use std::path::Path;
+    use std::time::Duration;
+    use tempfile::tempdir;
+
+    #[test]
+    fn c_payload_uses_forward_slashes() {
+        let normalized = normalize_c_payload_path(Path::new("C:\\tmp\\path with space\\cfg.json"));
+        assert_eq!(normalized, "C:/tmp/path with space/cfg.json");
+    }
+
+    #[test]
+    fn builds_expected_run_unit_tests_arguments() {
+        let dir = tempdir().expect("tempdir");
+        let runner = ProcessExecutor;
+        let dsl = EnterpriseDsl::new(
+            dir.path().join("1cv8c"),
+            V8Connection::from_connection_string("File=/tmp/ib"),
+            &runner as &dyn ProcessRunner,
+            dir.path().join("platform.log"),
+            Duration::from_secs(5),
+        );
+
+        let args = dsl.build_run_unit_tests_args(Path::new(
+            "/tmp/path with space/тест config.json",
+        ));
+
+        assert_eq!(args[0], "ENTERPRISE");
+        assert!(args.iter().any(|arg| arg == "/C"));
+        assert!(args
+            .iter()
+            .any(|arg| arg == "RunUnitTests=\"/tmp/path with space/тест config.json\""));
+    }
+}

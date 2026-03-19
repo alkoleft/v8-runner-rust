@@ -55,6 +55,9 @@ pub struct BuildArgs {
 
 #[derive(Args, Debug)]
 pub struct TestArgs {
+    #[arg(long)]
+    pub full: bool,
+
     #[command(subcommand)]
     pub scope: TestScope,
 }

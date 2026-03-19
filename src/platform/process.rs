@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::io::Read;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -68,12 +69,22 @@ pub enum ProcessError {
         path: PathBuf,
         source: std::io::Error,
     },
+
+    #[error("process timed out '{cmd}' after {timeout_ms}ms")]
+    TimedOut { cmd: String, timeout_ms: u64 },
 }
 
 /// Boundary for synchronous and detached process execution.
 pub trait ProcessRunner {
     /// Execute a process and wait for completion, capturing stdout/stderr.
     fn run(&self, request: &ProcessRequest) -> Result<ProcessResult, ProcessError>;
+
+    /// Execute a process with a hard timeout, terminating the process group if needed.
+    fn run_with_timeout(
+        &self,
+        request: &ProcessRequest,
+        timeout: Duration,
+    ) -> Result<ProcessResult, ProcessError>;
 
     /// Start a process in fire-and-forget mode without waiting for completion.
     fn spawn(&self, request: &ProcessRequest) -> Result<SpawnResult, ProcessError>;
@@ -84,38 +95,15 @@ pub struct ProcessExecutor;
 
 impl ProcessRunner for ProcessExecutor {
     fn run(&self, request: &ProcessRequest) -> Result<ProcessResult, ProcessError> {
-        let mut cmd = Command::new(&request.program);
-        cmd.args(&request.args);
-        if let Some(workdir) = &request.workdir {
-            cmd.current_dir(workdir);
-        }
+        self.run_internal(request, None)
+    }
 
-        let output = cmd.output().map_err(|source| ProcessError::SpawnFailed {
-            cmd: render_command(request),
-            source,
-        })?;
-
-        if let Some(path) = &request.stdout_log_path {
-            std::fs::write(path, &output.stdout).map_err(|source| ProcessError::StdoutLogIo {
-                path: path.clone(),
-                source,
-            })?;
-        }
-
-        if let Some(path) = &request.stderr_log_path {
-            std::fs::write(path, &output.stderr).map_err(|source| ProcessError::StderrLogIo {
-                path: path.clone(),
-                source,
-            })?;
-        }
-
-        Ok(ProcessResult {
-            exit_code: output.status.code().unwrap_or(-1),
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            stdout_log_path: request.stdout_log_path.clone(),
-            stderr_log_path: request.stderr_log_path.clone(),
-        })
+    fn run_with_timeout(
+        &self,
+        request: &ProcessRequest,
+        timeout: Duration,
+    ) -> Result<ProcessResult, ProcessError> {
+        self.run_internal(request, Some(timeout))
     }
 
     fn spawn(&self, request: &ProcessRequest) -> Result<SpawnResult, ProcessError> {
@@ -157,6 +145,142 @@ impl ProcessRunner for ProcessExecutor {
             pid,
             binary: request.program.clone(),
         })
+    }
+}
+
+impl ProcessExecutor {
+    fn run_internal(
+        &self,
+        request: &ProcessRequest,
+        timeout: Option<Duration>,
+    ) -> Result<ProcessResult, ProcessError> {
+        let mut cmd = Command::new(&request.program);
+        cmd.args(&request.args);
+        if let Some(workdir) = &request.workdir {
+            cmd.current_dir(workdir);
+        }
+        cmd.stdin(Stdio::null());
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            unsafe {
+                cmd.pre_exec(|| {
+                    if libc::setpgid(0, 0) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+        }
+
+        let rendered_command = render_command(request);
+        let child = cmd.spawn().map_err(|source| ProcessError::SpawnFailed {
+            cmd: rendered_command.clone(),
+            source,
+        })?;
+        let output = wait_for_output(child, &rendered_command, timeout)?;
+
+        if let Some(path) = &request.stdout_log_path {
+            std::fs::write(path, &output.stdout).map_err(|source| ProcessError::StdoutLogIo {
+                path: path.clone(),
+                source,
+            })?;
+        }
+
+        if let Some(path) = &request.stderr_log_path {
+            std::fs::write(path, &output.stderr).map_err(|source| ProcessError::StderrLogIo {
+                path: path.clone(),
+                source,
+            })?;
+        }
+
+        Ok(ProcessResult {
+            exit_code: output.status.code().unwrap_or(-1),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            stdout_log_path: request.stdout_log_path.clone(),
+            stderr_log_path: request.stderr_log_path.clone(),
+        })
+    }
+}
+
+fn wait_for_output(
+    mut child: std::process::Child,
+    rendered_command: &str,
+    timeout: Option<Duration>,
+) -> Result<std::process::Output, ProcessError> {
+    if timeout.is_none() {
+        return child
+            .wait_with_output()
+            .map_err(|source| ProcessError::StartupCheckFailed {
+                cmd: rendered_command.to_owned(),
+                source,
+            });
+    }
+
+    let mut stdout = child.stdout.take().ok_or_else(|| ProcessError::StartupCheckFailed {
+        cmd: rendered_command.to_owned(),
+        source: std::io::Error::new(std::io::ErrorKind::BrokenPipe, "stdout pipe missing"),
+    })?;
+    let mut stderr = child.stderr.take().ok_or_else(|| ProcessError::StartupCheckFailed {
+        cmd: rendered_command.to_owned(),
+        source: std::io::Error::new(std::io::ErrorKind::BrokenPipe, "stderr pipe missing"),
+    })?;
+    let stdout_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout.read_to_end(&mut buf);
+        buf
+    });
+    let stderr_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stderr.read_to_end(&mut buf);
+        buf
+    });
+
+    let start = std::time::Instant::now();
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|source| ProcessError::StartupCheckFailed {
+                cmd: rendered_command.to_owned(),
+                source,
+            })?
+        {
+            return Ok(std::process::Output {
+                status,
+                stdout: stdout_reader.join().unwrap_or_default(),
+                stderr: stderr_reader.join().unwrap_or_default(),
+            });
+        }
+
+        let limit = timeout.expect("checked above");
+        if start.elapsed() >= limit {
+            terminate_child_group(&mut child);
+            let _ = child.wait();
+            let _ = stdout_reader.join();
+            let _ = stderr_reader.join();
+            return Err(ProcessError::TimedOut {
+                cmd: rendered_command.to_owned(),
+                timeout_ms: limit.as_millis() as u64,
+            });
+        }
+
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn terminate_child_group(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    unsafe {
+        let pgid = -(child.id() as i32);
+        let _ = libc::kill(pgid, libc::SIGKILL);
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
     }
 }
 
@@ -297,5 +421,56 @@ mod tests {
             .expect_err("expected log write failure");
 
         assert!(matches!(err, ProcessError::StdoutLogIo { .. }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_with_timeout_returns_timeout_error() {
+        let dir = tempdir().expect("tempdir");
+        let script = dir.path().join("sleep.sh");
+        write_script(&script, "sleep 2");
+
+        let runner = ProcessExecutor;
+        let err = runner
+            .run_with_timeout(
+                &ProcessRequest {
+                    program: script,
+                    args: vec![],
+                    workdir: None,
+                    stdout_log_path: None,
+                    stderr_log_path: None,
+                    startup_probe: None,
+                },
+                Duration::from_millis(100),
+            )
+            .expect_err("expected timeout");
+
+        assert!(matches!(err, ProcessError::TimedOut { .. }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_handles_large_stdout_without_deadlock() {
+        let dir = tempdir().expect("tempdir");
+        let script = dir.path().join("large.sh");
+        write_script(
+            &script,
+            "i=0\nwhile [ \"$i\" -lt 20000 ]; do\n  printf 'line%05d\\n' \"$i\"\n  i=$((i+1))\ndone\nexit 0",
+        );
+
+        let runner = ProcessExecutor;
+        let result = runner
+            .run(&ProcessRequest {
+                program: script,
+                args: vec![],
+                workdir: None,
+                stdout_log_path: None,
+                stderr_log_path: None,
+                startup_probe: None,
+            })
+            .expect("run");
+
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("line19999"));
     }
 }

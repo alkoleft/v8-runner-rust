@@ -65,15 +65,15 @@
 
 ### Tests
 
-- [ ] Реализовать `EnterpriseDsl`
-- [ ] Реализовать генерацию временного JSON-конфига YaXUnit
-- [ ] Реализовать `test all`
-- [ ] Реализовать `test module <MODULE_NAME>`
-- [ ] Гарантировать обязательный `build` перед тестами
-- [ ] Реализовать parser JUnit XML
-- [ ] Реализовать parser `[ERR]` блоков YaXUnit-лога
-- [ ] Вернуть summary, suites, cases и extracted errors
-- [ ] Реализовать compact/full режим тестового ответа: compact скрывает passed-тесты и урезает stack trace
+- [x] Реализовать `EnterpriseDsl`
+- [x] Реализовать генерацию временного JSON-конфига YaXUnit
+- [x] Реализовать `test all`
+- [x] Реализовать `test module <MODULE_NAME>`
+- [x] Гарантировать обязательный `build` перед тестами
+- [x] Реализовать parser JUnit XML
+- [x] Реализовать parser `[ERR]` блоков YaXUnit-лога
+- [x] Вернуть summary, suites, cases и extracted errors
+- [x] Реализовать compact/full режим тестового ответа: compact скрывает passed-тесты и урезает stack trace
 
 ### Dump
 
@@ -103,12 +103,12 @@
 
 - [ ] Добавить unit-тесты на change detection
 - [ ] Добавить unit-тесты на `PartialLoadListGenerator`
-- [ ] Добавить unit-тесты на JUnit parser
-- [ ] Добавить unit-тесты на YaXUnit log parser
+- [x] Добавить unit-тесты на JUnit parser
+- [x] Добавить unit-тесты на YaXUnit log parser
 - [x] Добавить unit-тесты на designer validation parser
-- [ ] Добавить integration tests для CLI команд
+- [x] Добавить integration tests для CLI команд
 - [ ] Подготовить fixture-наборы логов и XML
-- [ ] Обновить `README.md`
+- [x] Обновить `README.md`
 
 ## Волна 2: EDT
 
@@ -138,7 +138,7 @@
 ## Подготовка к следующему этапу
 
 - [ ] Нормализовать result types для build/test/dump/syntax/launch
-- [ ] Добавить `steps` в output envelope
-- [ ] Добавить `warnings` в output envelope
+- [x] Добавить `steps` в output envelope
+- [x] Добавить `warnings` в output envelope
 - [ ] Убедиться, что use cases не зависят от CLI parsing
 - [ ] Оставить место для будущего transport adapter слоя

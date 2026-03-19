@@ -1,0 +1,91 @@
+---
+source: tests/cli_test.rs
+expression: full_snapshot
+---
+Object {
+    "command": String("test"),
+    "data": Object {
+        "diagnostics": Array [
+            String("platform <path> *** uri http:<path>:***@example"),
+        ],
+        "error_kind": String("test_failures"),
+        "mode": String("full"),
+        "ok": Bool(false),
+        "report": Object {
+            "extracted_errors": Array [
+                String("12:00:01.000 [ERR] failed block\nmore details"),
+            ],
+            "suites": Array [
+                Object {
+                    "cases": Array [
+                        Object {
+                            "class_name": String("Sample"),
+                            "duration_ms": Number(100),
+                            "name": String("ok"),
+                            "status": String("PASSED"),
+                        },
+                        Object {
+                            "class_name": String("Sample"),
+                            "duration_ms": Number(200),
+                            "failure_message": String("boom"),
+                            "name": String("bad"),
+                            "stack_trace": String("stack trace line 1\nstack trace line 2"),
+                            "status": String("FAILED"),
+                        },
+                    ],
+                    "duration_ms": Number(0),
+                    "name": String("suite"),
+                },
+            ],
+            "summary": Object {
+                "errors": Number(0),
+                "failed": Number(1),
+                "passed": Number(1),
+                "skipped": Number(0),
+                "total": Number(2),
+            },
+        },
+        "retained_paths": Object {
+            "config_json": String("<config_json>"),
+            "junit_xml": String("<junit_xml>"),
+            "platform_log": String("<platform_log>"),
+            "run_dir": String("<run_dir>"),
+            "sentinel": String("<sentinel>"),
+            "yaxunit_log": String("<yaxunit_log>"),
+        },
+        "target": Object {
+            "module": Object {
+                "name": String("Foo"),
+            },
+        },
+    },
+    "duration_ms": String("<duration>"),
+    "ok": Bool(false),
+    "steps": Array [
+        Object {
+            "duration_ms": String("<duration>"),
+            "message": String("build completed"),
+            "name": String("build"),
+            "ok": Bool(true),
+        },
+        Object {
+            "duration_ms": String("<duration>"),
+            "message": String("enterprise exit code 0"),
+            "name": String("run"),
+            "ok": Bool(true),
+        },
+        Object {
+            "duration_ms": String("<duration>"),
+            "message": String("parsed 2 test cases"),
+            "name": String("parse_junit"),
+            "ok": Bool(true),
+        },
+        Object {
+            "duration_ms": String("<duration>"),
+            "message": String("extracted 1 YaXUnit error block(s)"),
+            "name": String("parse_log"),
+            "ok": Bool(true),
+        },
+    ],
+    "warnings": Array [],
+}

@@ -603,7 +603,7 @@ mod tests {
     };
     use crate::config::model::{
         AppConfig, BuildConfig, BuilderBackend, SourceFormat, SourceSetConfig, SourceSetPurpose,
-        ToolsConfig,
+        TestsConfig, ToolsConfig,
     };
     use crate::domain::issue::Issue;
     use crate::domain::syntax::SyntaxCheckStatus;
@@ -662,6 +662,7 @@ mod tests {
                 },
                 edt_cli: Default::default(),
             },
+            tests: TestsConfig::default(),
         }
     }
 

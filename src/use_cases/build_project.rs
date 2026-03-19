@@ -59,9 +59,9 @@ pub fn execute(
 }
 
 #[derive(Debug)]
-struct BuildExecutionFailure {
-    error: AppError,
-    result: BuildResult,
+pub(crate) struct BuildExecutionFailure {
+    pub(crate) error: AppError,
+    pub(crate) result: BuildResult,
 }
 
 enum StepCommit {
@@ -82,7 +82,10 @@ enum StepPlan {
     },
 }
 
-fn run_build(config: &AppConfig, args: &BuildArgs) -> Result<BuildResult, BuildExecutionFailure> {
+pub(crate) fn run_build(
+    config: &AppConfig,
+    args: &BuildArgs,
+) -> Result<BuildResult, BuildExecutionFailure> {
     if let Some(error) = validate_supported_matrix(config) {
         return Err(BuildExecutionFailure {
             error,
@@ -554,7 +557,7 @@ mod tests {
     use crate::cli::args::BuildArgs;
     use crate::config::model::{
         AppConfig, BuildConfig, BuilderBackend, PlatformToolConfig, SourceFormat, SourceSetConfig,
-        SourceSetPurpose, ToolsConfig,
+        SourceSetPurpose, TestsConfig, ToolsConfig,
     };
     use crate::domain::build::BuildMode;
     use crate::output::json::Envelope;
@@ -631,6 +634,7 @@ mod tests {
                 },
                 ..ToolsConfig::default()
             },
+            tests: TestsConfig::default(),
         }
     }
 
