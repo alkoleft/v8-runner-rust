@@ -96,8 +96,9 @@ tools:
 
 - `mcp.http.*` is still reserved for the upcoming HTTP transport, while `mcp.execution.*` already drives stdio admission control and shutdown grace.
 - `tools.edt_cli.startup_timeout_ms` and `tools.edt_cli.command_timeout_ms` default to `300000` ms and also accept legacy `edt-cli` / kebab-case aliases for compatibility.
-- `src/platform/interactive.rs` now contains the low-level `InteractiveProcessExecutor` used for the upcoming shared EDT session work: it waits for the `1C:EDT>` prompt, executes prompt-delimited commands, and supports graceful shutdown plus forced kill.
-- Runtime wiring is still staged: Stage 2 continues to use one-shot EDT subprocesses for MCP `check_syntax_edt`, and the shared-session `EdtSessionManager` is still pending.
+- `src/platform/interactive.rs` contains the low-level `InteractiveProcessExecutor` used by the shared MCP EDT session: it waits for the `1C:EDT>` prompt, executes prompt-delimited commands, and supports graceful shutdown plus forced kill.
+- The shared MCP EDT session now performs a reset+probe before every live MCP `check_syntax_edt` command: `cd <workPath/edt-workspace>` followed by `cd`, which must echo the same workspace path.
+- Baseline timeout semantics are split intentionally: request-budget exhaustion returns queued timeout, while a reset/probe fault under the internal baseline cap is treated as a fatal session failure that forces lazy restart on the next call.
 
 ## MCP Stdio
 
@@ -110,8 +111,10 @@ The binary now exposes a live stdio MCP transport:
 - Business failures are returned as structured MCP tool errors; internal adapter/runtime failures stay transport-level.
 - `stdout` is reserved for MCP frames on this path: tracing goes to `workPath/logs/mcp/actions.log`, bootstrap failures go to `stderr`, and spawned platform processes stay captured or null-routed.
 - All MCP tool calls now share a global semaphore governed by `mcp.execution.max_concurrent_calls`.
-- For bounded Stage 2 EDT calls (`check_syntax_edt`), the timeout deadline starts when the request enters the MCP server wrapper, so queue wait and execution time consume the same `tools.edt_cli.command_timeout_ms` budget.
-- Client cancellation now returns early for queued and already-running MCP tool calls. This early return does not kill already-started one-shot work; the detached background job keeps the semaphore slot until it naturally finishes.
+- `check_syntax_edt` is now executed through the shared interactive EDT actor instead of spawning a fresh `1cedtcli` process per call; CLI EDT execution still uses the existing one-shot path.
+- Interactive EDT `stdout` no longer downgrades parseable `--file` issues into `tool_failed`: `stdout + issues` maps to `issues_found`, while `stdout` without parseable issues and any non-empty `stderr` still surface as `tool_failed`.
+- For bounded EDT MCP calls (`check_syntax_edt`), the timeout deadline still starts when the request enters the MCP server wrapper, so queue wait and execution time consume the same `tools.edt_cli.command_timeout_ms` budget.
+- Client cancellation now returns early for queued and already-running MCP tool calls. This early return does not kill already-started one-shot work; detached one-shot tools keep their server-side slot until they naturally finish, while live `check_syntax_edt` retains both the MCP execution slot and the actor admission slot until the in-flight interactive command finishes.
 - Transport-level error semantics are fixed as:
 - `queued cancel` => `reason=cancelled`, `stage=queued`, `timeoutMs=null|<budget>`
 - `running cancel` => `reason=cancelled`, `stage=running`, `timeoutMs=null|<budget>`
@@ -122,4 +125,5 @@ The binary now exposes a live stdio MCP transport:
 Current limits:
 
 - HTTP transport is not implemented yet.
-- Stage 2 cancellation is transport-level only: if the underlying blocking process hangs, it can keep the semaphore slot until it exits or the server shuts down.
+- The shared interactive EDT actor is currently wired only for MCP `check_syntax_edt`; broader EDT export/build rollout is still staged separately.
+- Transport-level cancellation is still early-return only: if the underlying blocking work hangs, it can keep capacity occupied until it exits or the server shuts down.

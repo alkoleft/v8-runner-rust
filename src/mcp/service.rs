@@ -27,7 +27,7 @@ use crate::use_cases::request::{
     DumpRequest, LaunchModeRequest, LaunchRequest, SyntaxRequest, SyntaxTargetRequest, TestRequest,
     TestScopeRequest,
 };
-use crate::use_cases::result::{UseCaseError, UseCaseFailure};
+use crate::use_cases::result::{UseCaseError, UseCaseFailure, UseCaseResult};
 
 /// MCP-facing service layer over transport-neutral use cases.
 #[derive(Debug)]
@@ -273,30 +273,12 @@ where
     ) -> McpServiceResult<McpSyntaxCheckResponse> {
         let context = execution_context(call_context, CommandName::Syntax)
             .map_err(McpServiceError::Internal)?;
-        let projects = normalize_optional_string(request.project_name.as_deref())
-            .map_or_else(Vec::new, |project| vec![project]);
-        let use_case_request = SyntaxRequest {
-            target: SyntaxTargetRequest::Edt { projects },
-        };
+        let use_case_request = normalize_check_syntax_edt_request(request);
 
-        match self
-            .port
-            .check_syntax(&context, self.config, &use_case_request)
-        {
-            Ok(result) => Ok(map_syntax_response(result)),
-            Err(failure) => Err(map_use_case_failure(
-                failure,
-                map_syntax_response,
-                |error| McpSyntaxCheckResponse {
-                    success: false,
-                    message: error.message().to_owned(),
-                    check_result: None,
-                    errors: Some(vec![error.message().to_owned()]),
-                    issues: None,
-                    duration_ms: None,
-                },
-            )),
-        }
+        map_syntax_use_case_result(
+            self.port
+                .check_syntax(&context, self.config, &use_case_request),
+        )
     }
 
     /// Executes the `check_syntax_designer_config` MCP tool.
@@ -644,7 +626,7 @@ fn map_launch_response(result: LaunchResult) -> McpLaunchResponse {
     }
 }
 
-fn map_syntax_response(result: SyntaxCheckResult) -> McpSyntaxCheckResponse {
+pub(crate) fn map_syntax_response(result: SyntaxCheckResult) -> McpSyntaxCheckResponse {
     let success = matches!(result.status, SyntaxCheckStatus::Clean);
     let mut errors = Vec::new();
     if let Some(stderr) = result.stderr.as_ref() {
@@ -674,6 +656,36 @@ fn map_syntax_response(result: SyntaxCheckResult) -> McpSyntaxCheckResponse {
         errors: (!errors.is_empty()).then_some(errors),
         issues: (!result.issues.is_empty()).then(|| map_issues(result.issues)),
         duration_ms: Some(result.duration_ms),
+    }
+}
+
+pub(crate) fn normalize_check_syntax_edt_request(
+    request: &McpCheckSyntaxEdtRequest,
+) -> SyntaxRequest {
+    let projects = normalize_optional_string(request.project_name.as_deref())
+        .map_or_else(Vec::new, |project| vec![project]);
+    SyntaxRequest {
+        target: SyntaxTargetRequest::Edt { projects },
+    }
+}
+
+pub(crate) fn map_syntax_use_case_result(
+    result: UseCaseResult<SyntaxCheckResult>,
+) -> McpServiceResult<McpSyntaxCheckResponse> {
+    match result {
+        Ok(result) => Ok(map_syntax_response(result)),
+        Err(failure) => Err(map_use_case_failure(
+            failure,
+            map_syntax_response,
+            |error| McpSyntaxCheckResponse {
+                success: false,
+                message: error.message().to_owned(),
+                check_result: None,
+                errors: Some(vec![error.message().to_owned()]),
+                issues: None,
+                duration_ms: None,
+            },
+        )),
     }
 }
 

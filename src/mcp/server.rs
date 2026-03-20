@@ -16,6 +16,8 @@ use tracing::error;
 
 use crate::config::model::AppConfig;
 use crate::mcp::context::McpCallContext;
+use crate::mcp::edt_session::{EdtRequestCompletion, EdtSessionManager};
+use crate::mcp::edt_syntax;
 use crate::mcp::error::{McpInternalError, McpServiceResult};
 use crate::mcp::port::{DefaultMcpUseCasePort, McpUseCasePort};
 use crate::mcp::request::{
@@ -24,6 +26,7 @@ use crate::mcp::request::{
     McpLaunchAppRequest, McpRunAllTestsRequest, McpRunModuleTestsRequest,
 };
 use crate::mcp::service::McpService;
+use crate::mcp::service::{map_syntax_use_case_result, normalize_check_syntax_edt_request};
 use crate::mcp::tool_result::McpToolResult;
 
 type SharedMcpUseCasePort = Arc<dyn McpUseCasePort + Send + Sync>;
@@ -93,6 +96,9 @@ pub enum McpServerError {
     #[error("failed to build tokio runtime for MCP stdio: {0}")]
     BuildRuntime(std::io::Error),
 
+    #[error("failed to initialize MCP stdio server: {0}")]
+    Bootstrap(String),
+
     #[error("failed to start MCP stdio server: {0}")]
     Start(String),
 
@@ -110,7 +116,7 @@ pub fn serve_stdio(config: AppConfig) -> Result<(), McpServerError> {
         .map_err(McpServerError::BuildRuntime)?;
 
     let result = runtime.block_on(async move {
-        let server = McpStdioServer::new(Arc::new(config));
+        let server = McpStdioServer::new(Arc::new(config))?;
         let running = server
             .serve(rmcp::transport::stdio())
             .await
@@ -132,24 +138,32 @@ pub fn serve_stdio(config: AppConfig) -> Result<(), McpServerError> {
 pub struct McpStdioServer {
     config: Arc<AppConfig>,
     port: SharedMcpUseCasePort,
+    edt_session: Arc<EdtSessionManager>,
     concurrency_limit: Arc<Semaphore>,
     tool_router: ToolRouter<Self>,
 }
 
 impl McpStdioServer {
     /// Creates a stdio server using the production use-case port.
-    pub fn new(config: Arc<AppConfig>) -> Self {
+    pub fn new(config: Arc<AppConfig>) -> Result<Self, McpServerError> {
         Self::with_port(config, Arc::new(DefaultMcpUseCasePort))
     }
 
     /// Creates a stdio server with an injected MCP use-case port.
-    pub fn with_port(config: Arc<AppConfig>, port: SharedMcpUseCasePort) -> Self {
-        Self {
+    pub fn with_port(
+        config: Arc<AppConfig>,
+        port: SharedMcpUseCasePort,
+    ) -> Result<Self, McpServerError> {
+        Ok(Self {
+            edt_session: Arc::new(
+                EdtSessionManager::for_config(config.as_ref())
+                    .map_err(|error| McpServerError::Bootstrap(error.to_string()))?,
+            ),
             concurrency_limit: Arc::new(Semaphore::new(max_concurrent_calls(config.as_ref()))),
             config,
             port,
             tool_router: Self::tool_router(),
-        }
+        })
     }
 
     async fn execute_tool<TRequest, TResponse>(
@@ -248,6 +262,106 @@ impl McpStdioServer {
                     permit = &mut acquire => permit
                         .map_err(|error| ErrorData::internal_error(error.to_string(), None)),
                 }
+            }
+        }
+    }
+
+    async fn execute_edt_syntax_tool(
+        &self,
+        request: McpCheckSyntaxEdtRequest,
+        cancellation: CancellationToken,
+    ) -> Result<CallToolResult, ErrorData> {
+        let timeout = McpTool::CheckSyntaxEdt
+            .execution_policy(self.config.as_ref())
+            .timeout;
+        let deadline = timeout.map(|value| Instant::now() + value);
+        let mut permit = Some(
+            self.acquire_execution_slot(cancellation.clone(), deadline, timeout)
+                .await?,
+        );
+        if cancellation.is_cancelled() {
+            return Err(execution_error(
+                ErrorReason::Cancelled,
+                ExecutionStage::Queued,
+                timeout,
+            ));
+        }
+
+        let remaining_timeout = remaining_timeout(deadline);
+        if remaining_timeout.is_some_and(|value| value.is_zero()) {
+            return Err(execution_error(
+                ErrorReason::Timeout,
+                ExecutionStage::Queued,
+                timeout,
+            ));
+        }
+
+        let use_case_request = normalize_check_syntax_edt_request(&request);
+        let result = edt_syntax::execute(
+            self.edt_session.as_ref(),
+            self.config.as_ref(),
+            &use_case_request,
+            remaining_timeout.unwrap_or_else(|| Duration::from_millis(1)),
+            cancellation,
+        )
+        .await;
+
+        match result {
+            Ok(use_case_result) => {
+                permit.take();
+                map_tool_result(map_syntax_use_case_result(use_case_result))
+            }
+            Err(edt_syntax::EdtSyntaxTransportError::QueuedCancelled) => {
+                permit.take();
+                Err(execution_error(
+                    ErrorReason::Cancelled,
+                    ExecutionStage::Queued,
+                    timeout,
+                ))
+            }
+            Err(edt_syntax::EdtSyntaxTransportError::RunningCancelledDetached { completion }) => {
+                if let Some(permit) = permit.take() {
+                    reap_detached_edt_call(completion, permit);
+                }
+                Err(execution_error(
+                    ErrorReason::Cancelled,
+                    ExecutionStage::Running,
+                    timeout,
+                ))
+            }
+            Err(edt_syntax::EdtSyntaxTransportError::RunningCancelledCompleted) => {
+                permit.take();
+                Err(execution_error(
+                    ErrorReason::Cancelled,
+                    ExecutionStage::Running,
+                    timeout,
+                ))
+            }
+            Err(edt_syntax::EdtSyntaxTransportError::QueuedTimeout) => {
+                permit.take();
+                Err(execution_error(
+                    ErrorReason::Timeout,
+                    ExecutionStage::Queued,
+                    timeout,
+                ))
+            }
+            Err(edt_syntax::EdtSyntaxTransportError::RunningTimeoutDetached { completion }) => {
+                if let Some(permit) = permit.take() {
+                    reap_detached_edt_call(completion, permit);
+                }
+                Err(execution_error(
+                    ErrorReason::Timeout,
+                    ExecutionStage::Running,
+                    timeout,
+                ))
+            }
+            Err(edt_syntax::EdtSyntaxTransportError::RunningTimeoutCompleted) => {
+                permit.take();
+                Err(execution_error(
+                    ErrorReason::Timeout,
+                    ExecutionStage::Running,
+                    timeout,
+                ))
             }
         }
     }
@@ -351,16 +465,7 @@ impl McpStdioServer {
         Parameters(request): Parameters<McpCheckSyntaxEdtRequest>,
         cancellation: CancellationToken,
     ) -> Result<CallToolResult, ErrorData> {
-        self.execute_tool(
-            McpTool::CheckSyntaxEdt,
-            request,
-            cancellation,
-            |config, port, call_context, request| {
-                let service = McpService::with_port(config.as_ref(), port);
-                service.check_syntax_edt(call_context, &request)
-            },
-        )
-        .await
+        self.execute_edt_syntax_tool(request, cancellation).await
     }
 
     #[tool(description = "Run Designer configuration syntax check")]
@@ -496,6 +601,13 @@ fn reap_detached_call<TResponse>(
     });
 }
 
+fn reap_detached_edt_call(completion: EdtRequestCompletion, permit: OwnedSemaphorePermit) {
+    tokio::spawn(async move {
+        let _permit = permit;
+        completion.wait().await;
+    });
+}
+
 fn max_concurrent_calls(config: &AppConfig) -> usize {
     config.mcp.execution.max_concurrent_calls.max(1)
 }
@@ -527,7 +639,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn execute_tool_respects_configured_concurrency_limit() {
         let server =
-            McpStdioServer::with_port(Arc::new(test_config(1, 9)), Arc::new(DefaultMcpUseCasePort));
+            McpStdioServer::with_port(Arc::new(test_config(1, 9)), Arc::new(DefaultMcpUseCasePort))
+                .expect("server");
         let active = Arc::new(AtomicUsize::new(0));
         let max_active = Arc::new(AtomicUsize::new(0));
 
@@ -566,7 +679,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn queued_cancellation_returns_transport_error_without_running_call() {
         let server =
-            McpStdioServer::with_port(Arc::new(test_config(1, 9)), Arc::new(DefaultMcpUseCasePort));
+            McpStdioServer::with_port(Arc::new(test_config(1, 9)), Arc::new(DefaultMcpUseCasePort))
+                .expect("server");
         let started = Arc::new(AtomicUsize::new(0));
 
         let first = tokio::spawn(run_probe_call(
@@ -614,7 +728,8 @@ mod tests {
         let server = McpStdioServer::with_port(
             Arc::new(test_config_with_edt_timeout(1, 9, 20)),
             Arc::new(DefaultMcpUseCasePort),
-        );
+        )
+        .expect("server");
 
         let first = tokio::spawn(run_probe_call(
             server.clone(),
@@ -658,7 +773,8 @@ mod tests {
         let server = McpStdioServer::with_port(
             Arc::new(test_config_with_edt_timeout(1, 9, 80)),
             Arc::new(DefaultMcpUseCasePort),
-        );
+        )
+        .expect("server");
 
         let first = tokio::spawn(run_probe_call(
             server.clone(),
@@ -710,7 +826,8 @@ mod tests {
         let server = McpStdioServer::with_port(
             Arc::new(test_config_with_edt_timeout(1, 9, 20)),
             Arc::new(DefaultMcpUseCasePort),
-        );
+        )
+        .expect("server");
 
         let started = Instant::now();
         let result = server
@@ -733,7 +850,8 @@ mod tests {
     async fn standard_running_cancellation_returns_early_and_retains_capacity_until_worker_finishes(
     ) {
         let server =
-            McpStdioServer::with_port(Arc::new(test_config(1, 9)), Arc::new(DefaultMcpUseCasePort));
+            McpStdioServer::with_port(Arc::new(test_config(1, 9)), Arc::new(DefaultMcpUseCasePort))
+                .expect("server");
         let active = Arc::new(AtomicUsize::new(0));
         let max_active = Arc::new(AtomicUsize::new(0));
         let cancellation = CancellationToken::new();
@@ -788,7 +906,8 @@ mod tests {
         let server = McpStdioServer::with_port(
             Arc::new(test_config_with_edt_timeout(1, 9, 500)),
             Arc::new(DefaultMcpUseCasePort),
-        );
+        )
+        .expect("server");
         let active = Arc::new(AtomicUsize::new(0));
         let max_active = Arc::new(AtomicUsize::new(0));
         let cancellation = CancellationToken::new();
@@ -847,7 +966,8 @@ mod tests {
         let server = McpStdioServer::with_port(
             Arc::new(test_config_with_edt_timeout(1, 9, 20)),
             Arc::new(DefaultMcpUseCasePort),
-        );
+        )
+        .expect("server");
 
         for _ in 0..2 {
             let error = server

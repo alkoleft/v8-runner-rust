@@ -1,14 +1,18 @@
 use std::collections::VecDeque;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use thiserror::Error;
-use tokio::sync::{oneshot, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{oneshot, Notify, OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::model::AppConfig;
+use crate::platform::edt::{
+    render_interactive_change_dir_command, render_interactive_probe_workdir_command,
+};
 use crate::platform::interactive::{
     InteractiveCommandOutput, InteractiveProcessError, InteractiveProcessExecutor,
     InteractiveProcessRequest, ShutdownOutcome,
@@ -126,19 +130,23 @@ impl EdtSessionManager {
         &self,
         request: EdtSessionRequest,
     ) -> Result<EdtSessionResponse, EdtSessionError> {
+        self.execute_observed(request).await.result
+    }
+
+    pub(crate) async fn execute_observed(
+        &self,
+        request: EdtSessionRequest,
+    ) -> ObservedEdtExecution {
         if self.inner.shutdown_started.load(Ordering::SeqCst) {
-            return Err(EdtSessionError::DrainedByRestartOrShutdown {
+            return ObservedEdtExecution::ready(Err(EdtSessionError::DrainedByRestartOrShutdown {
                 reason: EdtSessionDrainReason::Shutdown,
-            });
+            }));
         }
 
-        let permit = Some(
-            self.inner
-                .admission
-                .clone()
-                .try_acquire_owned()
-                .map_err(|_| EdtSessionError::QueueFull)?,
-        );
+        let permit = match self.inner.admission.clone().try_acquire_owned() {
+            Ok(permit) => Some(permit),
+            Err(_) => return ObservedEdtExecution::ready(Err(EdtSessionError::QueueFull)),
+        };
         let (response_tx, mut response_rx) = oneshot::channel();
         let deadline = tokio::time::Instant::from_std(request.deadline);
         let cancellation = request.cancellation.clone();
@@ -149,17 +157,20 @@ impl EdtSessionManager {
         });
         let state = queued.state.clone();
         {
-            let mut queue =
-                self.inner
-                    .queue
-                    .lock()
-                    .map_err(|_| EdtSessionError::InternalFailure {
+            let mut queue = match self.inner.queue.lock() {
+                Ok(queue) => queue,
+                Err(_) => {
+                    return ObservedEdtExecution::ready(Err(EdtSessionError::InternalFailure {
                         message: "shared EDT queue lock was poisoned".to_owned(),
-                    })?;
+                    }));
+                }
+            };
             if self.inner.shutdown_started.load(Ordering::SeqCst) {
-                return Err(EdtSessionError::DrainedByRestartOrShutdown {
-                    reason: EdtSessionDrainReason::Shutdown,
-                });
+                return ObservedEdtExecution::ready(Err(
+                    EdtSessionError::DrainedByRestartOrShutdown {
+                        reason: EdtSessionDrainReason::Shutdown,
+                    },
+                ));
             }
             queue.push_back(queued.clone());
         }
@@ -168,7 +179,7 @@ impl EdtSessionManager {
         let remove_if_still_queued = |error: EdtSessionError| {
             if state.release_queued() {
                 let _ = self.inner.remove_queued(&queued);
-                return Some(error);
+                return Some(ObservedEdtExecution::ready(Err(error)));
             }
             None
         };
@@ -178,7 +189,9 @@ impl EdtSessionManager {
         let remove_shutdown_if_queued = || {
             if state.release_queued() {
                 let _ = self.inner.remove_queued(&queued);
-                return Some(queued_shutdown_error.clone());
+                return Some(ObservedEdtExecution::ready(Err(
+                    queued_shutdown_error.clone()
+                )));
             }
             None
         };
@@ -188,33 +201,39 @@ impl EdtSessionManager {
             tokio::select! {
                 biased;
                 response = &mut response_rx => {
-                    return response.unwrap_or_else(|_| {
+                    return ObservedEdtExecution::ready(response.unwrap_or_else(|_| {
                         Err(EdtSessionError::InternalFailure {
                             message: "shared EDT worker dropped response channel".to_owned(),
                         })
-                    });
+                    }));
                 }
                 _ = cancellation.cancelled() => {
-                    if let Some(error) = remove_if_still_queued(EdtSessionError::QueuedCancelled) {
-                        return Err(error);
+                    if let Some(execution) = remove_if_still_queued(EdtSessionError::QueuedCancelled) {
+                        return execution;
                     }
                     if state.is_running() {
-                        return Err(EdtSessionError::RunningCancelled);
+                        return ObservedEdtExecution::running(
+                            Err(EdtSessionError::RunningCancelled),
+                            state.clone(),
+                        );
                     }
                     continue;
                 }
                 _ = tokio::time::sleep_until(deadline) => {
-                    if let Some(error) = remove_if_still_queued(EdtSessionError::QueuedTimeout) {
-                        return Err(error);
+                    if let Some(execution) = remove_if_still_queued(EdtSessionError::QueuedTimeout) {
+                        return execution;
                     }
                     if state.is_running() {
-                        return Err(EdtSessionError::RunningTimeout);
+                        return ObservedEdtExecution::running(
+                            Err(EdtSessionError::RunningTimeout),
+                            state.clone(),
+                        );
                     }
                     continue;
                 }
                 _ = self.inner.shutdown_token.cancelled(), if shutdown_armed => {
-                    if let Some(error) = remove_shutdown_if_queued() {
-                        return Err(error);
+                    if let Some(execution) = remove_shutdown_if_queued() {
+                        return execution;
                     }
                     shutdown_armed = false;
                     continue;
@@ -264,6 +283,40 @@ impl EdtSessionManager {
             .replace(worker);
 
         Ok(Self { inner })
+    }
+}
+
+pub(crate) struct ObservedEdtExecution {
+    pub(crate) result: Result<EdtSessionResponse, EdtSessionError>,
+    pub(crate) completion: Option<EdtRequestCompletion>,
+}
+
+impl ObservedEdtExecution {
+    fn ready(result: Result<EdtSessionResponse, EdtSessionError>) -> Self {
+        Self {
+            result,
+            completion: None,
+        }
+    }
+
+    fn running(
+        result: Result<EdtSessionResponse, EdtSessionError>,
+        state: Arc<RequestState>,
+    ) -> Self {
+        Self {
+            result,
+            completion: Some(EdtRequestCompletion { state }),
+        }
+    }
+}
+
+pub(crate) struct EdtRequestCompletion {
+    state: Arc<RequestState>,
+}
+
+impl EdtRequestCompletion {
+    pub(crate) async fn wait(self) {
+        self.state.wait_finished().await;
     }
 }
 
@@ -397,6 +450,8 @@ impl EdtSessionManagerInner {
 
 struct RequestState {
     stage: AtomicU8,
+    finished: AtomicBool,
+    finished_notify: Notify,
     permit: Mutex<Option<OwnedSemaphorePermit>>,
 }
 
@@ -404,6 +459,8 @@ impl RequestState {
     fn queued(permit: Option<OwnedSemaphorePermit>) -> Self {
         Self {
             stage: AtomicU8::new(REQUEST_QUEUED),
+            finished: AtomicBool::new(false),
+            finished_notify: Notify::new(),
             permit: Mutex::new(permit),
         }
     }
@@ -419,7 +476,7 @@ impl RequestState {
             )
             .is_ok()
         {
-            self.release_permit();
+            self.finish_state();
             return true;
         }
         false
@@ -442,7 +499,30 @@ impl RequestState {
 
     fn finish(&self) {
         self.stage.store(REQUEST_DONE, Ordering::SeqCst);
+        self.finish_state();
+    }
+
+    async fn wait_finished(&self) {
+        if self.finished.load(Ordering::SeqCst) {
+            return;
+        }
+
+        loop {
+            let notified = self.finished_notify.notified();
+            if self.finished.load(Ordering::SeqCst) {
+                return;
+            }
+            notified.await;
+            if self.finished.load(Ordering::SeqCst) {
+                return;
+            }
+        }
+    }
+
+    fn finish_state(&self) {
+        self.finished.store(true, Ordering::SeqCst);
         self.release_permit();
+        self.finished_notify.notify_waiters();
     }
 
     fn release_permit(&self) {
@@ -521,6 +601,9 @@ trait SessionFactory: Send + Sync {
     ) -> Result<(), EdtSessionError> {
         Ok(())
     }
+
+    #[cfg(test)]
+    fn post_mark_running(&self, _request: &EdtSessionRequest) {}
 }
 
 #[derive(Clone)]
@@ -558,6 +641,19 @@ impl SessionFactory for DefaultSessionFactory {
         .map_err(|error| EdtSessionError::StartupFailed {
             message: error.to_string(),
         })
+    }
+
+    fn pre_dispatch(
+        &self,
+        session: &mut dyn ManagedSession,
+        request: &EdtSessionRequest,
+    ) -> Result<(), EdtSessionError> {
+        run_baseline_reset(
+            session,
+            &self.config.work_path.join("edt-workspace"),
+            request,
+            BASELINE_RESET_TIMEOUT_CAP,
+        )
     }
 }
 
@@ -615,11 +711,16 @@ fn run_worker(inner: Arc<EdtSessionManagerInner>, factory: Arc<dyn SessionFactor
 
         if let Err(error) = factory.pre_dispatch(active_session.as_mut(), &queued.request) {
             queued.state.release_queued();
-            queued.reply(Err(error));
-            kill_and_drop_session(&mut session, inner.active_pid.as_ref());
-            inner.drain_pending(EdtSessionError::DrainedByRestartOrShutdown {
-                reason: EdtSessionDrainReason::Restart,
-            });
+            queued.reply(Err(error.clone()));
+            if !matches!(
+                error,
+                EdtSessionError::QueuedCancelled | EdtSessionError::QueuedTimeout
+            ) {
+                kill_and_drop_session(&mut session, inner.active_pid.as_ref());
+                inner.drain_pending(EdtSessionError::DrainedByRestartOrShutdown {
+                    reason: EdtSessionDrainReason::Restart,
+                });
+            }
             continue;
         }
 
@@ -640,6 +741,8 @@ fn run_worker(inner: Arc<EdtSessionManagerInner>, factory: Arc<dyn SessionFactor
         if !queued.state.try_mark_running() {
             continue;
         }
+        #[cfg(test)]
+        factory.post_mark_running(&queued.request);
         if queued.request.cancellation.is_cancelled() {
             queued.state.finish();
             queued.reply(Err(EdtSessionError::RunningCancelled));
@@ -733,10 +836,119 @@ fn wait_for_worker(worker: &JoinHandle<()>, timeout: Duration) -> bool {
     }
 }
 
+fn run_baseline_reset(
+    session: &mut dyn ManagedSession,
+    workspace: &Path,
+    request: &EdtSessionRequest,
+    timeout_cap: Duration,
+) -> Result<(), EdtSessionError> {
+    if request.cancellation.is_cancelled() {
+        return Err(EdtSessionError::QueuedCancelled);
+    }
+
+    let reset_timeout = baseline_timeout_budget(request.deadline, timeout_cap)?;
+    let reset_output = session
+        .execute(
+            &render_interactive_change_dir_command(workspace),
+            reset_timeout.duration,
+        )
+        .map_err(|error| baseline_error("reset", error, reset_timeout.clamped_by_budget))?;
+    if !reset_output.stderr.trim().is_empty() {
+        return Err(EdtSessionError::SessionFailed {
+            message: format!(
+                "shared EDT baseline reset produced stderr: {}",
+                reset_output.stderr.trim()
+            ),
+        });
+    }
+
+    if request.cancellation.is_cancelled() {
+        return Err(EdtSessionError::QueuedCancelled);
+    }
+
+    let probe_timeout = baseline_timeout_budget(request.deadline, timeout_cap)?;
+    let probe_output = session
+        .execute(
+            &render_interactive_probe_workdir_command(),
+            probe_timeout.duration,
+        )
+        .map_err(|error| baseline_error("probe", error, probe_timeout.clamped_by_budget))?;
+    if !probe_output.stderr.trim().is_empty() {
+        return Err(EdtSessionError::SessionFailed {
+            message: format!(
+                "shared EDT baseline probe produced stderr: {}",
+                probe_output.stderr.trim()
+            ),
+        });
+    }
+
+    if !workspace_paths_match(probe_output.stdout.trim(), workspace) {
+        return Err(EdtSessionError::SessionFailed {
+            message: format!(
+                "shared EDT baseline probe returned '{}' instead of '{}'",
+                probe_output.stdout.trim(),
+                workspace.display()
+            ),
+        });
+    }
+
+    Ok(())
+}
+
+fn baseline_error(
+    step: &str,
+    error: InteractiveProcessError,
+    clamped_by_budget: bool,
+) -> EdtSessionError {
+    match error {
+        InteractiveProcessError::CommandTimeout { .. } if clamped_by_budget => {
+            EdtSessionError::QueuedTimeout
+        }
+        other => EdtSessionError::SessionFailed {
+            message: format!("shared EDT baseline {step} failed: {other}"),
+        },
+    }
+}
+
+fn baseline_timeout_budget(
+    deadline: Instant,
+    timeout_cap: Duration,
+) -> Result<BaselineTimeoutBudget, EdtSessionError> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(EdtSessionError::QueuedTimeout);
+    }
+
+    Ok(BaselineTimeoutBudget {
+        duration: remaining.min(timeout_cap),
+        clamped_by_budget: remaining <= timeout_cap,
+    })
+}
+
+struct BaselineTimeoutBudget {
+    duration: Duration,
+    clamped_by_budget: bool,
+}
+
+fn workspace_paths_match(actual: &str, expected: &Path) -> bool {
+    let trimmed = actual.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let actual_path = Path::new(trimmed);
+    actual_path.components().eq(expected.components())
+        || std::fs::canonicalize(actual_path)
+            .ok()
+            .zip(std::fs::canonicalize(expected).ok())
+            .is_some_and(|(actual, expected)| actual == expected)
+}
+
 const REQUEST_QUEUED: u8 = 0;
 const REQUEST_RUNNING: u8 = 1;
 const REQUEST_DONE: u8 = 2;
 const JOIN_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const BASELINE_RESET_TIMEOUT_CAP: Duration = Duration::from_secs(1);
 
 #[cfg(unix)]
 fn kill_process_group_by_pid(pid: u32) -> std::io::Result<()> {
@@ -763,13 +975,15 @@ fn kill_process_group_by_pid(_pid: u32) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        EdtSessionDrainReason, EdtSessionError, EdtSessionManager, EdtSessionRequest,
-        EdtSessionShutdownError, ManagedSession, SessionFactory,
+        render_interactive_change_dir_command, render_interactive_probe_workdir_command,
+        run_baseline_reset, EdtSessionDrainReason, EdtSessionError, EdtSessionManager,
+        EdtSessionRequest, EdtSessionShutdownError, ManagedSession, SessionFactory,
     };
     use crate::platform::interactive::{
         InteractiveCommandOutput, InteractiveProcessError, ShutdownOutcome,
     };
     use std::collections::VecDeque;
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::thread;
@@ -784,6 +998,7 @@ mod tests {
         commands: Arc<Mutex<Vec<String>>>,
         pre_dispatches: Arc<AtomicUsize>,
         pre_dispatch_delay: Duration,
+        post_mark_running_cancel: Option<CancellationToken>,
         shutdowns: Arc<AtomicUsize>,
         next_pid: Arc<AtomicU32>,
     }
@@ -796,6 +1011,7 @@ mod tests {
                 commands: Arc::new(Mutex::new(Vec::new())),
                 pre_dispatches: Arc::new(AtomicUsize::new(0)),
                 pre_dispatch_delay: Duration::ZERO,
+                post_mark_running_cancel: None,
                 shutdowns: Arc::new(AtomicUsize::new(0)),
                 next_pid: Arc::new(AtomicU32::new(41)),
             }
@@ -803,6 +1019,11 @@ mod tests {
 
         fn with_pre_dispatch_delay(mut self, delay: Duration) -> Self {
             self.pre_dispatch_delay = delay;
+            self
+        }
+
+        fn with_post_mark_running_cancel(mut self, cancellation: CancellationToken) -> Self {
+            self.post_mark_running_cancel = Some(cancellation);
             self
         }
 
@@ -853,6 +1074,13 @@ mod tests {
             }
             Ok(())
         }
+
+        #[cfg(test)]
+        fn post_mark_running(&self, _request: &EdtSessionRequest) {
+            if let Some(cancellation) = &self.post_mark_running_cancel {
+                cancellation.cancel();
+            }
+        }
     }
 
     enum SessionPlan {
@@ -893,6 +1121,37 @@ mod tests {
                 behaviors: Mutex::new(behaviors.into()),
                 killed: AtomicBool::new(false),
             }
+        }
+    }
+
+    #[derive(Clone)]
+    struct ResettingSessionFactory {
+        inner: FakeSessionFactory,
+        workspace: PathBuf,
+        timeout_cap: Duration,
+    }
+
+    impl ResettingSessionFactory {
+        fn new(inner: FakeSessionFactory, workspace: PathBuf, timeout_cap: Duration) -> Self {
+            Self {
+                inner,
+                workspace,
+                timeout_cap,
+            }
+        }
+    }
+
+    impl SessionFactory for ResettingSessionFactory {
+        fn spawn_session(&self) -> Result<Box<dyn ManagedSession>, EdtSessionError> {
+            self.inner.spawn_session()
+        }
+
+        fn pre_dispatch(
+            &self,
+            session: &mut dyn ManagedSession,
+            request: &EdtSessionRequest,
+        ) -> Result<(), EdtSessionError> {
+            run_baseline_reset(session, &self.workspace, request, self.timeout_cap)
         }
     }
 
@@ -961,7 +1220,7 @@ mod tests {
     }
 
     fn manager(
-        factory: FakeSessionFactory,
+        factory: impl SessionFactory + 'static,
         capacity: usize,
         shutdown: Duration,
     ) -> EdtSessionManager {
@@ -1033,6 +1292,185 @@ mod tests {
             factory.commands(),
             vec!["cmd-1".to_owned(), "cmd-2".to_owned()]
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn baseline_reset_runs_before_each_user_command() {
+        let workspace = PathBuf::from("/tmp/edt workspace");
+        let reset_command = render_interactive_change_dir_command(&workspace);
+        let probe_command = render_interactive_probe_workdir_command();
+        let inner = FakeSessionFactory::new(vec![SessionPlan::Session(vec![
+            CommandBehavior::CompleteAfter {
+                delay: Duration::from_millis(1),
+                stdout: String::new(),
+                stderr: String::new(),
+            },
+            CommandBehavior::CompleteAfter {
+                delay: Duration::from_millis(1),
+                stdout: format!("{}\n", workspace.display()),
+                stderr: String::new(),
+            },
+            CommandBehavior::CompleteAfter {
+                delay: Duration::from_millis(1),
+                stdout: "one".to_owned(),
+                stderr: String::new(),
+            },
+            CommandBehavior::CompleteAfter {
+                delay: Duration::from_millis(1),
+                stdout: String::new(),
+                stderr: String::new(),
+            },
+            CommandBehavior::CompleteAfter {
+                delay: Duration::from_millis(1),
+                stdout: format!("{}\n", workspace.display()),
+                stderr: String::new(),
+            },
+            CommandBehavior::CompleteAfter {
+                delay: Duration::from_millis(1),
+                stdout: "two".to_owned(),
+                stderr: String::new(),
+            },
+        ])]);
+        let factory = ResettingSessionFactory::new(
+            inner.clone(),
+            workspace.clone(),
+            Duration::from_millis(20),
+        );
+        let manager = manager(factory, 2, Duration::from_millis(100));
+
+        assert_eq!(
+            manager
+                .execute(request("cmd-1", 200))
+                .await
+                .expect("first result")
+                .stdout,
+            "one"
+        );
+        assert_eq!(
+            manager
+                .execute(request("cmd-2", 200))
+                .await
+                .expect("second result")
+                .stdout,
+            "two"
+        );
+        assert_eq!(
+            inner.commands(),
+            vec![
+                reset_command,
+                probe_command.clone(),
+                "cmd-1".to_owned(),
+                render_interactive_change_dir_command(&workspace),
+                probe_command,
+                "cmd-2".to_owned(),
+            ]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn baseline_probe_accepts_equivalent_workspace_with_trailing_separator() {
+        let workspace = PathBuf::from("/tmp/edt workspace");
+        let inner = FakeSessionFactory::new(vec![SessionPlan::Session(vec![
+            CommandBehavior::CompleteAfter {
+                delay: Duration::from_millis(1),
+                stdout: String::new(),
+                stderr: String::new(),
+            },
+            CommandBehavior::CompleteAfter {
+                delay: Duration::from_millis(1),
+                stdout: format!("{}/\n", workspace.display()),
+                stderr: String::new(),
+            },
+            CommandBehavior::CompleteAfter {
+                delay: Duration::from_millis(1),
+                stdout: "ok".to_owned(),
+                stderr: String::new(),
+            },
+        ])]);
+        let factory = ResettingSessionFactory::new(inner, workspace, Duration::from_millis(20));
+        let manager = manager(factory, 2, Duration::from_millis(100));
+
+        assert_eq!(
+            manager
+                .execute(request("cmd-1", 200))
+                .await
+                .expect("result")
+                .stdout,
+            "ok"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn baseline_probe_mismatch_restarts_and_drains_queue() {
+        let workspace = PathBuf::from("/tmp/edt workspace");
+        let inner = FakeSessionFactory::new(vec![
+            SessionPlan::Session(vec![
+                CommandBehavior::CompleteAfter {
+                    delay: Duration::from_millis(5),
+                    stdout: String::new(),
+                    stderr: String::new(),
+                },
+                CommandBehavior::CompleteAfter {
+                    delay: Duration::from_millis(20),
+                    stdout: "/tmp/other\n".to_owned(),
+                    stderr: String::new(),
+                },
+            ]),
+            SessionPlan::Session(vec![
+                CommandBehavior::CompleteAfter {
+                    delay: Duration::from_millis(1),
+                    stdout: String::new(),
+                    stderr: String::new(),
+                },
+                CommandBehavior::CompleteAfter {
+                    delay: Duration::from_millis(1),
+                    stdout: format!("{}\n", workspace.display()),
+                    stderr: String::new(),
+                },
+                CommandBehavior::CompleteAfter {
+                    delay: Duration::from_millis(1),
+                    stdout: "fresh".to_owned(),
+                    stderr: String::new(),
+                },
+            ]),
+        ]);
+        let factory = ResettingSessionFactory::new(
+            inner.clone(),
+            workspace.clone(),
+            Duration::from_millis(30),
+        );
+        let manager = manager(factory, 2, Duration::from_millis(100));
+
+        let first = tokio::spawn({
+            let manager = manager.clone();
+            async move { manager.execute(request("cmd-1", 200)).await }
+        });
+        wait_for_commands(&inner, 2).await;
+        let queued = tokio::spawn({
+            let manager = manager.clone();
+            async move { manager.execute(request("cmd-2", 200)).await }
+        });
+
+        let first_result = first.await.expect("first join");
+        assert!(matches!(
+            first_result,
+            Err(EdtSessionError::SessionFailed { .. })
+        ));
+        assert_eq!(
+            queued.await.expect("queued join"),
+            Err(EdtSessionError::DrainedByRestartOrShutdown {
+                reason: EdtSessionDrainReason::Restart
+            })
+        );
+        assert_eq!(
+            manager
+                .execute(request("cmd-3", 200))
+                .await
+                .expect("fresh result")
+                .stdout,
+            "fresh"
+        );
+        assert_eq!(inner.start_count(), 2);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1153,6 +1591,53 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn budget_exhausted_during_baseline_returns_queued_timeout_without_restart() {
+        let workspace = PathBuf::from("/tmp/edt workspace");
+        let inner = FakeSessionFactory::new(vec![SessionPlan::Session(vec![
+            CommandBehavior::CompleteAfter {
+                delay: Duration::from_millis(20),
+                stdout: String::new(),
+                stderr: String::new(),
+            },
+            CommandBehavior::CompleteAfter {
+                delay: Duration::from_millis(1),
+                stdout: String::new(),
+                stderr: String::new(),
+            },
+            CommandBehavior::CompleteAfter {
+                delay: Duration::from_millis(1),
+                stdout: format!("{}\n", workspace.display()),
+                stderr: String::new(),
+            },
+            CommandBehavior::CompleteAfter {
+                delay: Duration::from_millis(1),
+                stdout: "ok".to_owned(),
+                stderr: String::new(),
+            },
+        ])]);
+        let factory = ResettingSessionFactory::new(
+            inner.clone(),
+            workspace.clone(),
+            Duration::from_millis(50),
+        );
+        let manager = manager(factory, 2, Duration::from_millis(100));
+
+        assert_eq!(
+            manager.execute(request("cmd-1", 10)).await,
+            Err(EdtSessionError::QueuedTimeout)
+        );
+        assert_eq!(
+            manager
+                .execute(request("cmd-2", 200))
+                .await
+                .expect("second result")
+                .stdout,
+            "ok"
+        );
+        assert_eq!(inner.start_count(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn queued_cancellation_removes_entries_from_internal_queue() {
         let factory = FakeSessionFactory::new(vec![SessionPlan::Session(vec![
             CommandBehavior::CompleteAfter {
@@ -1230,6 +1715,67 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancellation_during_baseline_returns_queued_cancel_without_user_command() {
+        let workspace = PathBuf::from("/tmp/edt workspace");
+        let reset_command = render_interactive_change_dir_command(&workspace);
+        let inner = FakeSessionFactory::new(vec![SessionPlan::Session(vec![
+            CommandBehavior::CompleteAfter {
+                delay: Duration::from_millis(30),
+                stdout: String::new(),
+                stderr: String::new(),
+            },
+            CommandBehavior::CompleteAfter {
+                delay: Duration::from_millis(1),
+                stdout: String::new(),
+                stderr: String::new(),
+            },
+            CommandBehavior::CompleteAfter {
+                delay: Duration::from_millis(1),
+                stdout: format!("{}\n", workspace.display()),
+                stderr: String::new(),
+            },
+            CommandBehavior::CompleteAfter {
+                delay: Duration::from_millis(1),
+                stdout: "ok".to_owned(),
+                stderr: String::new(),
+            },
+        ])]);
+        let factory = ResettingSessionFactory::new(
+            inner.clone(),
+            workspace.clone(),
+            Duration::from_millis(50),
+        );
+        let manager = manager(factory, 2, Duration::from_millis(100));
+        let cancellation = CancellationToken::new();
+
+        let first = tokio::spawn({
+            let manager = manager.clone();
+            let cancellation = cancellation.clone();
+            async move {
+                manager
+                    .execute(request("cmd-1", 200).with_cancellation(cancellation))
+                    .await
+            }
+        });
+        wait_for_commands(&inner, 1).await;
+        cancellation.cancel();
+
+        assert_eq!(
+            first.await.expect("first join"),
+            Err(EdtSessionError::QueuedCancelled)
+        );
+        assert_eq!(inner.commands(), vec![reset_command]);
+        assert_eq!(
+            manager
+                .execute(request("cmd-2", 200))
+                .await
+                .expect("second result")
+                .stdout,
+            "ok"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn running_cancellation_is_cooperative_and_capacity_recovers_after_completion() {
         let factory = FakeSessionFactory::new(vec![SessionPlan::Session(vec![
             CommandBehavior::CompleteAfter {
@@ -1275,6 +1821,22 @@ mod tests {
                 .stdout,
             "second"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn execute_observed_can_surface_completed_running_cancellation_without_completion_handle()
+    {
+        let cancellation = CancellationToken::new();
+        let factory = FakeSessionFactory::new(vec![SessionPlan::Session(vec![])])
+            .with_post_mark_running_cancel(cancellation.clone());
+        let manager = manager(factory, 1, Duration::from_millis(100));
+
+        let execution = manager
+            .execute_observed(request("cmd-1", 200).with_cancellation(cancellation))
+            .await;
+
+        assert_eq!(execution.result, Err(EdtSessionError::RunningCancelled));
+        assert!(execution.completion.is_none());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1324,6 +1886,72 @@ mod tests {
             "fresh"
         );
         assert_eq!(factory.start_count(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fatal_baseline_timeout_under_internal_cap_restarts_and_drains_queue() {
+        let workspace = PathBuf::from("/tmp/edt workspace");
+        let inner = FakeSessionFactory::new(vec![
+            SessionPlan::Session(vec![CommandBehavior::CompleteAfter {
+                delay: Duration::from_millis(40),
+                stdout: String::new(),
+                stderr: String::new(),
+            }]),
+            SessionPlan::Session(vec![
+                CommandBehavior::CompleteAfter {
+                    delay: Duration::from_millis(1),
+                    stdout: String::new(),
+                    stderr: String::new(),
+                },
+                CommandBehavior::CompleteAfter {
+                    delay: Duration::from_millis(1),
+                    stdout: format!("{}\n", workspace.display()),
+                    stderr: String::new(),
+                },
+                CommandBehavior::CompleteAfter {
+                    delay: Duration::from_millis(1),
+                    stdout: "fresh".to_owned(),
+                    stderr: String::new(),
+                },
+            ]),
+        ]);
+        let factory = ResettingSessionFactory::new(
+            inner.clone(),
+            workspace.clone(),
+            Duration::from_millis(10),
+        );
+        let manager = manager(factory, 2, Duration::from_millis(100));
+
+        let first = tokio::spawn({
+            let manager = manager.clone();
+            async move { manager.execute(request("cmd-1", 200)).await }
+        });
+        wait_for_commands(&inner, 1).await;
+        let queued = tokio::spawn({
+            let manager = manager.clone();
+            async move { manager.execute(request("cmd-2", 200)).await }
+        });
+
+        let first_result = first.await.expect("first join");
+        assert!(matches!(
+            first_result,
+            Err(EdtSessionError::SessionFailed { .. })
+        ));
+        assert_eq!(
+            queued.await.expect("queued join"),
+            Err(EdtSessionError::DrainedByRestartOrShutdown {
+                reason: EdtSessionDrainReason::Restart
+            })
+        );
+        assert_eq!(
+            manager
+                .execute(request("cmd-3", 200))
+                .await
+                .expect("fresh result")
+                .stdout,
+            "fresh"
+        );
+        assert_eq!(inner.start_count(), 2);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

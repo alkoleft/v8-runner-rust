@@ -151,3 +151,5 @@
 - [x] Добавить `v8-test-runner mcp serve stdio`
 - [x] Поднять rmcp stdio tool server с tools-only capability и опубликовать 8 MCP tools
 - [x] Добавить bounded execution через semaphore и per-call timeout/cancel semantics для MCP path
+- [x] Подключить shared EDT actor к live MCP `check_syntax_edt`
+- [x] Добавить baseline/reset pre-dispatch для shared EDT session (`cd <workspace>` + probe `cd`)

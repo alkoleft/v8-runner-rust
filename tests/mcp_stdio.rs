@@ -101,11 +101,11 @@ fn setup_project() -> (tempfile::TempDir, PathBuf) {
 }
 
 fn setup_edt_project() -> (tempfile::TempDir, PathBuf) {
-    setup_edt_project_with_options("sleep 1\nexit 0", 20, 1)
+    setup_edt_project_with_options("sleep 1\nprompt", 80, 1)
 }
 
 fn setup_edt_project_with_options(
-    script_body: &str,
+    validate_handler: &str,
     command_timeout_ms: u64,
     max_concurrent_calls: usize,
 ) -> (tempfile::TempDir, PathBuf) {
@@ -119,7 +119,12 @@ fn setup_edt_project_with_options(
     fs::create_dir_all(base_path.join("main-edt")).expect("main edt");
     fs::create_dir_all(&work_path).expect("work");
     fs::create_dir_all(&edt_dir).expect("edt dir");
-    write_script(&edt_path, script_body);
+    write_interactive_edt_script(
+        &edt_path,
+        &work_path.join("edt-workspace"),
+        &dir.path().join("edt-commands.log"),
+        validate_handler,
+    );
     write_edt_config_with_options(
         &config_path,
         &base_path,
@@ -159,7 +164,7 @@ fn setup_designer_project_with_options(
 }
 
 fn setup_hybrid_edt_project_with_options(
-    edt_script_body: &str,
+    edt_validate_handler: &str,
     platform_script_body: &str,
     command_timeout_ms: u64,
     max_concurrent_calls: usize,
@@ -175,7 +180,12 @@ fn setup_hybrid_edt_project_with_options(
     fs::create_dir_all(base_path.join("main-edt")).expect("main edt");
     fs::create_dir_all(&work_path).expect("work");
     fs::create_dir_all(&edt_dir).expect("edt dir");
-    write_script(&edt_path, edt_script_body);
+    write_interactive_edt_script(
+        &edt_path,
+        &work_path.join("edt-workspace"),
+        &dir.path().join("edt-commands.log"),
+        edt_validate_handler,
+    );
     write_script(&platform_dir.join("bin").join("1cv8"), platform_script_body);
     write_edt_config_with_platform(
         &config_path,
@@ -206,6 +216,67 @@ fn write_script(path: &Path, body: &str) {
     }
     fs::write(path, format!("#!/bin/sh\n{body}\n")).expect("write script");
     make_executable(path);
+}
+
+fn write_interactive_edt_script(
+    path: &Path,
+    workspace: &Path,
+    command_log_path: &Path,
+    validate_handler: &str,
+) {
+    let body = format!(
+        "set -eu\n\
+         prompt() {{ printf '1C:EDT>'; }}\n\
+         workspace='{}'\n\
+         cwd=\"$workspace\"\n\
+         dirty=0\n\
+         prompt\n\
+         while IFS= read -r line; do\n\
+           printf '%s\\n' \"$line\" >> '{}'\n\
+           eval \"set -- $line\"\n\
+           cmd=\"${{1:-}}\"\n\
+           if [ \"$#\" -gt 0 ]; then shift; fi\n\
+           case \"$cmd\" in\n\
+             cd)\n\
+               if [ \"$#\" -eq 0 ]; then\n\
+                 printf '%s\\n' \"$cwd\"\n\
+               else\n\
+                 cwd=\"$1\"\n\
+                 if [ \"$cwd\" = \"$workspace\" ]; then dirty=0; fi\n\
+               fi\n\
+               prompt\n\
+               ;;\n\
+             validate)\n\
+               out=\"\"\n\
+               project=\"\"\n\
+               while [ \"$#\" -gt 0 ]; do\n\
+                 case \"$1\" in\n\
+                   --file)\n\
+                     out=\"$2\"\n\
+                     shift 2\n\
+                     ;;\n\
+                   --project-list)\n\
+                     project=\"$2\"\n\
+                     shift 2\n\
+                     ;;\n\
+                   *)\n\
+                     shift\n\
+                     ;;\n\
+                 esac\n\
+               done\n\
+               {}\n\
+               ;;\n\
+             *)\n\
+               printf 'unknown:%s\\n' \"$line\"\n\
+               prompt\n\
+               ;;\n\
+           esac\n\
+         done\n",
+        workspace.display(),
+        command_log_path.display(),
+        validate_handler
+    );
+    write_script(path, &body);
 }
 
 fn read_invocation_count(path: &Path) -> usize {
@@ -377,7 +448,7 @@ async fn mcp_stdio_returns_transport_timeout_for_edt_syntax() {
                     .data
                     .as_ref()
                     .and_then(|data| data.get("timeoutMs")),
-                Some(&json!(20))
+                Some(&json!(80))
             );
             assert_eq!(
                 error_data.data.as_ref().and_then(|data| data.get("reason")),
@@ -390,6 +461,200 @@ async fn mcp_stdio_returns_transport_timeout_for_edt_syntax() {
         }
         other => panic!("expected MCP error, got {other:?}"),
     }
+
+    client.cancel().await.expect("cancel client");
+}
+
+#[tokio::test]
+async fn mcp_stdio_edt_syntax_resets_interactive_state_before_each_call() {
+    let validate_handler = "if [ \"$cwd\" != \"$workspace\" ]; then\n  printf 'cwd mismatch:%s\\n' \"$cwd\"\nelif [ \"$dirty\" -ne 0 ]; then\n  printf 'state leaked\\n'\nelse\n  if [ -n \"$out\" ]; then : > \"$out\"; fi\n  dirty=1\nfi\nprompt";
+    let (dir, config_path) = setup_edt_project_with_options(validate_handler, 200, 1);
+    let transport = TokioChildProcess::new(
+        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+            cmd.arg("--config")
+                .arg(config_path.as_os_str())
+                .arg("mcp")
+                .arg("serve")
+                .arg("stdio");
+        }),
+    )
+    .expect("spawn stdio transport");
+
+    let client = ().serve(transport).await.expect("connect rmcp client");
+    for _ in 0..2 {
+        let response = client
+            .peer()
+            .call_tool(
+                CallToolRequestParams::new("check_syntax_edt").with_arguments(
+                    serde_json::from_value(json!({ "projectName": "main" })).expect("arguments"),
+                ),
+            )
+            .await
+            .expect("edt syntax call");
+        assert_eq!(response.is_error, Some(false));
+        let payload: Value = response.structured_content.expect("structured payload");
+        assert_eq!(payload["status"], "success");
+    }
+
+    let commands = fs::read_to_string(dir.path().join("edt-commands.log")).expect("command log");
+    let lines: Vec<&str> = commands.lines().collect();
+    assert_eq!(lines.len(), 6);
+    assert!(lines[0].starts_with("cd "));
+    assert_eq!(lines[1], "cd");
+    assert!(lines[2].starts_with("validate --file "));
+    assert!(lines[3].starts_with("cd "));
+    assert_eq!(lines[4], "cd");
+    assert!(lines[5].starts_with("validate --file "));
+    assert!(lines[0].contains("work/edt-workspace"));
+
+    client.cancel().await.expect("cancel client");
+}
+
+#[tokio::test]
+async fn mcp_stdio_cancels_running_edt_tool_and_retains_capacity_until_detached_completion() {
+    let dir = tempdir().expect("tempdir");
+    let starts_log = dir.path().join("edt-starts.log");
+    let validate_handler = format!(
+        "printf 'start\\n' >> '{}'\nif [ -n \"$out\" ]; then : > \"$out\"; fi\nsleep 0.2\nprompt",
+        starts_log.display()
+    );
+    let (_project, config_path) = setup_edt_project_with_options(&validate_handler, 1200, 1);
+    let transport = TokioChildProcess::new(
+        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+            cmd.arg("--config")
+                .arg(config_path.as_os_str())
+                .arg("mcp")
+                .arg("serve")
+                .arg("stdio");
+        }),
+    )
+    .expect("spawn stdio transport");
+
+    let client = ().serve(transport).await.expect("connect rmcp client");
+    let handle = client
+        .peer()
+        .send_cancellable_request(
+            ClientRequest::CallToolRequest(CallToolRequest::new(
+                CallToolRequestParams::new("check_syntax_edt").with_arguments(
+                    serde_json::from_value(json!({ "projectName": "main" })).expect("arguments"),
+                ),
+            )),
+            PeerRequestOptions::default(),
+        )
+        .await
+        .expect("send cancellable request");
+
+    wait_for_invocation_count(&starts_log, 1).await;
+    handle
+        .peer
+        .notify_cancelled(CancelledNotificationParam {
+            request_id: handle.id.clone(),
+            reason: Some(String::from("integration-test")),
+        })
+        .await
+        .expect("cancel request");
+
+    let error = handle
+        .await_response()
+        .await
+        .expect_err("cancelled call must return transport error");
+    match error {
+        ServiceError::Cancelled { reason } => {
+            assert_eq!(reason.as_deref(), Some("integration-test"));
+        }
+        other => panic!("expected cancelled request, got {other:?}"),
+    }
+
+    let follow_up = tokio::spawn({
+        let peer = client.peer().clone();
+        async move {
+            peer.call_tool(
+                CallToolRequestParams::new("check_syntax_edt").with_arguments(
+                    serde_json::from_value(json!({ "projectName": "main" })).expect("arguments"),
+                ),
+            )
+            .await
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(read_invocation_count(&starts_log), 1);
+
+    let follow_up = follow_up
+        .await
+        .expect("follow-up task join")
+        .expect("capacity must recover after detached work finishes");
+    assert_eq!(follow_up.is_error, Some(false));
+    assert_eq!(read_invocation_count(&starts_log), 2);
+
+    client.cancel().await.expect("cancel client");
+}
+
+#[tokio::test]
+async fn mcp_stdio_edt_syntax_preserves_issues_found_when_stdout_is_non_empty() {
+    let validate_handler = "printf 'informational stdout\\n'\nif [ -n \"$out\" ]; then printf 'ERROR\\tCatalogs.Items\\t1\\t2\\tUnusedVariables\\tunused variable\\n' > \"$out\"; fi\nprompt";
+    let (_dir, config_path) = setup_edt_project_with_options(validate_handler, 200, 1);
+    let transport = TokioChildProcess::new(
+        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+            cmd.arg("--config")
+                .arg(config_path.as_os_str())
+                .arg("mcp")
+                .arg("serve")
+                .arg("stdio");
+        }),
+    )
+    .expect("spawn stdio transport");
+
+    let client = ().serve(transport).await.expect("connect rmcp client");
+    let response = client
+        .peer()
+        .call_tool(
+            CallToolRequestParams::new("check_syntax_edt").with_arguments(
+                serde_json::from_value(json!({ "projectName": "main" })).expect("arguments"),
+            ),
+        )
+        .await
+        .expect("tool call");
+
+    assert_eq!(response.is_error, Some(true));
+    let payload: Value = response.structured_content.expect("structured payload");
+    assert_eq!(payload["status"], "business_failure");
+    assert_eq!(payload["response"]["check_result"], "issues_found");
+    assert_eq!(payload["response"]["issues"][0]["path"], "Catalogs.Items");
+
+    client.cancel().await.expect("cancel client");
+}
+
+#[tokio::test]
+async fn mcp_stdio_edt_syntax_treats_stdout_without_issues_as_tool_failure() {
+    let validate_handler =
+        "printf 'unexpected stdout\\n'\nif [ -n \"$out\" ]; then : > \"$out\"; fi\nprompt";
+    let (_dir, config_path) = setup_edt_project_with_options(validate_handler, 200, 1);
+    let transport = TokioChildProcess::new(
+        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+            cmd.arg("--config")
+                .arg(config_path.as_os_str())
+                .arg("mcp")
+                .arg("serve")
+                .arg("stdio");
+        }),
+    )
+    .expect("spawn stdio transport");
+
+    let client = ().serve(transport).await.expect("connect rmcp client");
+    let response = client
+        .peer()
+        .call_tool(
+            CallToolRequestParams::new("check_syntax_edt").with_arguments(
+                serde_json::from_value(json!({ "projectName": "main" })).expect("arguments"),
+            ),
+        )
+        .await
+        .expect("tool call");
+
+    assert_eq!(response.is_error, Some(true));
+    let payload: Value = response.structured_content.expect("structured payload");
+    assert_eq!(payload["status"], "business_failure");
+    assert_eq!(payload["response"]["check_result"], "tool_failed");
 
     client.cancel().await.expect("cancel client");
 }
@@ -472,7 +737,7 @@ async fn mcp_stdio_queued_timeout_reports_full_payload_for_bounded_tool() {
     let edt_starts_log = dir.path().join("edt-starts.log");
     let launch_starts_log = dir.path().join("launch-starts.log");
     let edt_script_body = format!(
-        "printf 'start\\n' >> '{}'\nsleep 1\nexit 0",
+        "printf 'start\\n' >> '{}'\nsleep 1\nprompt",
         edt_starts_log.display()
     );
     let platform_script_body = format!(

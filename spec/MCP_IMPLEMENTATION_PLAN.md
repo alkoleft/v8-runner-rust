@@ -66,9 +66,19 @@
   - Зафиксирован typed error model: `queue_full`, queued/running `cancelled`, queued/running `timeout`, `startup_failed`, `session_failed`, `drained_by_restart_or_shutdown`, `internal_failure`.
   - Timeout/hang и другие fatal session errors poison/restart-ят shared session: текущий запрос получает typed failure, pending queue drain-ится единым `drained_by_restart_or_shutdown(reason=restart)`, а lazy restart происходит только на следующем запросе.
   - Добавлены unit tests на single-flight startup, FIFO, bounded admission, queued/running cancel+timeout, startup/session failure restart, non-retry semantics и shutdown drain behavior.
-- Перед каждой EDT-командой делать baseline/reset check, чтобы не было межсессионной утечки интерактивного состояния.
-- Во время shutdown или restart queued jobs отменять сразу единым business error.
-- MCP path переключить на shared EDT actor; CLI path оставить без изменений.
+- [x] 2026-03-20: Перед каждой EDT-командой делать baseline/reset check, чтобы не было межсессионной утечки интерактивного состояния.
+  - Shared EDT actor теперь делает двухшаговый reset+probe перед каждым user command: `cd <edt-workspace>` и затем `cd`, который обязан вернуть тот же workspace path.
+  - Зафиксирован success contract baseline-check: reset/probe не должны вернуть `stderr`, а probe обязан подтвердить ожидаемый workspace с path-normalized сравнением; mismatch или любой process/protocol failure считаются fatal session fault с restart+queue drain.
+  - Зафиксирован split timeout semantics: request-budget exhaustion во время baseline даёт `QueuedTimeout` без restart, а timeout baseline под внутренним cap при ещё живом request budget считается fatal session fault.
+  - Добавлены unit tests на reset-before-each-command, normalized probe success, probe mismatch, fatal-cap timeout, budget timeout и cancellation during baseline.
+- [x] 2026-03-20: Во время shutdown или restart queued jobs отменять сразу единым business error.
+  - Shared EDT actor дренирует pending queue единым typed failure `drained_by_restart_or_shutdown(reason=restart|shutdown)`; это покрыто unit tests и теперь используется live MCP EDT path.
+- [x] 2026-03-20: MCP path переключить на shared EDT actor; CLI path оставить без изменений.
+  - Добавлен `src/mcp/edt_syntax.rs`, через который live MCP `check_syntax_edt` выполняется поверх shared `EdtSessionManager`, сохраняя текущий CLI EDT path на one-shot `EdtDsl`.
+  - `src/mcp/server.rs` теперь special-case-ит `check_syntax_edt`, инициализирует shared actor через typed bootstrap error path и переиспользует MCP request normalization/response mapping из service layer без дублирования contract logic.
+  - Running cancel/timeout для live EDT path теперь удерживают не только actor admission, но и внешний MCP permit до фактического завершения интерактивной команды; follow-up requests больше не проваливаются в spurious `QueueFull`.
+  - Actor-backed EDT status mapping больше не считает `stdout + parseable issues` фатальной ошибкой: `--file` issues сохраняют `issues_found`, а `stdout` без parseable issues и любой `stderr` остаются сигналом tool/session failure.
+  - Добавлены stdio integration tests на live actor-backed EDT syntax path, transport timeout/queue timeout regressions, reset между двумя последовательными вызовами, running cancel capacity retention, `stdout`+issues classification и `stdout`-only fallback failure.
 
 ## Stage 4. HTTP Transport
 

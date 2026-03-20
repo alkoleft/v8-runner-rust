@@ -49,16 +49,7 @@ impl<'a> EdtDsl<'a> {
         source: &Path,
         target: &Path,
     ) -> Result<PlatformCommandResult, EdtError> {
-        let args = vec![
-            "-data".to_owned(),
-            self.workspace.display().to_string(),
-            "-command".to_owned(),
-            "export".to_owned(),
-            "--project".to_owned(),
-            source.display().to_string(),
-            "--configuration-files".to_owned(),
-            target.display().to_string(),
-        ];
+        let args = process_arguments(&self.workspace, &export_command_arguments(source, target));
         self.run(&args, None)
     }
 
@@ -68,16 +59,10 @@ impl<'a> EdtDsl<'a> {
         source: &Path,
         out_log: &Path,
     ) -> Result<PlatformCommandResult, EdtError> {
-        let args = vec![
-            "-data".to_owned(),
-            self.workspace.display().to_string(),
-            "-command".to_owned(),
-            "validate".to_owned(),
-            "--file".to_owned(),
-            out_log.display().to_string(),
-            "--project-list".to_owned(),
-            source.display().to_string(),
-        ];
+        let args = process_arguments(
+            &self.workspace,
+            &validate_command_arguments(source, out_log),
+        );
         self.run(&args, Some(out_log))
     }
 
@@ -135,9 +120,78 @@ impl<'a> EdtDsl<'a> {
     }
 }
 
+/// Renders an interactive `validate` command for the shared EDT session.
+pub(crate) fn render_interactive_validate_command(source: &Path, out_log: &Path) -> String {
+    render_interactive_command(&validate_command_arguments(source, out_log))
+}
+
+/// Renders an interactive `cd <workspace>` reset command for the shared EDT session.
+pub(crate) fn render_interactive_change_dir_command(path: &Path) -> String {
+    render_interactive_command(&["cd".to_owned(), path.display().to_string()])
+}
+
+/// Renders an interactive `cd` probe command that prints the current workspace.
+pub(crate) fn render_interactive_probe_workdir_command() -> String {
+    "cd".to_owned()
+}
+
+fn process_arguments(workspace: &Path, command_arguments: &[String]) -> Vec<String> {
+    let mut args = vec![
+        "-data".to_owned(),
+        workspace.display().to_string(),
+        "-command".to_owned(),
+    ];
+    args.extend(command_arguments.iter().cloned());
+    args
+}
+
+fn export_command_arguments(source: &Path, target: &Path) -> Vec<String> {
+    vec![
+        "export".to_owned(),
+        "--project".to_owned(),
+        source.display().to_string(),
+        "--configuration-files".to_owned(),
+        target.display().to_string(),
+    ]
+}
+
+fn validate_command_arguments(source: &Path, out_log: &Path) -> Vec<String> {
+    vec![
+        "validate".to_owned(),
+        "--file".to_owned(),
+        out_log.display().to_string(),
+        "--project-list".to_owned(),
+        source.display().to_string(),
+    ]
+}
+
+fn render_interactive_command(arguments: &[String]) -> String {
+    arguments
+        .iter()
+        .map(|argument| quote_interactive_argument(argument))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn quote_interactive_argument(argument: &str) -> String {
+    if argument.is_empty()
+        || argument
+            .chars()
+            .any(|ch| ch.is_whitespace() || matches!(ch, '"' | '\\' | '\n' | '\r' | '\t'))
+    {
+        let escaped = argument.replace('\\', "\\\\").replace('"', "\\\"");
+        return format!("\"{escaped}\"");
+    }
+
+    argument.to_owned()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::EdtDsl;
+    use super::{
+        render_interactive_change_dir_command, render_interactive_probe_workdir_command,
+        render_interactive_validate_command, EdtDsl,
+    };
     use crate::platform::process::{
         ProcessError, ProcessExecutor, ProcessRequest, ProcessResult, ProcessRunner, SpawnResult,
     };
@@ -317,5 +371,27 @@ mod tests {
             *runner.timeout.lock().expect("timeout lock"),
             Some(Duration::from_secs(7))
         );
+    }
+
+    #[test]
+    fn interactive_validate_command_quotes_paths_with_spaces_and_quotes() {
+        let command = render_interactive_validate_command(
+            Path::new("/tmp/My \"Project\""),
+            Path::new("/tmp/log dir/validate.log"),
+        );
+
+        assert_eq!(
+            command,
+            "validate --file \"/tmp/log dir/validate.log\" --project-list \"/tmp/My \\\"Project\\\"\""
+        );
+    }
+
+    #[test]
+    fn interactive_cd_commands_render_expected_forms() {
+        assert_eq!(
+            render_interactive_change_dir_command(Path::new("/tmp/work dir")),
+            "cd \"/tmp/work dir\""
+        );
+        assert_eq!(render_interactive_probe_workdir_command(), "cd");
     }
 }
