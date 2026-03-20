@@ -195,6 +195,7 @@ mod tests {
     use crate::platform::connection::V8Connection;
     use crate::platform::process::{ProcessExecutor, ProcessRunner};
     use std::fs;
+    use std::io::Write;
     use std::path::{Path, PathBuf};
     use tempfile::tempdir;
 
@@ -213,7 +214,11 @@ mod tests {
             fs::create_dir_all(parent).expect("create dirs");
         }
         let staged = path.with_extension("tmp");
-        fs::write(&staged, format!("#!/bin/sh\n{body}\n")).expect("write script");
+        let mut file = fs::File::create(&staged).expect("create script");
+        file.write_all(format!("#!/bin/sh\n{body}\n").as_bytes())
+            .expect("write script");
+        file.sync_all().expect("sync script");
+        drop(file);
         make_executable(&staged);
         fs::rename(&staged, path).expect("rename script");
     }
@@ -352,6 +357,32 @@ mod tests {
         let args = fs::read_to_string(args_log).expect("args");
         assert!(args.contains("export"));
         assert!(args.contains("--force"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_export_full_repeatedly_executes_fresh_script_without_etxtbsy() {
+        for _ in 0..32 {
+            let dir = tempdir().expect("tempdir");
+            let script = dir.path().join("ibcmd");
+            let args_log = dir.path().join("args.log");
+            write_script(
+                &script,
+                &format!("printf '%s\\n' \"$@\" > \"{}\"\nexit 0", args_log.display()),
+            );
+            let runner = ProcessExecutor;
+            let conn = IbcmdConnection::from_v8_connection(&V8Connection::from_connection_string(
+                "File=/ib",
+            ))
+            .expect("connection");
+            let dsl = IbcmdDsl::new(script, conn, &runner as &dyn ProcessRunner);
+
+            dsl.config_export_full(dir.path(), None).expect("export");
+
+            let args = fs::read_to_string(args_log).expect("args");
+            assert!(args.contains("export"));
+            assert!(args.contains("--force"));
+        }
     }
 
     #[cfg(unix)]

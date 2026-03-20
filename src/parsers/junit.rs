@@ -248,22 +248,14 @@ fn non_empty(value: String) -> Option<String> {
 mod tests {
     use super::{parse, JunitError};
 
+    const JUNIT_REPORT_FIXTURE: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/parsers/junit_report.xml"
+    ));
+
     #[test]
-    fn parses_nested_suites_and_multiline_failures() {
-        let xml = r#"
-<testsuites>
-  <testsuite name="root" time="1.0">
-    <testsuite name="nested" time="0.2">
-      <testcase name="ok" classname="A" time="0.1" />
-      <testcase name="bad" classname="B" time="0.1">
-        <failure message="boom"><![CDATA[line1
-line2]]></failure>
-      </testcase>
-    </testsuite>
-  </testsuite>
-</testsuites>
-"#;
-        let report = parse(std::io::Cursor::new(xml)).expect("report");
+    fn parses_nested_suites_and_multiline_failures_from_fixture() {
+        let report = parse(std::io::Cursor::new(JUNIT_REPORT_FIXTURE)).expect("report");
         assert_eq!(report.summary.total, 2);
         assert_eq!(report.summary.failed, 1);
         assert_eq!(report.suites.len(), 2);
@@ -279,7 +271,7 @@ line2]]></failure>
             .stack_trace
             .as_deref()
             .expect("stack")
-            .contains("line2"));
+            .contains("stack trace line 2"));
     }
 
     #[test]

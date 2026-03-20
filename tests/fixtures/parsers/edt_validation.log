@@ -1,0 +1,5 @@
+severity	path	line	column	check	message
+ERROR	CommonModules.Test	12	3	UnusedVariables	unused variable
+WARNING	Catalogs.Items				part1	part2
+INFO	Catalogs.Items	message
+Ошибка	Справочники.Номенклатура	1	2	Rule	плохой вызов

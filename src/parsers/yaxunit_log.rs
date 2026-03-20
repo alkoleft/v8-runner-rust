@@ -61,6 +61,19 @@ pub fn parse_reader<R: BufRead>(reader: R) -> Vec<String> {
 mod tests {
     use super::parse_reader;
 
+    const YAXUNIT_LOG_FIXTURE: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/parsers/yaxunit.log"
+    ));
+
+    #[test]
+    fn extracts_multiline_error_block_from_fixture() {
+        let errors = parse_reader(std::io::Cursor::new(YAXUNIT_LOG_FIXTURE));
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("failed block"));
+        assert!(errors[0].contains("more details"));
+    }
+
     #[test]
     fn extracts_multiple_multiline_error_blocks() {
         let log = "\

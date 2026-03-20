@@ -143,11 +143,16 @@ mod tests {
     use crate::domain::issue::{Issue, IssueSeverity};
     use tempfile::tempdir;
 
-    #[test]
-    fn parses_module_issue_with_context_line() {
-        let issues = parse("{CommonModules.TestModule(12,3)}: Ошибка компиляции\n{1} : context");
+    const DESIGNER_VALIDATION_FIXTURE: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/parsers/designer_validation.log"
+    ));
 
-        assert_eq!(issues.len(), 1);
+    #[test]
+    fn parses_realistic_fixture_sample() {
+        let issues = parse(DESIGNER_VALIDATION_FIXTURE);
+
+        assert_eq!(issues.len(), 4);
         match &issues[0] {
             Issue::Module(issue) => {
                 assert_eq!(issue.path, "CommonModules.TestModule");
@@ -156,6 +161,27 @@ mod tests {
                 assert_eq!(issue.severity, IssueSeverity::Error);
             }
             _ => panic!("expected module issue"),
+        }
+
+        match &issues[1] {
+            Issue::Object(issue) => assert_eq!(issue.object, "Catalogs.Items"),
+            _ => panic!("expected object issue"),
+        }
+
+        match &issues[2] {
+            Issue::Object(issue) => {
+                assert_eq!(issue.object, "Справочники.Номенклатура");
+                assert_eq!(issue.severity, IssueSeverity::Warning);
+            }
+            _ => panic!("expected warning object issue"),
+        }
+
+        match &issues[3] {
+            Issue::Object(issue) => {
+                assert_eq!(issue.object, "ОбщаяФорма.НастройкиРегистрации.Справка");
+                assert_eq!(issue.severity, IssueSeverity::Error);
+            }
+            _ => panic!("expected unresolvable reference issue"),
         }
     }
 

@@ -1,0 +1,11 @@
+<testsuites>
+  <testsuite name="root" time="1.0">
+    <testsuite name="nested" time="0.2">
+      <testcase name="ok" classname="Sample" time="0.1" />
+      <testcase name="bad" classname="Sample" time="0.2">
+        <failure message="boom"><![CDATA[stack trace line 1
+stack trace line 2]]></failure>
+      </testcase>
+    </testsuite>
+  </testsuite>
+</testsuites>

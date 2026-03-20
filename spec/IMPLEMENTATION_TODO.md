@@ -107,7 +107,7 @@
 - [x] Добавить unit-тесты на YaXUnit log parser
 - [x] Добавить unit-тесты на designer validation parser
 - [x] Добавить integration tests для CLI команд
-- [ ] Подготовить fixture-наборы логов и XML
+- [x] 2026-03-20: Подготовить fixture-наборы логов и XML
 - [x] Обновить `README.md`
 
 ## Волна 2: EDT

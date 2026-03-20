@@ -119,6 +119,8 @@
   - Добавлены unit/integration tests на semaphore telemetry outcomes, queued cancel/timeout queue-depth updates, startup-failure-vs-restart semantics и наличие telemetry events в live HTTP MCP action log.
 - [x] 2026-03-20: Оформить migration note для расхождения `dump_config(mode=null)` с текущим Kotlin code path.
   - Расхождение задокументировано в `README.md`: `dump_config(mode=null|blank)` в MCP трактуется как `INCREMENTAL`.
+- [x] 2026-03-20: Зафиксировать, что этот staged MCP plan был полностью закрыт к началу следующего task workflow.
+  - Следующая работа продолжена из общего backlog в `spec/IMPLEMENTATION_TODO.md`, без переоткрытия закрытых Stage 1-5 задач.
 - Сохранять этот документ как основной staged plan для MCP-работ.
 
 ## Public Changes

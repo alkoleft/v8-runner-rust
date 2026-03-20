@@ -161,11 +161,16 @@ mod tests {
     use crate::domain::issue::{Issue, IssueSeverity};
     use tempfile::tempdir;
 
-    #[test]
-    fn parses_tsv_happy_path() {
-        let issues = parse("ERROR\tCommonModules.Test\t12\t3\tUnusedVariables\tunused variable");
+    const EDT_VALIDATION_FIXTURE: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/parsers/edt_validation.log"
+    ));
 
-        assert_eq!(issues.len(), 1);
+    #[test]
+    fn parses_realistic_fixture_sample() {
+        let issues = parse(EDT_VALIDATION_FIXTURE);
+
+        assert_eq!(issues.len(), 4);
         match &issues[0] {
             Issue::Edt(issue) => {
                 assert_eq!(issue.path, "CommonModules.Test");
@@ -175,6 +180,22 @@ mod tests {
                 assert_eq!(issue.severity, IssueSeverity::Error);
             }
             _ => panic!("expected edt issue"),
+        }
+
+        match &issues[1] {
+            Issue::Edt(issue) => {
+                assert_eq!(issue.message, "part1\tpart2");
+                assert_eq!(issue.severity, IssueSeverity::Warning);
+            }
+            _ => panic!("expected warning edt issue"),
+        }
+
+        match &issues[3] {
+            Issue::Edt(issue) => {
+                assert_eq!(issue.path, "Справочники.Номенклатура");
+                assert_eq!(issue.severity, IssueSeverity::Error);
+            }
+            _ => panic!("expected cyrillic edt issue"),
         }
     }
 

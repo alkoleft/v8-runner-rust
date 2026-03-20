@@ -6,6 +6,9 @@ use std::time::Duration;
 use thiserror::Error;
 use tracing::{debug, info, warn};
 
+const EXECUTABLE_BUSY_MAX_RETRIES: usize = 5;
+const EXECUTABLE_BUSY_RETRY_DELAY: Duration = Duration::from_millis(10);
+
 /// Request for launching an external utility.
 #[derive(Debug, Clone)]
 pub struct ProcessRequest {
@@ -110,19 +113,7 @@ impl ProcessRunner for ProcessExecutor {
     fn spawn(&self, request: &ProcessRequest) -> Result<SpawnResult, ProcessError> {
         let rendered_command = render_command(request);
         info!(command = rendered_command.as_str(), "spawning process");
-        let mut cmd = Command::new(&request.program);
-        cmd.args(&request.args);
-        cmd.stdin(Stdio::null());
-        cmd.stdout(Stdio::null());
-        cmd.stderr(Stdio::null());
-        if let Some(workdir) = &request.workdir {
-            cmd.current_dir(workdir);
-        }
-
-        let child = cmd.spawn().map_err(|source| ProcessError::SpawnFailed {
-            cmd: rendered_command.clone(),
-            source,
-        })?;
+        let child = spawn_command(request, ProcessIoMode::Detached, &rendered_command)?;
         let pid = child.id();
         let mut child = child;
 
@@ -162,37 +153,13 @@ impl ProcessExecutor {
         request: &ProcessRequest,
         timeout: Option<Duration>,
     ) -> Result<ProcessResult, ProcessError> {
-        let mut cmd = Command::new(&request.program);
-        cmd.args(&request.args);
-        if let Some(workdir) = &request.workdir {
-            cmd.current_dir(workdir);
-        }
-        cmd.stdin(Stdio::null());
-        cmd.stdout(Stdio::piped());
-        cmd.stderr(Stdio::piped());
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            unsafe {
-                cmd.pre_exec(|| {
-                    if libc::setpgid(0, 0) != 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    Ok(())
-                });
-            }
-        }
-
         let rendered_command = render_command(request);
         info!(
             command = rendered_command.as_str(),
             timeout_ms = timeout.map(|value| value.as_millis() as u64),
             "running process"
         );
-        let child = cmd.spawn().map_err(|source| ProcessError::SpawnFailed {
-            cmd: rendered_command.clone(),
-            source,
-        })?;
+        let child = spawn_command(request, ProcessIoMode::Captured, &rendered_command)?;
         let output = wait_for_output(child, &rendered_command, timeout)?;
         debug!(
             command = rendered_command.as_str(),
@@ -223,6 +190,89 @@ impl ProcessExecutor {
             stdout_log_path: request.stdout_log_path.clone(),
             stderr_log_path: request.stderr_log_path.clone(),
         })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ProcessIoMode {
+    Detached,
+    Captured,
+}
+
+fn spawn_command(
+    request: &ProcessRequest,
+    io_mode: ProcessIoMode,
+    rendered_command: &str,
+) -> Result<std::process::Child, ProcessError> {
+    for attempt in 0..=EXECUTABLE_BUSY_MAX_RETRIES {
+        let mut cmd = build_command(request, io_mode);
+        match cmd.spawn() {
+            Ok(child) => return Ok(child),
+            Err(source) if is_executable_busy(&source) && attempt < EXECUTABLE_BUSY_MAX_RETRIES => {
+                warn!(
+                    command = rendered_command,
+                    attempt = attempt + 1,
+                    max_retries = EXECUTABLE_BUSY_MAX_RETRIES,
+                    delay_ms = EXECUTABLE_BUSY_RETRY_DELAY.as_millis() as u64,
+                    "spawn hit executable-busy race, retrying"
+                );
+                std::thread::sleep(EXECUTABLE_BUSY_RETRY_DELAY);
+            }
+            Err(source) => {
+                return Err(ProcessError::SpawnFailed {
+                    cmd: rendered_command.to_owned(),
+                    source,
+                });
+            }
+        }
+    }
+
+    unreachable!("spawn loop must return on success or final error");
+}
+
+fn build_command(request: &ProcessRequest, io_mode: ProcessIoMode) -> Command {
+    let mut cmd = Command::new(&request.program);
+    cmd.args(&request.args);
+    if let Some(workdir) = &request.workdir {
+        cmd.current_dir(workdir);
+    }
+    cmd.stdin(Stdio::null());
+    match io_mode {
+        ProcessIoMode::Detached => {
+            cmd.stdout(Stdio::null());
+            cmd.stderr(Stdio::null());
+        }
+        ProcessIoMode::Captured => {
+            cmd.stdout(Stdio::piped());
+            cmd.stderr(Stdio::piped());
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::CommandExt;
+                unsafe {
+                    cmd.pre_exec(|| {
+                        if libc::setpgid(0, 0) != 0 {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                        Ok(())
+                    });
+                }
+            }
+        }
+    }
+    cmd
+}
+
+fn is_executable_busy(error: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        matches!(error.raw_os_error(), Some(libc::ETXTBSY))
+            || error.kind() == std::io::ErrorKind::ExecutableFileBusy
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = error;
+        false
     }
 }
 

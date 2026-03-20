@@ -9,6 +9,15 @@ use insta::assert_debug_snapshot;
 use serde_json::Value;
 use tempfile::tempdir;
 
+const JUNIT_SMOKE_REPORT_FIXTURE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/parsers/junit_smoke_report.xml"
+));
+const YAXUNIT_LOG_FIXTURE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/parsers/yaxunit.log"
+));
+
 fn make_executable(path: &Path) {
     let mut perms = fs::metadata(path).expect("metadata").permissions();
     perms.set_mode(0o755);
@@ -146,10 +155,9 @@ fn scrub_snapshot(value: &mut Value) {
 
 #[test]
 fn test_all_full_json_runs_build_first_and_returns_report() {
-    let report = r#"<testsuites><testsuite name="suite"><testcase name="ok" classname="Sample" time="0.1"/></testsuite></testsuites>"#;
     let (_dir, config_path, build_calls, test_calls, _captured_config) = setup_project(
         "work path",
-        report,
+        JUNIT_SMOKE_REPORT_FIXTURE,
         "12:00:00.000 [INF] ok",
         0,
         false,
@@ -191,10 +199,8 @@ fn test_all_full_json_runs_build_first_and_returns_report() {
 
 #[test]
 fn test_module_build_failure_prevents_enterprise_launch() {
-    let report =
-        r#"<testsuites><testsuite name="suite"><testcase name="ok"/></testsuite></testsuites>"#;
     let (_dir, config_path, _build_calls, test_calls, _captured_config) =
-        setup_project("work", report, "", 0, true, 5, None);
+        setup_project("work", JUNIT_SMOKE_REPORT_FIXTURE, "", 0, true, 5, None);
 
     let output = std::process::Command::cargo_bin("v8-test-runner")
         .expect("binary")
@@ -232,15 +238,8 @@ stack trace line 2</failure>
   </testsuite>
 </testsuites>
 "#;
-    let (_dir, config_path, _build_calls, _test_calls, captured_config) = setup_project(
-        "work",
-        report,
-        "12:00:01.000 [ERR] failed block\nmore details",
-        0,
-        false,
-        5,
-        None,
-    );
+    let (_dir, config_path, _build_calls, _test_calls, captured_config) =
+        setup_project("work", report, YAXUNIT_LOG_FIXTURE, 0, false, 5, None);
 
     let compact = std::process::Command::cargo_bin("v8-test-runner")
         .expect("binary")
@@ -315,10 +314,8 @@ stack trace line 2</failure>
 
 #[test]
 fn test_timeout_retains_artifacts() {
-    let report =
-        r#"<testsuites><testsuite name="suite"><testcase name="ok"/></testsuite></testsuites>"#;
     let (_dir, config_path, _build_calls, _test_calls, _captured_config) =
-        setup_project("work", report, "", 0, false, 1, Some(2));
+        setup_project("work", JUNIT_SMOKE_REPORT_FIXTURE, "", 0, false, 1, Some(2));
 
     let output = std::process::Command::cargo_bin("v8-test-runner")
         .expect("binary")
