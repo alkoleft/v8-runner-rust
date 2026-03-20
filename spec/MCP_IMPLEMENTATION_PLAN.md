@@ -56,7 +56,10 @@
 
 ## Stage 3. Shared EDT Session For MCP
 
-- Реализовать `InteractiveProcessExecutor` для `1cedtcli`.
+- [x] 2026-03-20: Реализовать `InteractiveProcessExecutor` для `1cedtcli`.
+  - Добавлен `src/platform/interactive.rs` с prompt-delimited executor, который стартует отдельный process group, ждёт `1C:EDT>` на `stdout` или `stderr`, посылает команды в `stdin` и читает ответ до следующего prompt.
+  - Зафиксирован lifecycle contract: startup/command timeout убивает process group и poison-ит executor, mid-command child exit возвращается сразу как `ProcessExited`, graceful shutdown закрывает `stdin` и эскалирует в forced kill при таймауте.
+  - Добавлены unit tests на startup prompt, stderr prompt, split prompt, prompt с завершающим newline, repeated command reuse, timeout/poison semantics, prompt-then-exit detection, stdio disconnect cleanup, shutdown escalation и process-group kill для дочерних процессов.
 - Добавить `EdtSessionManager` как single shared actor для MCP mode:
   - single-flight startup
   - FIFO queue

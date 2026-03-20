@@ -96,7 +96,8 @@ tools:
 
 - `mcp.http.*` is still reserved for the upcoming HTTP transport, while `mcp.execution.*` already drives stdio admission control and shutdown grace.
 - `tools.edt_cli.startup_timeout_ms` and `tools.edt_cli.command_timeout_ms` default to `300000` ms and also accept legacy `edt-cli` / kebab-case aliases for compatibility.
-- In Stage 2, `tools.edt_cli.command_timeout_ms` is already wired into bounded MCP `check_syntax_edt` calls; `startup_timeout_ms` remains preparatory for the future shared EDT actor.
+- `src/platform/interactive.rs` now contains the low-level `InteractiveProcessExecutor` used for the upcoming shared EDT session work: it waits for the `1C:EDT>` prompt, executes prompt-delimited commands, and supports graceful shutdown plus forced kill.
+- Runtime wiring is still staged: Stage 2 continues to use one-shot EDT subprocesses for MCP `check_syntax_edt`, and the shared-session `EdtSessionManager` is still pending.
 
 ## MCP Stdio
 

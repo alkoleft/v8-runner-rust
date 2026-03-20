@@ -23,6 +23,7 @@ The platform layer is intentionally split so responsibilities do not bleed into 
 - `platform::utilities` is the current facade used by use cases. It owns the stateful `Locator` and exposes the standard execution path.
 - `platform::designer` is the low-level batch DSL for `1cv8 DESIGNER`, returning `PlatformCommandResult` so `/Out` logs stay separate from runner-captured stdio.
 - `platform::ibcmd` is the low-level DSL for `ibcmd`, returning `PlatformCommandResult` with stdout/stderr diagnostics (no `/Out` log).
+- `platform::interactive` now contains the low-level `InteractiveProcessExecutor` for `1cedtcli`: it starts one child in its own process group, waits for the `1C:EDT>` prompt on stdout or stderr, executes prompt-delimited commands, kills/poisons the session on timeout, and supports graceful shutdown with forced-kill escalation.
 
 This boundary is designed so Wave 2 can add an EDT-specific interactive runner without replacing the locator API or the standard execution path.
 
@@ -44,7 +45,7 @@ The typed config model now splits MCP knobs into already-wired stdio guardrails 
 
 - `mcp.http` still defines listener/session defaults reserved for the future HTTP transport (`bind_address`, `path`, `stateful_sessions`, `max_sessions`, `idle_ttl_secs`).
 - `mcp.execution` already defines active stdio guardrails (`max_concurrent_calls`, `shutdown_grace_period_secs`).
-- `tools.edt_cli` now also carries `startup_timeout_ms` and `command_timeout_ms`; Stage 2 already uses `command_timeout_ms` as the bounded MCP deadline for `check_syntax_edt`, while `startup_timeout_ms` remains preparatory for the future interactive EDT executor.
+- `tools.edt_cli` now also carries `startup_timeout_ms` and `command_timeout_ms`; Stage 2 already uses `command_timeout_ms` as the bounded MCP deadline for `check_syntax_edt`, while the new interactive executor module establishes the startup/command timeout contract that the future shared EDT actor will reuse.
 
 This keeps the config surface stable while letting Stage 2 stdio semantics ship without waiting for the later shared EDT actor.
 
@@ -61,6 +62,10 @@ The MCP adapter no longer needs to talk to `cli::execute` or to reuse domain ser
 - The stdio adapter now enforces an absolute deadline for bounded Stage 2 EDT syntax calls: queue wait and execution both consume the same `tools.edt_cli.command_timeout_ms` budget.
 - Client cancellation returns early for queued and running MCP requests, but already-started blocking work is detached rather than killed; the detached task retains the semaphore permit until it completes, so a hung one-shot subprocess can keep capacity occupied until shutdown.
 - MCP normalization is finalized in the service layer: dump-mode defaulting, launch alias mapping, `allExtensions` tri-state inference, and MCP-only pre-validation for syntax flag dependencies all live there instead of leaking into transport-neutral use cases.
+
+Important staging note:
+
+- The new interactive EDT executor is intentionally not wired into `EdtDsl`, `PlatformUtilities`, or the MCP server yet. Current runtime behavior for EDT syntax/build remains on the existing one-shot path until `EdtSessionManager` lands in the next Stage 3 tasks.
 
 ## Backend Dispatch
 

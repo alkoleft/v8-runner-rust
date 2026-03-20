@@ -114,8 +114,8 @@
 
 - [ ] Расширить config-модель для `format = EDT`
 - [ ] Ввести отдельные state storage для `edt` и `designer`
-- [ ] Реализовать `InteractiveProcessExecutor`
-- [ ] Реализовать ожидание prompt `1C:EDT>`
+- [x] Реализовать `InteractiveProcessExecutor`
+- [x] Реализовать ожидание prompt `1C:EDT>`
 - [ ] Реализовать мониторинг живости EDT-процесса и автоперезапуск при сбое
 - [ ] Реализовать single-flight инициализацию EDT-сессии
 - [ ] Реализовать `EdtDsl`
