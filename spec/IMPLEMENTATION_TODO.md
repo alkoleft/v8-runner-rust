@@ -156,4 +156,5 @@
 - [x] Добавить `v8-test-runner mcp serve http`
 - [x] Поднять `axum` + `rmcp` streamable HTTP transport с stateful/stateless session semantics
 - [x] Переиспользовать shared EDT actor и общий execution semaphore для HTTP MCP sessions
+- [x] Добавить MCP runtime telemetry: semaphore wait time, EDT queue depth, restart count и shutdown/restart drain stats
 - [x] Расширить MCP regression/stress suite: `tools/list` contract, все 8 stdio tools, HTTP admission/tool-call regressions и `dump_config(PARTIAL)` matrix для `DESIGNER`/`IBCMD`

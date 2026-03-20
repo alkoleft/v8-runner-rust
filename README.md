@@ -147,3 +147,15 @@ Current limits:
 
 - The shared interactive EDT actor is currently wired only for MCP `check_syntax_edt`; broader EDT export/build rollout is still staged separately.
 - Transport-level cancellation is still early-return only: if the underlying blocking work hangs, it can keep capacity occupied until it exits or the server shuts down.
+
+## MCP Telemetry
+
+MCP runtime telemetry is now emitted into the existing MCP action log (`workPath/logs/mcp/actions.log` for MCP transports) as structured tracing events:
+
+- `mcp_execution_semaphore_wait` records global MCP semaphore admission wait with `transport`, `tool`, `outcome=acquired|cancelled|timeout|internal_error`, `bounded`, `timeout_ms`, and `wait_ms`.
+- `mcp_edt_queue_depth` records shared EDT actor queue mutations with `action=enqueue|dequeue|remove_queued|drain`, `queue_depth`, and optional `reason=queued_cancelled|queued_timeout|restart|shutdown`.
+- `mcp_edt_session_restart` increments only when a live EDT session is actually killed and restarted after a fatal session fault.
+- `mcp_edt_startup_failure` is tracked separately so startup failures do not inflate restart metrics.
+- `mcp_edt_shutdown_drain` records restart/shutdown drain totals and `drained_jobs`.
+
+This stage intentionally keeps telemetry on top of `tracing` rather than adding a separate metrics backend, so MCP stdout semantics remain unchanged.

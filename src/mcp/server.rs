@@ -5,12 +5,13 @@ use std::time::Duration;
 
 use axum::body::{to_bytes, Body};
 use axum::http::{
-    header::{CONTENT_TYPE, HeaderValue},
+    header::{HeaderValue, CONTENT_TYPE},
     Method, Request, Response, StatusCode,
 };
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{CallToolResult, ServerCapabilities, ServerInfo},
+    tool, tool_handler, tool_router,
     transport::{
         streamable_http_server::{
             session::{
@@ -21,7 +22,7 @@ use rmcp::{
         },
         StreamableHttpService,
     },
-    tool, tool_handler, tool_router, ErrorData, ServerHandler, ServiceExt,
+    ErrorData, ServerHandler, ServiceExt,
 };
 use serde_json::json;
 use thiserror::Error;
@@ -44,6 +45,7 @@ use crate::mcp::request::{
 };
 use crate::mcp::service::McpService;
 use crate::mcp::service::{map_syntax_use_case_result, normalize_check_syntax_edt_request};
+use crate::mcp::telemetry::{McpTelemetry, SemaphoreWaitErrorKind, SemaphoreWaitOutcome};
 use crate::mcp::tool_result::McpToolResult;
 
 type SharedMcpUseCasePort = Arc<dyn McpUseCasePort + Send + Sync>;
@@ -92,6 +94,19 @@ impl ExecutionPolicy {
 }
 
 impl McpTool {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::RunAllTests => "run_all_tests",
+            Self::RunModuleTests => "run_module_tests",
+            Self::BuildProject => "build_project",
+            Self::DumpConfig => "dump_config",
+            Self::LaunchApp => "launch_app",
+            Self::CheckSyntaxEdt => "check_syntax_edt",
+            Self::CheckSyntaxDesignerConfig => "check_syntax_designer_config",
+            Self::CheckSyntaxDesignerModules => "check_syntax_designer_modules",
+        }
+    }
+
     fn execution_policy(self, config: &AppConfig) -> ExecutionPolicy {
         match self {
             Self::CheckSyntaxEdt => ExecutionPolicy::bounded(Duration::from_millis(
@@ -177,14 +192,16 @@ pub fn serve_http(config: AppConfig) -> Result<(), McpServerError> {
                 address: config.mcp.http.bind_address.clone(),
                 source,
             })?;
-        let router =
-            axum::Router::new().route(config.mcp.http.path.as_str(), axum::routing::any({
+        let router = axum::Router::new().route(
+            config.mcp.http.path.as_str(),
+            axum::routing::any({
                 let service = service.clone();
                 move |request| {
                     let service = service.clone();
                     async move { service.handle(request).await }
                 }
-            }));
+            }),
+        );
         let serve = axum::serve(listener, router).with_graceful_shutdown({
             let shutdown = shutdown.clone();
             async move {
@@ -209,6 +226,7 @@ pub struct McpToolServer {
     port: SharedMcpUseCasePort,
     edt_session: Arc<EdtSessionManager>,
     concurrency_limit: Arc<Semaphore>,
+    telemetry: Arc<McpTelemetry>,
     call_context: McpCallContext,
     tool_router: ToolRouter<Self>,
 }
@@ -216,12 +234,20 @@ pub struct McpToolServer {
 impl McpToolServer {
     /// Creates a stdio server using the production use-case port.
     pub fn stdio(config: Arc<AppConfig>) -> Result<Self, McpServerError> {
-        Self::with_port(config, Arc::new(DefaultMcpUseCasePort), McpCallContext::stdio())
+        Self::with_port(
+            config,
+            Arc::new(DefaultMcpUseCasePort),
+            McpCallContext::stdio(),
+        )
     }
 
     /// Creates an HTTP server using the production use-case port.
     pub fn http(config: Arc<AppConfig>) -> Result<Self, McpServerError> {
-        Self::with_port(config, Arc::new(DefaultMcpUseCasePort), McpCallContext::http())
+        Self::with_port(
+            config,
+            Arc::new(DefaultMcpUseCasePort),
+            McpCallContext::http(),
+        )
     }
 
     /// Creates a transport-aware server with an injected MCP use-case port.
@@ -230,12 +256,14 @@ impl McpToolServer {
         port: SharedMcpUseCasePort,
         call_context: McpCallContext,
     ) -> Result<Self, McpServerError> {
+        let telemetry = Arc::new(McpTelemetry::default());
         Ok(Self {
             edt_session: Arc::new(
-                EdtSessionManager::for_config(config.as_ref())
+                EdtSessionManager::for_config_with_telemetry(config.as_ref(), telemetry.edt())
                     .map_err(|error| McpServerError::Bootstrap(error.to_string()))?,
             ),
             concurrency_limit: Arc::new(Semaphore::new(max_concurrent_calls(config.as_ref()))),
+            telemetry,
             config,
             port,
             call_context,
@@ -265,7 +293,7 @@ impl McpToolServer {
         let timeout = policy.timeout;
         let deadline = timeout.map(|value| Instant::now() + value);
         let permit = self
-            .acquire_execution_slot(cancellation.clone(), deadline, timeout)
+            .acquire_execution_slot(tool, cancellation.clone(), deadline, timeout)
             .await?;
         let remaining_timeout = remaining_timeout(deadline);
         if cancellation.is_cancelled() {
@@ -309,10 +337,13 @@ impl McpToolServer {
 
     async fn acquire_execution_slot(
         &self,
+        tool: McpTool,
         cancellation: CancellationToken,
         deadline: Option<Instant>,
         timeout: Option<Duration>,
     ) -> Result<OwnedSemaphorePermit, ErrorData> {
+        let wait_started = Instant::now();
+        let bounded = timeout.is_some();
         let acquire = self.concurrency_limit.clone().acquire_owned();
         tokio::pin!(acquire);
 
@@ -321,23 +352,92 @@ impl McpToolServer {
                 tokio::select! {
                     biased;
                     _ = cancellation.cancelled() => {
+                        self.telemetry.execution().record_semaphore_wait(
+                            self.call_context.transport(),
+                            tool.as_str(),
+                            SemaphoreWaitOutcome::Cancelled,
+                            bounded,
+                            timeout,
+                            wait_started.elapsed(),
+                            None,
+                        );
                         Err(execution_error(ErrorReason::Cancelled, ExecutionStage::Queued, timeout))
                     }
                     _ = tokio::time::sleep_until(deadline) => {
+                        self.telemetry.execution().record_semaphore_wait(
+                            self.call_context.transport(),
+                            tool.as_str(),
+                            SemaphoreWaitOutcome::Timeout,
+                            bounded,
+                            timeout,
+                            wait_started.elapsed(),
+                            None,
+                        );
                         Err(execution_error(ErrorReason::Timeout, ExecutionStage::Queued, timeout))
                     }
-                    permit = &mut acquire => permit
-                        .map_err(|error| ErrorData::internal_error(error.to_string(), None)),
+                    permit = &mut acquire => permit.map_err(|error| {
+                        self.telemetry.execution().record_semaphore_wait(
+                            self.call_context.transport(),
+                            tool.as_str(),
+                            SemaphoreWaitOutcome::InternalError,
+                            bounded,
+                            timeout,
+                            wait_started.elapsed(),
+                            Some(SemaphoreWaitErrorKind::SemaphoreClosed),
+                        );
+                        ErrorData::internal_error(error.to_string(), None)
+                    }).map(|permit| {
+                        self.telemetry.execution().record_semaphore_wait(
+                            self.call_context.transport(),
+                            tool.as_str(),
+                            SemaphoreWaitOutcome::Acquired,
+                            bounded,
+                            timeout,
+                            wait_started.elapsed(),
+                            None,
+                        );
+                        permit
+                    }),
                 }
             }
             None => {
                 tokio::select! {
                     biased;
                     _ = cancellation.cancelled() => {
+                        self.telemetry.execution().record_semaphore_wait(
+                            self.call_context.transport(),
+                            tool.as_str(),
+                            SemaphoreWaitOutcome::Cancelled,
+                            bounded,
+                            timeout,
+                            wait_started.elapsed(),
+                            None,
+                        );
                         Err(execution_error(ErrorReason::Cancelled, ExecutionStage::Queued, timeout))
                     }
-                    permit = &mut acquire => permit
-                        .map_err(|error| ErrorData::internal_error(error.to_string(), None)),
+                    permit = &mut acquire => permit.map_err(|error| {
+                        self.telemetry.execution().record_semaphore_wait(
+                            self.call_context.transport(),
+                            tool.as_str(),
+                            SemaphoreWaitOutcome::InternalError,
+                            bounded,
+                            timeout,
+                            wait_started.elapsed(),
+                            Some(SemaphoreWaitErrorKind::SemaphoreClosed),
+                        );
+                        ErrorData::internal_error(error.to_string(), None)
+                    }).map(|permit| {
+                        self.telemetry.execution().record_semaphore_wait(
+                            self.call_context.transport(),
+                            tool.as_str(),
+                            SemaphoreWaitOutcome::Acquired,
+                            bounded,
+                            timeout,
+                            wait_started.elapsed(),
+                            None,
+                        );
+                        permit
+                    }),
                 }
             }
         }
@@ -353,8 +453,13 @@ impl McpToolServer {
             .timeout;
         let deadline = timeout.map(|value| Instant::now() + value);
         let mut permit = Some(
-            self.acquire_execution_slot(cancellation.clone(), deadline, timeout)
-                .await?,
+            self.acquire_execution_slot(
+                McpTool::CheckSyntaxEdt,
+                cancellation.clone(),
+                deadline,
+                timeout,
+            )
+            .await?,
         );
         if cancellation.is_cancelled() {
             return Err(execution_error(
@@ -468,7 +573,10 @@ impl HttpSessionAdmission {
 
     async fn reserve_initialize(&self) -> Result<HttpSessionReservation, HttpOverloadError> {
         let live_sessions = self.session_manager.sessions.read().await;
-        let mut state = self.state.lock().expect("http session admission mutex poisoned");
+        let mut state = self
+            .state
+            .lock()
+            .expect("http session admission mutex poisoned");
         state
             .active_sessions
             .retain(|session_id| live_sessions.contains_key(session_id));
@@ -486,18 +594,27 @@ impl HttpSessionAdmission {
     }
 
     fn confirm(&self, session_id: SessionId) {
-        let mut state = self.state.lock().expect("http session admission mutex poisoned");
+        let mut state = self
+            .state
+            .lock()
+            .expect("http session admission mutex poisoned");
         state.reserved = state.reserved.saturating_sub(1);
         state.active_sessions.insert(session_id);
     }
 
     fn release(&self) {
-        let mut state = self.state.lock().expect("http session admission mutex poisoned");
+        let mut state = self
+            .state
+            .lock()
+            .expect("http session admission mutex poisoned");
         state.reserved = state.reserved.saturating_sub(1);
     }
 
     fn remove(&self, session_id: &SessionId) {
-        let mut state = self.state.lock().expect("http session admission mutex poisoned");
+        let mut state = self
+            .state
+            .lock()
+            .expect("http session admission mutex poisoned");
         state.active_sessions.remove(session_id);
     }
 }
@@ -539,11 +656,7 @@ struct HttpMcpService {
 }
 
 impl HttpMcpService {
-    fn new(
-        server: McpToolServer,
-        config: Arc<AppConfig>,
-        shutdown: CancellationToken,
-    ) -> Self {
+    fn new(server: McpToolServer, config: Arc<AppConfig>, shutdown: CancellationToken) -> Self {
         let session_manager = Arc::new(LocalSessionManager {
             session_config: SessionConfig {
                 keep_alive: config
@@ -841,13 +954,18 @@ async fn extract_http_rpc_method(
     request: Request<Body>,
 ) -> Result<(Request<Body>, Option<String>), Response<Body>> {
     let (parts, body) = request.into_parts();
-    let body = to_bytes(body, HTTP_BODY_LIMIT_BYTES).await.map_err(|error| {
-        Response::builder()
-            .status(StatusCode::PAYLOAD_TOO_LARGE)
-            .header(CONTENT_TYPE, HeaderValue::from_static("text/plain; charset=utf-8"))
-            .body(Body::from(format!("Payload Too Large: {error}")))
-            .expect("valid overload response")
-    })?;
+    let body = to_bytes(body, HTTP_BODY_LIMIT_BYTES)
+        .await
+        .map_err(|error| {
+            Response::builder()
+                .status(StatusCode::PAYLOAD_TOO_LARGE)
+                .header(
+                    CONTENT_TYPE,
+                    HeaderValue::from_static("text/plain; charset=utf-8"),
+                )
+                .body(Body::from(format!("Payload Too Large: {error}")))
+                .expect("valid overload response")
+        })?;
     let method = serde_json::from_slice::<serde_json::Value>(&body)
         .ok()
         .and_then(|value| {
@@ -862,7 +980,10 @@ async fn extract_http_rpc_method(
 fn overload_response() -> Response<Body> {
     Response::builder()
         .status(StatusCode::SERVICE_UNAVAILABLE)
-        .header(CONTENT_TYPE, HeaderValue::from_static("text/plain; charset=utf-8"))
+        .header(
+            CONTENT_TYPE,
+            HeaderValue::from_static("text/plain; charset=utf-8"),
+        )
         .body(Body::from(
             "Service Unavailable: MCP session capacity exhausted",
         ))
@@ -872,7 +993,10 @@ fn overload_response() -> Response<Body> {
 fn missing_initialize_response() -> Response<Body> {
     Response::builder()
         .status(StatusCode::BAD_REQUEST)
-        .header(CONTENT_TYPE, HeaderValue::from_static("text/plain; charset=utf-8"))
+        .header(
+            CONTENT_TYPE,
+            HeaderValue::from_static("text/plain; charset=utf-8"),
+        )
         .body(Body::from(
             "Bad Request: initialize request is required before session creation",
         ))
@@ -890,7 +1014,9 @@ fn valid_streamable_post_headers(headers: &axum::http::HeaderMap) -> bool {
     let accepts_both = headers
         .get(axum::http::header::ACCEPT)
         .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.contains("application/json") && value.contains("text/event-stream"));
+        .is_some_and(|value| {
+            value.contains("application/json") && value.contains("text/event-stream")
+        });
     let content_type_is_json = headers
         .get(axum::http::header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
@@ -908,8 +1034,9 @@ async fn wait_for_deadline(deadline: Option<Instant>) {
 async fn wait_for_shutdown_signal() {
     #[cfg(unix)]
     {
-        let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("install SIGTERM handler");
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("install SIGTERM handler");
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {}
             _ = terminate.recv() => {}
@@ -970,20 +1097,17 @@ mod tests {
     };
     use crate::mcp::context::McpCallContext;
     use crate::mcp::port::DefaultMcpUseCasePort;
-    use rmcp::transport::streamable_http_server::session::{
-        local::LocalSessionManager, SessionId,
-    };
+    use rmcp::transport::streamable_http_server::session::{local::LocalSessionManager, SessionId};
     use tokio_util::sync::CancellationToken;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn execute_tool_respects_configured_concurrency_limit() {
-        let server =
-            McpToolServer::with_port(
-                Arc::new(test_config(1, 9)),
-                Arc::new(DefaultMcpUseCasePort),
-                McpCallContext::stdio(),
-            )
-            .expect("server");
+        let server = McpToolServer::with_port(
+            Arc::new(test_config(1, 9)),
+            Arc::new(DefaultMcpUseCasePort),
+            McpCallContext::stdio(),
+        )
+        .expect("server");
         let active = Arc::new(AtomicUsize::new(0));
         let max_active = Arc::new(AtomicUsize::new(0));
 
@@ -1021,13 +1145,13 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn queued_cancellation_returns_transport_error_without_running_call() {
-        let server =
-            McpToolServer::with_port(
-                Arc::new(test_config(1, 9)),
-                Arc::new(DefaultMcpUseCasePort),
-                McpCallContext::stdio(),
-            )
-            .expect("server");
+        let server = McpToolServer::with_port(
+            Arc::new(test_config(1, 9)),
+            Arc::new(DefaultMcpUseCasePort),
+            McpCallContext::stdio(),
+        )
+        .expect("server");
+        let execution_telemetry = server.telemetry.execution();
         let started = Arc::new(AtomicUsize::new(0));
 
         let first = tokio::spawn(run_probe_call(
@@ -1068,6 +1192,7 @@ mod tests {
             execution_error(ErrorReason::Cancelled, ExecutionStage::Queued, None)
         );
         assert_eq!(started.load(Ordering::SeqCst), 0);
+        assert_eq!(execution_telemetry.snapshot().cancelled_total, 1);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1078,6 +1203,7 @@ mod tests {
             McpCallContext::stdio(),
         )
         .expect("server");
+        let execution_telemetry = server.telemetry.execution();
 
         let first = tokio::spawn(run_probe_call(
             server.clone(),
@@ -1114,6 +1240,7 @@ mod tests {
             )
         );
         assert_eq!(started.load(Ordering::SeqCst), 0);
+        assert_eq!(execution_telemetry.snapshot().timeout_total, 1);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1178,6 +1305,7 @@ mod tests {
             McpCallContext::stdio(),
         )
         .expect("server");
+        let execution_telemetry = server.telemetry.execution();
 
         let started = Instant::now();
         let result = server
@@ -1194,18 +1322,18 @@ mod tests {
 
         assert!(result.is_ok(), "standard tool should not time out");
         assert!(started.elapsed() >= Duration::from_millis(40));
+        assert_eq!(execution_telemetry.snapshot().acquired_total, 1);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn standard_running_cancellation_returns_early_and_retains_capacity_until_worker_finishes(
     ) {
-        let server =
-            McpToolServer::with_port(
-                Arc::new(test_config(1, 9)),
-                Arc::new(DefaultMcpUseCasePort),
-                McpCallContext::stdio(),
-            )
-            .expect("server");
+        let server = McpToolServer::with_port(
+            Arc::new(test_config(1, 9)),
+            Arc::new(DefaultMcpUseCasePort),
+            McpCallContext::stdio(),
+        )
+        .expect("server");
         let active = Arc::new(AtomicUsize::new(0));
         let max_active = Arc::new(AtomicUsize::new(0));
         let cancellation = CancellationToken::new();

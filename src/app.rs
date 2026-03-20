@@ -132,7 +132,10 @@ fn run_mcp_http(cli: &Cli) -> i32 {
     }
 }
 
-fn prepare_mcp_runtime(cli: &Cli, transport: &'static str) -> Result<crate::config::model::AppConfig, i32> {
+fn prepare_mcp_runtime(
+    cli: &Cli,
+    transport: &'static str,
+) -> Result<crate::config::model::AppConfig, i32> {
     let config = match load_config(cli.config.as_deref(), cli.workdir.as_deref()) {
         Ok(config) => config,
         Err(error) => {
@@ -159,7 +162,10 @@ fn prepare_mcp_runtime(cli: &Cli, transport: &'static str) -> Result<crate::conf
         match crate::support::temp::platform_logs_dir(&config.work_path)
             .and_then(|dir| crate::support::fs::clean_dir(&dir))
         {
-            Ok(()) => info!(transport, "platform logs directory cleaned for mcp transport"),
+            Ok(()) => info!(
+                transport,
+                "platform logs directory cleaned for mcp transport"
+            ),
             Err(error) => {
                 eprintln!("failed to clean platform logs: {error}");
                 return Err(crate::output::exit_codes::RUNTIME_ERROR);

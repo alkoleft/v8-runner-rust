@@ -10,6 +10,10 @@ use tokio::sync::{oneshot, Notify, OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::model::AppConfig;
+use crate::mcp::telemetry::{
+    EdtDrainTelemetryReason, EdtQueueDepthAction, EdtQueueDepthReason, EdtRestartReason,
+    EdtTelemetry,
+};
 use crate::platform::edt::{
     render_interactive_change_dir_command, render_interactive_probe_workdir_command,
 };
@@ -115,11 +119,19 @@ pub struct EdtSessionManager {
 impl EdtSessionManager {
     /// Creates the production manager using existing MCP concurrency/shutdown settings.
     pub fn for_config(config: &AppConfig) -> Result<Self, EdtSessionError> {
+        Self::for_config_with_telemetry(config, Arc::new(EdtTelemetry::default()))
+    }
+
+    pub(crate) fn for_config_with_telemetry(
+        config: &AppConfig,
+        telemetry: Arc<EdtTelemetry>,
+    ) -> Result<Self, EdtSessionError> {
         let queue_capacity = config.mcp.execution.max_concurrent_calls.max(1);
         let shutdown_timeout =
             Duration::from_secs(config.mcp.execution.shutdown_grace_period_secs.max(1));
-        Self::with_factory(
+        Self::with_factory_and_telemetry(
             Arc::new(DefaultSessionFactory::new(config.clone())),
+            telemetry,
             queue_capacity,
             shutdown_timeout,
         )
@@ -173,12 +185,19 @@ impl EdtSessionManager {
                 ));
             }
             queue.push_back(queued.clone());
+            let queue_depth = queue.len();
+            drop(queue);
+            self.inner.telemetry.record_queue_depth(
+                EdtQueueDepthAction::Enqueue,
+                queue_depth,
+                None,
+            );
         }
         self.inner.queue_ready.notify_one();
 
-        let remove_if_still_queued = |error: EdtSessionError| {
+        let remove_if_still_queued = |error: EdtSessionError, reason: EdtQueueDepthReason| {
             if state.release_queued() {
-                let _ = self.inner.remove_queued(&queued);
+                let _ = self.inner.remove_queued(&queued, reason);
                 return Some(ObservedEdtExecution::ready(Err(error)));
             }
             None
@@ -188,7 +207,15 @@ impl EdtSessionManager {
         };
         let remove_shutdown_if_queued = || {
             if state.release_queued() {
-                let _ = self.inner.remove_queued(&queued);
+                if matches!(
+                    self.inner
+                        .remove_queued(&queued, EdtQueueDepthReason::Shutdown),
+                    Ok(true)
+                ) {
+                    self.inner
+                        .telemetry
+                        .record_drain(EdtDrainTelemetryReason::Shutdown, 1);
+                }
                 return Some(ObservedEdtExecution::ready(Err(
                     queued_shutdown_error.clone()
                 )));
@@ -208,7 +235,10 @@ impl EdtSessionManager {
                     }));
                 }
                 _ = cancellation.cancelled() => {
-                    if let Some(execution) = remove_if_still_queued(EdtSessionError::QueuedCancelled) {
+                    if let Some(execution) = remove_if_still_queued(
+                        EdtSessionError::QueuedCancelled,
+                        EdtQueueDepthReason::QueuedCancelled,
+                    ) {
                         return execution;
                     }
                     if state.is_running() {
@@ -220,7 +250,10 @@ impl EdtSessionManager {
                     continue;
                 }
                 _ = tokio::time::sleep_until(deadline) => {
-                    if let Some(execution) = remove_if_still_queued(EdtSessionError::QueuedTimeout) {
+                    if let Some(execution) = remove_if_still_queued(
+                        EdtSessionError::QueuedTimeout,
+                        EdtQueueDepthReason::QueuedTimeout,
+                    ) {
                         return execution;
                     }
                     if state.is_running() {
@@ -255,10 +288,25 @@ impl EdtSessionManager {
         queue_capacity: usize,
         shutdown_timeout: Duration,
     ) -> Result<Self, EdtSessionError> {
+        Self::with_factory_and_telemetry(
+            factory,
+            Arc::new(EdtTelemetry::default()),
+            queue_capacity,
+            shutdown_timeout,
+        )
+    }
+
+    fn with_factory_and_telemetry(
+        factory: Arc<dyn SessionFactory>,
+        telemetry: Arc<EdtTelemetry>,
+        queue_capacity: usize,
+        shutdown_timeout: Duration,
+    ) -> Result<Self, EdtSessionError> {
         let inner = Arc::new(EdtSessionManagerInner {
             queue: Mutex::new(VecDeque::new()),
             queue_ready: Condvar::new(),
             admission: Arc::new(Semaphore::new(queue_capacity.max(1))),
+            telemetry,
             shutdown_token: CancellationToken::new(),
             shutdown_started: AtomicBool::new(false),
             shutdown_timed_out: AtomicBool::new(false),
@@ -338,6 +386,7 @@ struct EdtSessionManagerInner {
     queue: Mutex<VecDeque<Arc<QueuedRequest>>>,
     queue_ready: Condvar,
     admission: Arc<Semaphore>,
+    telemetry: Arc<EdtTelemetry>,
     shutdown_token: CancellationToken,
     shutdown_started: AtomicBool,
     shutdown_timed_out: AtomicBool,
@@ -356,7 +405,11 @@ impl EdtSessionManagerInner {
         Ok(())
     }
 
-    fn remove_queued(&self, target: &Arc<QueuedRequest>) -> Result<bool, EdtSessionError> {
+    fn remove_queued(
+        &self,
+        target: &Arc<QueuedRequest>,
+        reason: EdtQueueDepthReason,
+    ) -> Result<bool, EdtSessionError> {
         let mut queue = self
             .queue
             .lock()
@@ -367,6 +420,13 @@ impl EdtSessionManagerInner {
             return Ok(false);
         };
         queue.remove(position);
+        let queue_depth = queue.len();
+        drop(queue);
+        self.telemetry.record_queue_depth(
+            EdtQueueDepthAction::RemoveQueued,
+            queue_depth,
+            Some(reason),
+        );
         Ok(true)
     }
 
@@ -377,6 +437,10 @@ impl EdtSessionManagerInner {
         };
         loop {
             if let Some(queued) = queue.pop_front() {
+                let queue_depth = queue.len();
+                drop(queue);
+                self.telemetry
+                    .record_queue_depth(EdtQueueDepthAction::Dequeue, queue_depth, None);
                 return Some(queued);
             }
             if self.shutdown_started.load(Ordering::SeqCst) {
@@ -389,7 +453,7 @@ impl EdtSessionManagerInner {
         }
     }
 
-    fn drain_pending(&self, error: EdtSessionError) {
+    fn drain_pending(&self, error: EdtSessionError, reason: EdtSessionDrainReason) {
         let drained = {
             let mut queue = match self.queue.lock() {
                 Ok(queue) => queue,
@@ -397,6 +461,21 @@ impl EdtSessionManagerInner {
             };
             queue.drain(..).collect::<Vec<_>>()
         };
+        self.telemetry.record_queue_depth(
+            EdtQueueDepthAction::Drain,
+            0,
+            Some(match reason {
+                EdtSessionDrainReason::Restart => EdtQueueDepthReason::Restart,
+                EdtSessionDrainReason::Shutdown => EdtQueueDepthReason::Shutdown,
+            }),
+        );
+        self.telemetry.record_drain(
+            match reason {
+                EdtSessionDrainReason::Restart => EdtDrainTelemetryReason::Restart,
+                EdtSessionDrainReason::Shutdown => EdtDrainTelemetryReason::Shutdown,
+            },
+            drained.len(),
+        );
         for queued in drained {
             queued.state.release_queued();
             queued.reply(Err(error.clone()));
@@ -665,9 +744,15 @@ fn run_worker(inner: Arc<EdtSessionManagerInner>, factory: Arc<dyn SessionFactor
             queued.reply(Err(EdtSessionError::DrainedByRestartOrShutdown {
                 reason: EdtSessionDrainReason::Shutdown,
             }));
-            inner.drain_pending(EdtSessionError::DrainedByRestartOrShutdown {
-                reason: EdtSessionDrainReason::Shutdown,
-            });
+            inner
+                .telemetry
+                .record_drain(EdtDrainTelemetryReason::Shutdown, 1);
+            inner.drain_pending(
+                EdtSessionError::DrainedByRestartOrShutdown {
+                    reason: EdtSessionDrainReason::Shutdown,
+                },
+                EdtSessionDrainReason::Shutdown,
+            );
             break;
         }
 
@@ -693,9 +778,13 @@ fn run_worker(inner: Arc<EdtSessionManagerInner>, factory: Arc<dyn SessionFactor
                 Err(error) => {
                     queued.state.release_queued();
                     queued.reply(Err(error));
-                    inner.drain_pending(EdtSessionError::DrainedByRestartOrShutdown {
-                        reason: EdtSessionDrainReason::Restart,
-                    });
+                    inner.telemetry.record_startup_failure();
+                    inner.drain_pending(
+                        EdtSessionError::DrainedByRestartOrShutdown {
+                            reason: EdtSessionDrainReason::Restart,
+                        },
+                        EdtSessionDrainReason::Restart,
+                    );
                     inner.active_pid.store(0, Ordering::SeqCst);
                     continue;
                 }
@@ -716,10 +805,17 @@ fn run_worker(inner: Arc<EdtSessionManagerInner>, factory: Arc<dyn SessionFactor
                 error,
                 EdtSessionError::QueuedCancelled | EdtSessionError::QueuedTimeout
             ) {
-                kill_and_drop_session(&mut session, inner.active_pid.as_ref());
-                inner.drain_pending(EdtSessionError::DrainedByRestartOrShutdown {
-                    reason: EdtSessionDrainReason::Restart,
-                });
+                if kill_and_drop_session(&mut session, inner.active_pid.as_ref()) {
+                    inner
+                        .telemetry
+                        .record_restart(EdtRestartReason::BaselineFailure);
+                }
+                inner.drain_pending(
+                    EdtSessionError::DrainedByRestartOrShutdown {
+                        reason: EdtSessionDrainReason::Restart,
+                    },
+                    EdtSessionDrainReason::Restart,
+                );
             }
             continue;
         }
@@ -760,20 +856,34 @@ fn run_worker(inner: Arc<EdtSessionManagerInner>, factory: Arc<dyn SessionFactor
             Err(InteractiveProcessError::CommandTimeout { .. }) => {
                 queued.state.finish();
                 queued.reply(Err(EdtSessionError::RunningTimeout));
-                kill_and_drop_session(&mut session, inner.active_pid.as_ref());
-                inner.drain_pending(EdtSessionError::DrainedByRestartOrShutdown {
-                    reason: EdtSessionDrainReason::Restart,
-                });
+                if kill_and_drop_session(&mut session, inner.active_pid.as_ref()) {
+                    inner
+                        .telemetry
+                        .record_restart(EdtRestartReason::CommandTimeout);
+                }
+                inner.drain_pending(
+                    EdtSessionError::DrainedByRestartOrShutdown {
+                        reason: EdtSessionDrainReason::Restart,
+                    },
+                    EdtSessionDrainReason::Restart,
+                );
             }
             Err(error) => {
                 queued.state.finish();
                 queued.reply(Err(EdtSessionError::SessionFailed {
                     message: error.to_string(),
                 }));
-                kill_and_drop_session(&mut session, inner.active_pid.as_ref());
-                inner.drain_pending(EdtSessionError::DrainedByRestartOrShutdown {
-                    reason: EdtSessionDrainReason::Restart,
-                });
+                if kill_and_drop_session(&mut session, inner.active_pid.as_ref()) {
+                    inner
+                        .telemetry
+                        .record_restart(EdtRestartReason::SessionFailure);
+                }
+                inner.drain_pending(
+                    EdtSessionError::DrainedByRestartOrShutdown {
+                        reason: EdtSessionDrainReason::Restart,
+                    },
+                    EdtSessionDrainReason::Restart,
+                );
             }
         }
     }
@@ -786,7 +896,11 @@ fn run_worker(inner: Arc<EdtSessionManagerInner>, factory: Arc<dyn SessionFactor
     inner.active_pid.store(0, Ordering::SeqCst);
 }
 
-fn kill_and_drop_session(session: &mut Option<Box<dyn ManagedSession>>, active_pid: &AtomicU32) {
+fn kill_and_drop_session(
+    session: &mut Option<Box<dyn ManagedSession>>,
+    active_pid: &AtomicU32,
+) -> bool {
+    let had_live_session = session.is_some() || active_pid.load(Ordering::SeqCst) != 0;
     if let Some(mut session) = session.take() {
         if session.kill().is_err() {
             let pid = active_pid.load(Ordering::SeqCst);
@@ -797,6 +911,7 @@ fn kill_and_drop_session(session: &mut Option<Box<dyn ManagedSession>>, active_p
         let _ = kill_process_group_by_pid(pid);
     }
     active_pid.store(0, Ordering::SeqCst);
+    had_live_session
 }
 
 fn shutdown_session(
@@ -1232,6 +1347,12 @@ mod tests {
         manager.inner.queue.lock().expect("queue lock").len()
     }
 
+    fn telemetry_snapshot(
+        manager: &EdtSessionManager,
+    ) -> crate::mcp::telemetry::EdtTelemetrySnapshot {
+        manager.inner.telemetry.snapshot()
+    }
+
     fn request(command: &str, after_ms: u64) -> EdtSessionRequest {
         EdtSessionRequest::new(command, Instant::now() + Duration::from_millis(after_ms))
     }
@@ -1471,6 +1592,10 @@ mod tests {
             "fresh"
         );
         assert_eq!(inner.start_count(), 2);
+        let telemetry = telemetry_snapshot(&manager);
+        assert_eq!(telemetry.restart_total, 1);
+        assert_eq!(telemetry.drain_restart_total, 1);
+        assert_eq!(telemetry.last_drained_jobs, 1);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1548,6 +1673,10 @@ mod tests {
             factory.commands(),
             vec!["cmd-1".to_owned(), "cmd-3".to_owned()]
         );
+        let telemetry = telemetry_snapshot(&manager);
+        assert_eq!(telemetry.queue_depth, 0);
+        assert_eq!(telemetry.max_queue_depth, 1);
+        assert_eq!(telemetry.restart_total, 0);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1588,6 +1717,10 @@ mod tests {
             factory.commands(),
             vec!["cmd-1".to_owned(), "cmd-3".to_owned()]
         );
+        let telemetry = telemetry_snapshot(&manager);
+        assert_eq!(telemetry.queue_depth, 0);
+        assert_eq!(telemetry.max_queue_depth, 1);
+        assert_eq!(telemetry.restart_total, 0);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1886,6 +2019,10 @@ mod tests {
             "fresh"
         );
         assert_eq!(factory.start_count(), 2);
+        let telemetry = telemetry_snapshot(&manager);
+        assert_eq!(telemetry.restart_total, 1);
+        assert_eq!(telemetry.drain_restart_total, 1);
+        assert_eq!(telemetry.last_drained_jobs, 1);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2001,6 +2138,11 @@ mod tests {
             "ok"
         );
         assert_eq!(factory.start_count(), 2);
+        let telemetry = telemetry_snapshot(&manager);
+        assert_eq!(telemetry.startup_failure_total, 1);
+        assert_eq!(telemetry.restart_total, 0);
+        assert_eq!(telemetry.drain_restart_total, 1);
+        assert_eq!(telemetry.last_drained_jobs, 1);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2048,6 +2190,10 @@ mod tests {
             "ok"
         );
         assert_eq!(factory.start_count(), 2);
+        let telemetry = telemetry_snapshot(&manager);
+        assert_eq!(telemetry.restart_total, 1);
+        assert_eq!(telemetry.drain_restart_total, 1);
+        assert_eq!(telemetry.last_drained_jobs, 1);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2086,6 +2232,11 @@ mod tests {
                 reason: EdtSessionDrainReason::Shutdown
             })
         );
+        let telemetry = telemetry_snapshot(&manager);
+        assert_eq!(telemetry.restart_total, 0);
+        assert_eq!(telemetry.drain_shutdown_total, 1);
+        assert_eq!(telemetry.last_drained_jobs, 1);
+        assert_eq!(telemetry.queue_depth, 0);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

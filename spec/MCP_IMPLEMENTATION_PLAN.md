@@ -111,11 +111,12 @@
   - Stdio integration suite теперь покрывает все 8 опубликованных tools: `run_all_tests`, `run_module_tests`, `build_project`, `dump_config`, `launch_app`, `check_syntax_edt`, `check_syntax_designer_config`, `check_syntax_designer_modules`.
   - `dump_config` regression matrix теперь покрывает MCP `PARTIAL` для `DESIGNER` и degraded success/failure semantics для `IBCMD` с сохранением `mode=PARTIAL`.
   - HTTP suite дополнительно покрывает live non-EDT tool call и burst admission/recovery scenario, а существующие tests остаются источником правды для session lifecycle и EDT timeout/restart/isolation semantics.
-- Добавить runtime metrics и tracing:
-  - semaphore wait time
-  - EDT queue depth
-  - restart count
-  - shutdown drain stats
+- [x] 2026-03-20: Добавить runtime metrics и tracing.
+  - Добавлен `src/mcp/telemetry.rs` с единым telemetry state для MCP semaphore admission и shared EDT actor lifecycle без новых внешних metrics-зависимостей.
+  - В action log теперь пишутся stable structured events: `mcp_execution_semaphore_wait` (`transport`, `tool`, `outcome`, `bounded`, `timeout_ms`, `wait_ms`), `mcp_edt_queue_depth` (`action`, `queue_depth`, `reason`), `mcp_edt_session_restart`, `mcp_edt_startup_failure`, `mcp_edt_shutdown_drain`.
+  - Semaphore wait теперь измеряется для всех outcome-веток acquire path: `acquired`, queued `cancelled`, queued `timeout`, `internal_error`.
+  - Shared EDT actor теперь фиксирует queue depth на enqueue/dequeue/remove/drain, отдельно считает `startup_failure_total`, strict `restart_total` только для реального kill/drop живой session и раздельные drain totals для `restart` / `shutdown`.
+  - Добавлены unit/integration tests на semaphore telemetry outcomes, queued cancel/timeout queue-depth updates, startup-failure-vs-restart semantics и наличие telemetry events в live HTTP MCP action log.
 - [x] 2026-03-20: Оформить migration note для расхождения `dump_config(mode=null)` с текущим Kotlin code path.
   - Расхождение задокументировано в `README.md`: `dump_config(mode=null|blank)` в MCP трактуется как `INCREMENTAL`.
 - Сохранять этот документ как основной staged plan для MCP-работ.

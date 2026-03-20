@@ -423,6 +423,19 @@ where
     panic!("timed out waiting for status {expected}");
 }
 
+async fn wait_for_log_contains(path: &Path, needle: &str) {
+    for _ in 0..100 {
+        if let Ok(contents) = fs::read_to_string(path) {
+            if contents.contains(needle) {
+                return;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    panic!("timed out waiting for '{needle}' in {}", path.display());
+}
+
 #[test]
 fn mcp_http_missing_config_reports_error_on_stderr() {
     let output = std::process::Command::new(cargo_bin("v8-test-runner"))
@@ -857,6 +870,51 @@ async fn mcp_http_reuses_one_edt_process_across_sessions_and_shares_capacity() {
     let lines = lifecycle.lines().collect::<Vec<_>>();
     assert_eq!(lines.first().copied(), Some("startup"));
     assert_eq!(lines[1..], ["start", "finish", "start", "finish"]);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_http_edt_action_log_contains_runtime_telemetry_events() {
+    let validate_handler = "if [ -n \"$out\" ]; then : > \"$out\"; fi\nsleep 0.05\nprompt";
+    let (dir, config_path, url, _lifecycle_log) =
+        setup_http_edt_project(validate_handler, 4, 900, 1, 1000);
+    let action_log = dir
+        .path()
+        .join("work")
+        .join("logs")
+        .join("mcp")
+        .join("actions.log");
+    let mut server = HttpServerProcess::spawn(&config_path, &url).await;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .expect("http client");
+
+    let (session_id, _) = initialize_session(&client, &url).await;
+    send_initialized(&client, &url, &session_id).await;
+
+    let response = call_tool(
+        &client,
+        &url,
+        &session_id,
+        "check_syntax_edt",
+        json!({ "projectName": "main" }),
+        12,
+    )
+    .await;
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let payload = extract_sse_json(&response.text().await.expect("edt body"));
+    assert_eq!(payload["result"]["structuredContent"]["status"], "success");
+
+    wait_for_log_contains(&action_log, "mcp_execution_semaphore_wait").await;
+    wait_for_log_contains(&action_log, "mcp_edt_queue_depth").await;
+
+    let contents = fs::read_to_string(&action_log).expect("action log");
+    assert!(contents.contains("mcp_http"));
+    assert!(contents.contains("check_syntax_edt"));
+    assert!(contents.contains("acquired"));
+    assert!(contents.contains("enqueue"));
 
     server.shutdown().await;
 }
