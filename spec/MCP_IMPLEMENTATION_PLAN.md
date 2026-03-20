@@ -56,6 +56,8 @@
 
 ## Stage 3. Shared EDT Session For MCP
 
+- [x] 2026-03-20: Stage 3 завершен целиком.
+  - Весь scoped объем этапа закрыт: low-level interactive executor, shared EDT actor, baseline/reset contract, restart/shutdown drain semantics и переключение live MCP `check_syntax_edt` на shared session при сохранении CLI EDT path в one-shot режиме.
 - [x] 2026-03-20: Реализовать `InteractiveProcessExecutor` для `1cedtcli`.
   - Добавлен `src/platform/interactive.rs` с prompt-delimited executor, который стартует отдельный process group, ждёт `1C:EDT>` на `stdout` или `stderr`, посылает команды в `stdin` и читает ответ до следующего prompt.
   - Зафиксирован lifecycle contract: startup/command timeout убивает process group и poison-ит executor, mid-command child exit возвращается сразу как `ProcessExited`, graceful shutdown закрывает `stdin` и эскалирует в forced kill при таймауте.
@@ -82,19 +84,25 @@
 
 ## Stage 4. HTTP Transport
 
-- Добавить `v8-test-runner mcp serve http`.
-- Поднять `axum` + `rmcp` streamable HTTP transport.
-- Явно зафиксировать HTTP defaults:
+- [x] 2026-03-20: Добавить `v8-test-runner mcp serve http`.
+  - CLI surface расширен nested-командой `mcp serve http`, а `app.rs` получил общий MCP bootstrap path для stdio/HTTP без CLI presenter/json envelope.
+  - MCP HTTP bootstrap errors, как и stdio path, печатаются в `stderr`, а action logging остаётся file-only в `workPath/logs/mcp/actions.log`.
+- [x] 2026-03-20: Поднять `axum` + `rmcp` streamable HTTP transport.
+  - `src/mcp/server.rs` теперь содержит transport-aware `McpToolServer`, который используется и для stdio, и для HTTP, сохраняя общий `McpService`, global semaphore и shared `EdtSessionManager`.
+  - Поверх `rmcp::transport::StreamableHttpService` добавлен thin HTTP wrapper, который перехватывает только transport-level admission cases: `stateful` non-`initialize` POST без `Mcp-Session-Id` возвращает deterministic `400`, а переполнение `max_sessions` на новом `initialize` возвращает `503 Service Unavailable`.
+- [x] 2026-03-20: Явно зафиксировать HTTP defaults.
+  - Defaults остаются источником правды для live HTTP transport и задокументированы в typed config/model validation, `examples/application.yaml` и `README.md`.
   - `bind_address=127.0.0.1:3000`
   - `path=/mcp`
   - `stateful_sessions=true`
   - `max_sessions=64`
   - `idle_ttl_secs=900`
-- Проверить session semantics:
-  - reuse `Mcp-Session-Id`
-  - sticky shared app context
-  - deterministic behavior for missing или expired session
-- Shared EDT actor используется и для HTTP, без создания отдельных EDT processes per MCP session.
+- [x] 2026-03-20: Проверить session semantics.
+  - Stateful HTTP contract зафиксирован тестами на живом binary: `POST initialize` выдаёт `Mcp-Session-Id`, `notifications/initialized` возвращает `202`, `GET/DELETE` без session дают `400`, а unknown/expired/deleted session IDs дают `404`.
+  - `stateful_sessions=false` теперь покрыт integration tests как POST-only mode без session header; `GET/DELETE` в этом режиме возвращают `405`, а `Accept`/`Content-Type` preconditions валидируются transport layer-ом.
+  - Session capacity теперь держится через atomic reservation lifecycle `reserve -> delegate initialize -> confirm/release` с lazy pruning expired rmcp sessions, поэтому `max_sessions` корректно освобождается после `DELETE`, TTL expiry и failed initialize.
+- [x] 2026-03-20: Shared EDT actor используется и для HTTP, без создания отдельных EDT processes per MCP session.
+  - Две разные HTTP MCP sessions теперь переиспользуют один интерактивный `1cedtcli` process и общий `mcp.execution.max_concurrent_calls` budget; это подтверждено integration test-ом на actor reuse и shared capacity serialization.
 
 ## Stage 5. Hardening And Docs
 
@@ -110,7 +118,8 @@
   - EDT queue depth
   - restart count
   - shutdown drain stats
-- Оформить migration note для расхождения `dump_config(mode=null)` с текущим Kotlin code path.
+- [x] 2026-03-20: Оформить migration note для расхождения `dump_config(mode=null)` с текущим Kotlin code path.
+  - Расхождение задокументировано в `README.md`: `dump_config(mode=null|blank)` в MCP трактуется как `INCREMENTAL`.
 - Сохранять этот документ как основной staged plan для MCP-работ.
 
 ## Public Changes

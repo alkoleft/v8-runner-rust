@@ -153,3 +153,6 @@
 - [x] Добавить bounded execution через semaphore и per-call timeout/cancel semantics для MCP path
 - [x] Подключить shared EDT actor к live MCP `check_syntax_edt`
 - [x] Добавить baseline/reset pre-dispatch для shared EDT session (`cd <workspace>` + probe `cd`)
+- [x] Добавить `v8-test-runner mcp serve http`
+- [x] Поднять `axum` + `rmcp` streamable HTTP transport с stateful/stateless session semantics
+- [x] Переиспользовать shared EDT actor и общий execution semaphore для HTTP MCP sessions

@@ -143,6 +143,8 @@ pub struct McpServeArgs {
 pub enum McpServeTransport {
     /// Serve MCP over stdio
     Stdio,
+    /// Serve MCP over streamable HTTP
+    Http,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -297,6 +299,21 @@ mod tests {
             Command::Mcp(args) => match args.command {
                 McpCommand::Serve(serve) => {
                     assert!(matches!(serve.transport, McpServeTransport::Stdio));
+                }
+            },
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn parses_mcp_http_command() {
+        let cli = Cli::try_parse_from(["v8-test-runner", "mcp", "serve", "http"])
+            .expect("parse mcp http");
+
+        match cli.command {
+            Command::Mcp(args) => match args.command {
+                McpCommand::Serve(serve) => {
+                    assert!(matches!(serve.transport, McpServeTransport::Http));
                 }
             },
             _ => panic!("unexpected command"),

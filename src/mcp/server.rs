@@ -1,9 +1,26 @@
+use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
+use axum::body::{to_bytes, Body};
+use axum::http::{
+    header::{CONTENT_TYPE, HeaderValue},
+    Method, Request, Response, StatusCode,
+};
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{CallToolResult, ServerCapabilities, ServerInfo},
+    transport::{
+        streamable_http_server::{
+            session::{
+                local::{LocalSessionManager, SessionConfig},
+                SessionId,
+            },
+            StreamableHttpServerConfig,
+        },
+        StreamableHttpService,
+    },
     tool, tool_handler, tool_router, ErrorData, ServerHandler, ServiceExt,
 };
 use serde_json::json;
@@ -30,6 +47,7 @@ use crate::mcp::service::{map_syntax_use_case_result, normalize_check_syntax_edt
 use crate::mcp::tool_result::McpToolResult;
 
 type SharedMcpUseCasePort = Arc<dyn McpUseCasePort + Send + Sync>;
+const HTTP_BODY_LIMIT_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum McpTool {
@@ -90,19 +108,25 @@ impl McpTool {
     }
 }
 
-/// Bootstrap errors returned by the MCP stdio server.
+/// Bootstrap errors returned by MCP transports.
 #[derive(Debug, Error)]
 pub enum McpServerError {
-    #[error("failed to build tokio runtime for MCP stdio: {0}")]
+    #[error("failed to build tokio runtime for MCP transport: {0}")]
     BuildRuntime(std::io::Error),
 
-    #[error("failed to initialize MCP stdio server: {0}")]
+    #[error("failed to initialize MCP transport: {0}")]
     Bootstrap(String),
 
-    #[error("failed to start MCP stdio server: {0}")]
+    #[error("failed to bind MCP HTTP listener on {address}: {source}")]
+    BindHttp {
+        address: String,
+        source: std::io::Error,
+    },
+
+    #[error("failed to start MCP transport: {0}")]
     Start(String),
 
-    #[error("MCP stdio server task failed: {0}")]
+    #[error("MCP transport task failed: {0}")]
     Task(String),
 }
 
@@ -116,7 +140,7 @@ pub fn serve_stdio(config: AppConfig) -> Result<(), McpServerError> {
         .map_err(McpServerError::BuildRuntime)?;
 
     let result = runtime.block_on(async move {
-        let server = McpStdioServer::new(Arc::new(config))?;
+        let server = McpToolServer::stdio(Arc::new(config))?;
         let running = server
             .serve(rmcp::transport::stdio())
             .await
@@ -133,26 +157,78 @@ pub fn serve_stdio(config: AppConfig) -> Result<(), McpServerError> {
     result
 }
 
-/// rmcp-backed stdio transport adapter over the MCP service layer.
+/// Runs the MCP streamable HTTP server until shutdown.
+pub fn serve_http(config: AppConfig) -> Result<(), McpServerError> {
+    let shutdown_timeout = shutdown_grace_period(&config);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name("v8tr-mcp")
+        .build()
+        .map_err(McpServerError::BuildRuntime)?;
+
+    let result = runtime.block_on(async move {
+        let config = Arc::new(config);
+        let shutdown = CancellationToken::new();
+        let server = McpToolServer::http(config.clone())?;
+        let service = HttpMcpService::new(server, config.clone(), shutdown.child_token());
+        let listener = tokio::net::TcpListener::bind(config.mcp.http.bind_address.as_str())
+            .await
+            .map_err(|source| McpServerError::BindHttp {
+                address: config.mcp.http.bind_address.clone(),
+                source,
+            })?;
+        let router =
+            axum::Router::new().route(config.mcp.http.path.as_str(), axum::routing::any({
+                let service = service.clone();
+                move |request| {
+                    let service = service.clone();
+                    async move { service.handle(request).await }
+                }
+            }));
+        let serve = axum::serve(listener, router).with_graceful_shutdown({
+            let shutdown = shutdown.clone();
+            async move {
+                wait_for_shutdown_signal().await;
+                shutdown.cancel();
+            }
+        });
+
+        serve
+            .await
+            .map_err(|error| McpServerError::Task(error.to_string()))
+    });
+
+    runtime.shutdown_timeout(shutdown_timeout);
+    result
+}
+
+/// rmcp-backed MCP transport adapter over the MCP service layer.
 #[derive(Clone)]
-pub struct McpStdioServer {
+pub struct McpToolServer {
     config: Arc<AppConfig>,
     port: SharedMcpUseCasePort,
     edt_session: Arc<EdtSessionManager>,
     concurrency_limit: Arc<Semaphore>,
+    call_context: McpCallContext,
     tool_router: ToolRouter<Self>,
 }
 
-impl McpStdioServer {
+impl McpToolServer {
     /// Creates a stdio server using the production use-case port.
-    pub fn new(config: Arc<AppConfig>) -> Result<Self, McpServerError> {
-        Self::with_port(config, Arc::new(DefaultMcpUseCasePort))
+    pub fn stdio(config: Arc<AppConfig>) -> Result<Self, McpServerError> {
+        Self::with_port(config, Arc::new(DefaultMcpUseCasePort), McpCallContext::stdio())
     }
 
-    /// Creates a stdio server with an injected MCP use-case port.
+    /// Creates an HTTP server using the production use-case port.
+    pub fn http(config: Arc<AppConfig>) -> Result<Self, McpServerError> {
+        Self::with_port(config, Arc::new(DefaultMcpUseCasePort), McpCallContext::http())
+    }
+
+    /// Creates a transport-aware server with an injected MCP use-case port.
     pub fn with_port(
         config: Arc<AppConfig>,
         port: SharedMcpUseCasePort,
+        call_context: McpCallContext,
     ) -> Result<Self, McpServerError> {
         Ok(Self {
             edt_session: Arc::new(
@@ -162,6 +238,7 @@ impl McpStdioServer {
             concurrency_limit: Arc::new(Semaphore::new(max_concurrent_calls(config.as_ref()))),
             config,
             port,
+            call_context,
             tool_router: Self::tool_router(),
         })
     }
@@ -208,7 +285,7 @@ impl McpStdioServer {
 
         let config = self.config.clone();
         let port = self.port.clone();
-        let call_context = McpCallContext::stdio().with_edt_timeout(remaining_timeout);
+        let call_context = self.call_context.with_edt_timeout(remaining_timeout);
         let mut handle =
             tokio::task::spawn_blocking(move || method(config, port, call_context, request));
 
@@ -367,8 +444,187 @@ impl McpStdioServer {
     }
 }
 
+#[derive(Debug, Default)]
+struct HttpSessionAdmissionState {
+    reserved: usize,
+    active_sessions: HashSet<SessionId>,
+}
+
+#[derive(Clone)]
+struct HttpSessionAdmission {
+    max_sessions: usize,
+    session_manager: Arc<LocalSessionManager>,
+    state: Arc<Mutex<HttpSessionAdmissionState>>,
+}
+
+impl HttpSessionAdmission {
+    fn new(max_sessions: usize, session_manager: Arc<LocalSessionManager>) -> Self {
+        Self {
+            max_sessions: max_sessions.max(1),
+            session_manager,
+            state: Arc::new(Mutex::new(HttpSessionAdmissionState::default())),
+        }
+    }
+
+    async fn reserve_initialize(&self) -> Result<HttpSessionReservation, HttpOverloadError> {
+        let live_sessions = self.session_manager.sessions.read().await;
+        let mut state = self.state.lock().expect("http session admission mutex poisoned");
+        state
+            .active_sessions
+            .retain(|session_id| live_sessions.contains_key(session_id));
+        if state.active_sessions.len() + state.reserved >= self.max_sessions {
+            return Err(HttpOverloadError);
+        }
+        state.reserved += 1;
+        drop(state);
+        drop(live_sessions);
+
+        Ok(HttpSessionReservation {
+            admission: self.clone(),
+            completed: false,
+        })
+    }
+
+    fn confirm(&self, session_id: SessionId) {
+        let mut state = self.state.lock().expect("http session admission mutex poisoned");
+        state.reserved = state.reserved.saturating_sub(1);
+        state.active_sessions.insert(session_id);
+    }
+
+    fn release(&self) {
+        let mut state = self.state.lock().expect("http session admission mutex poisoned");
+        state.reserved = state.reserved.saturating_sub(1);
+    }
+
+    fn remove(&self, session_id: &SessionId) {
+        let mut state = self.state.lock().expect("http session admission mutex poisoned");
+        state.active_sessions.remove(session_id);
+    }
+}
+
+struct HttpSessionReservation {
+    admission: HttpSessionAdmission,
+    completed: bool,
+}
+
+impl HttpSessionReservation {
+    fn confirm(mut self, session_id: SessionId) {
+        self.admission.confirm(session_id);
+        self.completed = true;
+    }
+
+    fn release(mut self) {
+        self.admission.release();
+        self.completed = true;
+    }
+}
+
+impl Drop for HttpSessionReservation {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.admission.release();
+            self.completed = true;
+        }
+    }
+}
+
+#[derive(Debug)]
+struct HttpOverloadError;
+
+#[derive(Clone)]
+struct HttpMcpService {
+    inner: StreamableHttpService<McpToolServer, LocalSessionManager>,
+    admission: HttpSessionAdmission,
+    stateful_sessions: bool,
+}
+
+impl HttpMcpService {
+    fn new(
+        server: McpToolServer,
+        config: Arc<AppConfig>,
+        shutdown: CancellationToken,
+    ) -> Self {
+        let session_manager = Arc::new(LocalSessionManager {
+            session_config: SessionConfig {
+                keep_alive: config
+                    .mcp
+                    .http
+                    .stateful_sessions
+                    .then_some(Duration::from_secs(config.mcp.http.idle_ttl_secs.max(1))),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let admission =
+            HttpSessionAdmission::new(config.mcp.http.max_sessions, session_manager.clone());
+        let inner = StreamableHttpService::new(
+            move || Ok(server.clone()),
+            session_manager,
+            StreamableHttpServerConfig {
+                stateful_mode: config.mcp.http.stateful_sessions,
+                cancellation_token: shutdown,
+                ..Default::default()
+            },
+        );
+
+        Self {
+            inner,
+            admission,
+            stateful_sessions: config.mcp.http.stateful_sessions,
+        }
+    }
+
+    async fn handle(&self, request: Request<Body>) -> Response<Body> {
+        let session_id = session_id_from_headers(request.headers());
+        let method = request.method().clone();
+        let is_initialize_candidate =
+            self.stateful_sessions && method == Method::POST && session_id.is_none();
+
+        if !is_initialize_candidate {
+            let response = self.inner.handle(request).await.map(Body::new);
+            if method == Method::DELETE && response.status() == StatusCode::ACCEPTED {
+                if let Some(session_id) = session_id {
+                    self.admission.remove(&session_id);
+                }
+            }
+            return response;
+        }
+
+        if !valid_streamable_post_headers(request.headers()) {
+            return self.inner.handle(request).await.map(Body::new);
+        }
+
+        let (request, rpc_method) = match extract_http_rpc_method(request).await {
+            Ok(result) => result,
+            Err(response) => return response,
+        };
+        if rpc_method.as_deref() != Some("initialize") {
+            let _ = request;
+            return missing_initialize_response();
+        }
+
+        let reservation = match self.admission.reserve_initialize().await {
+            Ok(reservation) => reservation,
+            Err(_) => return overload_response(),
+        };
+
+        let response = self.inner.handle(request).await.map(Body::new);
+        if response.status() == StatusCode::OK {
+            if let Some(session_id) = session_id_from_headers(response.headers()) {
+                reservation.confirm(session_id);
+            } else {
+                reservation.release();
+            }
+        } else {
+            reservation.release();
+        }
+
+        response
+    }
+}
+
 #[tool_router(router = tool_router)]
-impl McpStdioServer {
+impl McpToolServer {
     #[tool(description = "Run all tests")]
     async fn run_all_tests(
         &self,
@@ -506,7 +762,7 @@ impl McpStdioServer {
 }
 
 #[tool_handler(router = self.tool_router)]
-impl ServerHandler for McpStdioServer {
+impl ServerHandler for McpToolServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
     }
@@ -581,9 +837,88 @@ fn duration_to_millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
+async fn extract_http_rpc_method(
+    request: Request<Body>,
+) -> Result<(Request<Body>, Option<String>), Response<Body>> {
+    let (parts, body) = request.into_parts();
+    let body = to_bytes(body, HTTP_BODY_LIMIT_BYTES).await.map_err(|error| {
+        Response::builder()
+            .status(StatusCode::PAYLOAD_TOO_LARGE)
+            .header(CONTENT_TYPE, HeaderValue::from_static("text/plain; charset=utf-8"))
+            .body(Body::from(format!("Payload Too Large: {error}")))
+            .expect("valid overload response")
+    })?;
+    let method = serde_json::from_slice::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("method")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+        });
+    Ok((Request::from_parts(parts, Body::from(body)), method))
+}
+
+fn overload_response() -> Response<Body> {
+    Response::builder()
+        .status(StatusCode::SERVICE_UNAVAILABLE)
+        .header(CONTENT_TYPE, HeaderValue::from_static("text/plain; charset=utf-8"))
+        .body(Body::from(
+            "Service Unavailable: MCP session capacity exhausted",
+        ))
+        .expect("valid overload response")
+}
+
+fn missing_initialize_response() -> Response<Body> {
+    Response::builder()
+        .status(StatusCode::BAD_REQUEST)
+        .header(CONTENT_TYPE, HeaderValue::from_static("text/plain; charset=utf-8"))
+        .body(Body::from(
+            "Bad Request: initialize request is required before session creation",
+        ))
+        .expect("valid missing initialize response")
+}
+
+fn session_id_from_headers(headers: &axum::http::HeaderMap) -> Option<SessionId> {
+    headers
+        .get("mcp-session-id")
+        .and_then(|value| value.to_str().ok())
+        .map(Into::into)
+}
+
+fn valid_streamable_post_headers(headers: &axum::http::HeaderMap) -> bool {
+    let accepts_both = headers
+        .get(axum::http::header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.contains("application/json") && value.contains("text/event-stream"));
+    let content_type_is_json = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("application/json"));
+
+    accepts_both && content_type_is_json
+}
+
 async fn wait_for_deadline(deadline: Option<Instant>) {
     if let Some(deadline) = deadline {
         tokio::time::sleep_until(deadline).await;
+    }
+}
+
+async fn wait_for_shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("install SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = terminate.recv() => {}
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
     }
 }
 
@@ -626,21 +961,29 @@ mod tests {
 
     use super::{
         execution_error, max_concurrent_calls, shutdown_grace_period, ErrorReason, ExecutionStage,
-        McpStdioServer, McpTool,
+        HttpSessionAdmission, McpTool, McpToolServer,
     };
     use crate::config::model::{
         AppConfig, BuildConfig, BuilderBackend, McpConfig, McpExecutionConfig, McpHttpConfig,
         PlatformToolConfig, SourceFormat, SourceSetConfig, SourceSetPurpose, TestsConfig,
         ToolsConfig,
     };
+    use crate::mcp::context::McpCallContext;
     use crate::mcp::port::DefaultMcpUseCasePort;
+    use rmcp::transport::streamable_http_server::session::{
+        local::LocalSessionManager, SessionId,
+    };
     use tokio_util::sync::CancellationToken;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn execute_tool_respects_configured_concurrency_limit() {
         let server =
-            McpStdioServer::with_port(Arc::new(test_config(1, 9)), Arc::new(DefaultMcpUseCasePort))
-                .expect("server");
+            McpToolServer::with_port(
+                Arc::new(test_config(1, 9)),
+                Arc::new(DefaultMcpUseCasePort),
+                McpCallContext::stdio(),
+            )
+            .expect("server");
         let active = Arc::new(AtomicUsize::new(0));
         let max_active = Arc::new(AtomicUsize::new(0));
 
@@ -679,8 +1022,12 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn queued_cancellation_returns_transport_error_without_running_call() {
         let server =
-            McpStdioServer::with_port(Arc::new(test_config(1, 9)), Arc::new(DefaultMcpUseCasePort))
-                .expect("server");
+            McpToolServer::with_port(
+                Arc::new(test_config(1, 9)),
+                Arc::new(DefaultMcpUseCasePort),
+                McpCallContext::stdio(),
+            )
+            .expect("server");
         let started = Arc::new(AtomicUsize::new(0));
 
         let first = tokio::spawn(run_probe_call(
@@ -725,9 +1072,10 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn queued_timeout_returns_transport_error() {
-        let server = McpStdioServer::with_port(
+        let server = McpToolServer::with_port(
             Arc::new(test_config_with_edt_timeout(1, 9, 20)),
             Arc::new(DefaultMcpUseCasePort),
+            McpCallContext::stdio(),
         )
         .expect("server");
 
@@ -770,9 +1118,10 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn bounded_queued_cancellation_wins_before_deadline() {
-        let server = McpStdioServer::with_port(
+        let server = McpToolServer::with_port(
             Arc::new(test_config_with_edt_timeout(1, 9, 80)),
             Arc::new(DefaultMcpUseCasePort),
+            McpCallContext::stdio(),
         )
         .expect("server");
 
@@ -823,9 +1172,10 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn standard_tools_ignore_edt_timeout_budget_when_not_cancelled() {
-        let server = McpStdioServer::with_port(
+        let server = McpToolServer::with_port(
             Arc::new(test_config_with_edt_timeout(1, 9, 20)),
             Arc::new(DefaultMcpUseCasePort),
+            McpCallContext::stdio(),
         )
         .expect("server");
 
@@ -850,8 +1200,12 @@ mod tests {
     async fn standard_running_cancellation_returns_early_and_retains_capacity_until_worker_finishes(
     ) {
         let server =
-            McpStdioServer::with_port(Arc::new(test_config(1, 9)), Arc::new(DefaultMcpUseCasePort))
-                .expect("server");
+            McpToolServer::with_port(
+                Arc::new(test_config(1, 9)),
+                Arc::new(DefaultMcpUseCasePort),
+                McpCallContext::stdio(),
+            )
+            .expect("server");
         let active = Arc::new(AtomicUsize::new(0));
         let max_active = Arc::new(AtomicUsize::new(0));
         let cancellation = CancellationToken::new();
@@ -903,9 +1257,10 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn running_cancellation_returns_early_and_retains_capacity_until_worker_finishes() {
-        let server = McpStdioServer::with_port(
+        let server = McpToolServer::with_port(
             Arc::new(test_config_with_edt_timeout(1, 9, 500)),
             Arc::new(DefaultMcpUseCasePort),
+            McpCallContext::stdio(),
         )
         .expect("server");
         let active = Arc::new(AtomicUsize::new(0));
@@ -963,9 +1318,10 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn running_timeout_returns_early_and_capacity_recovers() {
-        let server = McpStdioServer::with_port(
+        let server = McpToolServer::with_port(
             Arc::new(test_config_with_edt_timeout(1, 9, 20)),
             Arc::new(DefaultMcpUseCasePort),
+            McpCallContext::stdio(),
         )
         .expect("server");
 
@@ -1005,8 +1361,40 @@ mod tests {
         .expect("capacity must recover after timed out calls");
     }
 
+    #[tokio::test]
+    async fn http_session_reservation_drop_releases_capacity() {
+        let admission = HttpSessionAdmission::new(1, Arc::new(LocalSessionManager::default()));
+
+        let reservation = admission
+            .reserve_initialize()
+            .await
+            .expect("first reservation");
+        drop(reservation);
+
+        admission
+            .reserve_initialize()
+            .await
+            .expect("capacity should recover after drop");
+    }
+
+    #[tokio::test]
+    async fn http_session_reservation_prunes_stale_confirmed_sessions() {
+        let admission = HttpSessionAdmission::new(1, Arc::new(LocalSessionManager::default()));
+
+        let reservation = admission
+            .reserve_initialize()
+            .await
+            .expect("first reservation");
+        reservation.confirm(SessionId::from("stale-session"));
+
+        admission
+            .reserve_initialize()
+            .await
+            .expect("stale confirmed session should be pruned");
+    }
+
     async fn run_probe_call(
-        server: McpStdioServer,
+        server: McpToolServer,
         tool: McpTool,
         active: Arc<AtomicUsize>,
         max_active: Arc<AtomicUsize>,

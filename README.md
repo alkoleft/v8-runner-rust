@@ -68,11 +68,11 @@ The CLI now uses a transport-neutral use-case contract internally:
   - `launch_app` accepts the Kotlin alias set plus the already supported `thin` / `thick` aliases, with trim + lowercase normalization.
   - `allExtensions` is treated as tri-state in MCP request mapping, with the default inferred from whether `extension` is present.
   - `checkUseSynchronousCalls` and `checkUseModality` are rejected at the MCP boundary when `extendedModulesCheck=false`.
-- This remains preparatory work for the upcoming MCP adapters without changing the public CLI surface.
+- This now drives both the stdio and HTTP MCP adapters without changing the public CLI surface.
 
-## MCP Configuration Prep
+## MCP Configuration
 
-The config model now reserves the MCP transport knobs that upcoming stdio/HTTP stages will consume.
+The config model now drives both MCP transports directly.
 
 Optional YAML settings:
 
@@ -94,7 +94,8 @@ tools:
     command_timeout_ms: 300000
 ```
 
-- `mcp.http.*` is still reserved for the upcoming HTTP transport, while `mcp.execution.*` already drives stdio admission control and shutdown grace.
+- `mcp.http.*` now configures the live streamable HTTP listener and session semantics.
+- `mcp.execution.*` still drives shared admission control and shutdown grace for both MCP transports.
 - `tools.edt_cli.startup_timeout_ms` and `tools.edt_cli.command_timeout_ms` default to `300000` ms and also accept legacy `edt-cli` / kebab-case aliases for compatibility.
 - `src/platform/interactive.rs` contains the low-level `InteractiveProcessExecutor` used by the shared MCP EDT session: it waits for the `1C:EDT>` prompt, executes prompt-delimited commands, and supports graceful shutdown plus forced kill.
 - The shared MCP EDT session now performs a reset+probe before every live MCP `check_syntax_edt` command: `cd <workPath/edt-workspace>` followed by `cd`, which must echo the same workspace path.
@@ -122,8 +123,25 @@ The binary now exposes a live stdio MCP transport:
 - `running timeout` => bounded calls only, `reason=timeout`, `stage=running`, `timeoutMs=<budget>`
 - With `rmcp` cancellable request handles, the client may observe local `ServiceError::Cancelled { reason }` after sending `notifications/cancelled`; the `reason/stage/timeoutMs` matrix above describes the server-side transport error payload shape.
 
+## MCP HTTP
+
+The binary now also exposes a live streamable HTTP MCP transport:
+
+- `v8-test-runner mcp serve http`
+- The HTTP server is built on `axum` + `rmcp` streamable HTTP and is served at `mcp.http.bind_address` plus `mcp.http.path`.
+- The same 8 published tools are available over HTTP, with the same `camelCase` request surface and the same structured business-vs-transport error split as stdio.
+- Stateful mode is enabled by default:
+  - `POST initialize` returns `200` plus `Mcp-Session-Id`
+  - `POST notifications/initialized` on a live session returns `202`
+  - `GET` or `DELETE` without `Mcp-Session-Id` returns `400`
+  - unknown, expired, or explicitly deleted session IDs return `404`
+  - `DELETE` closes the live session immediately
+- `mcp.http.max_sessions` is enforced before new session creation: a new `initialize` beyond capacity returns `503 Service Unavailable`.
+- `mcp.http.idle_ttl_secs` maps to session inactivity timeout. Expired sessions are removed and their capacity becomes available to new `initialize` calls.
+- `mcp.http.stateful_sessions=false` switches the transport into POST-only stateless mode: no session header is issued and `GET` / `DELETE` return `405 Method Not Allowed`.
+- The HTTP path reuses the same global semaphore and the same shared interactive EDT actor as stdio. Separate HTTP MCP sessions do not spawn separate `1cedtcli` processes.
+
 Current limits:
 
-- HTTP transport is not implemented yet.
 - The shared interactive EDT actor is currently wired only for MCP `check_syntax_edt`; broader EDT export/build rollout is still staged separately.
 - Transport-level cancellation is still early-return only: if the underlying blocking work hangs, it can keep capacity occupied until it exits or the server shuts down.

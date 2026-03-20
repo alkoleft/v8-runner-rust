@@ -8,6 +8,7 @@ name = "v8-test-runner"
 path = "src/main.rs"
 
 [dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 clap = { version = "4", features = ["derive", "env"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -27,11 +28,12 @@ chrono = { version = "0.4", features = ["serde"] }
 libc = "0.2"
 regex = "1"
 uuid = { version = "1", features = ["v4"] }
-rmcp = { version = "1.2.0", features = ["client", "transport-child-process", "transport-io"] }
-tokio = { version = "1", features = ["io-std", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
+rmcp = { version = "1.2.0", features = ["client", "transport-child-process", "transport-io", "transport-streamable-http-server"] }
+tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = "0.7"
 
 [dev-dependencies]
 assert_cmd = "2"
 predicates = "3"
 insta = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }

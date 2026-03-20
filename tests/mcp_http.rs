@@ -1,0 +1,740 @@
+#![cfg(unix)]
+
+use std::fs;
+use std::net::TcpListener;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use assert_cmd::cargo::cargo_bin;
+use serde_json::{json, Value};
+use tempfile::tempdir;
+
+const ACCEPT_BOTH: &str = "application/json, text/event-stream";
+
+fn reserve_local_address() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral listener");
+    let address = listener.local_addr().expect("local addr");
+    address.to_string()
+}
+
+#[cfg(unix)]
+fn make_executable(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut perms = fs::metadata(path).expect("metadata").permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(path, perms).expect("chmod");
+}
+
+#[cfg(unix)]
+fn write_script(path: &Path, body: &str) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("create dirs");
+    }
+    fs::write(path, format!("#!/bin/sh\n{body}\n")).expect("write script");
+    make_executable(path);
+}
+
+fn write_interactive_edt_script(
+    path: &Path,
+    workspace: &Path,
+    command_log_path: &Path,
+    lifecycle_log_path: &Path,
+    validate_handler: &str,
+) {
+    let body = format!(
+        "set -eu\n\
+         prompt() {{ printf '1C:EDT>'; }}\n\
+         workspace='{}'\n\
+         lifecycle_log='{}'\n\
+         cwd=\"$workspace\"\n\
+         printf 'startup\\n' >> \"$lifecycle_log\"\n\
+         prompt\n\
+         while IFS= read -r line; do\n\
+           printf '%s\\n' \"$line\" >> '{}'\n\
+           eval \"set -- $line\"\n\
+           cmd=\"${{1:-}}\"\n\
+           if [ \"$#\" -gt 0 ]; then shift; fi\n\
+           case \"$cmd\" in\n\
+             cd)\n\
+               if [ \"$#\" -eq 0 ]; then\n\
+                 printf '%s\\n' \"$cwd\"\n\
+               else\n\
+                 cwd=\"$1\"\n\
+               fi\n\
+               prompt\n\
+               ;;\n\
+             validate)\n\
+               out=\"\"\n\
+               while [ \"$#\" -gt 0 ]; do\n\
+                 case \"$1\" in\n\
+                   --file)\n\
+                     out=\"$2\"\n\
+                     shift 2\n\
+                     ;;\n\
+                   *)\n\
+                     shift\n\
+                     ;;\n\
+                 esac\n\
+               done\n\
+               {}\n\
+               ;;\n\
+             *)\n\
+               printf 'unknown:%s\\n' \"$line\"\n\
+               prompt\n\
+               ;;\n\
+           esac\n\
+         done\n",
+        workspace.display(),
+        lifecycle_log_path.display(),
+        command_log_path.display(),
+        validate_handler
+    );
+    write_script(path, &body);
+}
+
+fn write_http_designer_config(
+    path: &Path,
+    base_path: &Path,
+    work_path: &Path,
+    platform_path: &Path,
+    bind_address: &str,
+    stateful_sessions: bool,
+    max_sessions: usize,
+    idle_ttl_secs: u64,
+) {
+    let config = format!(
+        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: .\nmcp:\n  http:\n    bind_address: {}\n    path: /mcp\n    stateful_sessions: {}\n    max_sessions: {}\n    idle_ttl_secs: {}\ntools:\n  platform:\n    path: '{}'\n",
+        base_path.display(),
+        work_path.display(),
+        bind_address,
+        stateful_sessions,
+        max_sessions,
+        idle_ttl_secs,
+        platform_path.display(),
+    );
+    fs::write(path, config).expect("designer config");
+}
+
+fn write_http_edt_config(
+    path: &Path,
+    base_path: &Path,
+    work_path: &Path,
+    edt_path: &Path,
+    bind_address: &str,
+    max_sessions: usize,
+    idle_ttl_secs: u64,
+    max_concurrent_calls: usize,
+    command_timeout_ms: u64,
+) {
+    let config = format!(
+        "basePath: '{}'\nworkPath: '{}'\nformat: EDT\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: main-edt\nmcp:\n  http:\n    bind_address: {}\n    path: /mcp\n    stateful_sessions: true\n    max_sessions: {}\n    idle_ttl_secs: {}\n  execution:\n    max_concurrent_calls: {}\ntools:\n  edt_cli:\n    path: '{}'\n    command_timeout_ms: {}\n",
+        base_path.display(),
+        work_path.display(),
+        bind_address,
+        max_sessions,
+        idle_ttl_secs,
+        max_concurrent_calls,
+        edt_path.display(),
+        command_timeout_ms,
+    );
+    fs::write(path, config).expect("edt config");
+}
+
+fn setup_http_designer_project(
+    stateful_sessions: bool,
+    max_sessions: usize,
+    idle_ttl_secs: u64,
+) -> (tempfile::TempDir, PathBuf, String) {
+    let dir = tempdir().expect("tempdir");
+    let base_path = dir.path().join("project");
+    let work_path = dir.path().join("work");
+    let platform_dir = dir.path().join("platform");
+    let config_path = dir.path().join("application.yaml");
+    let bind_address = reserve_local_address();
+
+    fs::create_dir_all(&base_path).expect("base");
+    fs::create_dir_all(&work_path).expect("work");
+    write_script(
+        &platform_dir.join("bin").join("1cv8"),
+        "printf 'designer stub\\n'\nexit 0",
+    );
+    write_http_designer_config(
+        &config_path,
+        &base_path,
+        &work_path,
+        &platform_dir,
+        &bind_address,
+        stateful_sessions,
+        max_sessions,
+        idle_ttl_secs,
+    );
+
+    (dir, config_path, format!("http://{bind_address}/mcp"))
+}
+
+fn setup_http_edt_project(
+    validate_handler: &str,
+    max_sessions: usize,
+    idle_ttl_secs: u64,
+    max_concurrent_calls: usize,
+    command_timeout_ms: u64,
+) -> (tempfile::TempDir, PathBuf, String, PathBuf) {
+    let dir = tempdir().expect("tempdir");
+    let base_path = dir.path().join("project");
+    let work_path = dir.path().join("work");
+    let edt_dir = dir.path().join("edt");
+    let edt_path = edt_dir.join("1cedtcli");
+    let command_log = dir.path().join("edt-commands.log");
+    let lifecycle_log = dir.path().join("edt-lifecycle.log");
+    let config_path = dir.path().join("application.yaml");
+    let bind_address = reserve_local_address();
+
+    fs::create_dir_all(base_path.join("main-edt")).expect("main edt");
+    fs::create_dir_all(&work_path).expect("work");
+    fs::create_dir_all(&edt_dir).expect("edt dir");
+    write_interactive_edt_script(
+        &edt_path,
+        &work_path.join("edt-workspace"),
+        &command_log,
+        &lifecycle_log,
+        validate_handler,
+    );
+    write_http_edt_config(
+        &config_path,
+        &base_path,
+        &work_path,
+        &edt_path,
+        &bind_address,
+        max_sessions,
+        idle_ttl_secs,
+        max_concurrent_calls,
+        command_timeout_ms,
+    );
+
+    (
+        dir,
+        config_path,
+        format!("http://{bind_address}/mcp"),
+        lifecycle_log,
+    )
+}
+
+struct HttpServerProcess {
+    child: tokio::process::Child,
+}
+
+impl HttpServerProcess {
+    async fn spawn(config_path: &Path, url: &str) -> Self {
+        let child = tokio::process::Command::new(cargo_bin("v8-test-runner"))
+            .arg("--config")
+            .arg(config_path)
+            .arg("mcp")
+            .arg("serve")
+            .arg("http")
+            .spawn()
+            .expect("spawn http server");
+
+        wait_for_server(url).await;
+        Self { child }
+    }
+
+    async fn shutdown(&mut self) {
+        if let Some(_status) = self.child.try_wait().expect("poll child") {
+            return;
+        }
+        self.child.kill().await.expect("kill child");
+        let _ = self.child.wait().await.expect("wait child");
+    }
+}
+
+async fn wait_for_server(url: &str) {
+    let authority = url
+        .strip_prefix("http://")
+        .expect("http url")
+        .split('/')
+        .next()
+        .expect("authority")
+        .to_owned();
+    for _ in 0..100 {
+        if tokio::net::TcpStream::connect(authority.as_str()).await.is_ok() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("timed out waiting for HTTP server at {url}");
+}
+
+fn extract_sse_json(body: &str) -> Value {
+    for event in body.split("\n\n").filter(|event| !event.trim().is_empty()) {
+        let data = event
+            .lines()
+            .filter_map(|line| line.strip_prefix("data:"))
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !data.is_empty() {
+            return serde_json::from_str(&data).expect("sse json");
+        }
+    }
+
+    panic!("no JSON SSE payload in response: {body}");
+}
+
+async fn initialize_session(client: &reqwest::Client, url: &str) -> (String, Value) {
+    let response = client
+        .post(url)
+        .header("Accept", ACCEPT_BOTH)
+        .header("Content-Type", "application/json")
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "http-test", "version": "1.0.0" }
+            }
+        }))
+        .send()
+        .await
+        .expect("initialize request");
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let session_id = response
+        .headers()
+        .get("Mcp-Session-Id")
+        .expect("session id header")
+        .to_str()
+        .expect("session id")
+        .to_owned();
+    let body = response.text().await.expect("initialize body");
+    (session_id, extract_sse_json(&body))
+}
+
+async fn initialize_stateless(client: &reqwest::Client, url: &str) -> reqwest::Response {
+    client
+        .post(url)
+        .header("Accept", ACCEPT_BOTH)
+        .header("Content-Type", "application/json")
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "http-test", "version": "1.0.0" }
+            }
+        }))
+        .send()
+        .await
+        .expect("stateless initialize request")
+}
+
+async fn send_initialized(client: &reqwest::Client, url: &str, session_id: &str) {
+    let response = client
+        .post(url)
+        .header("Accept", ACCEPT_BOTH)
+        .header("Content-Type", "application/json")
+        .header("Mcp-Session-Id", session_id)
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized"
+        }))
+        .send()
+        .await
+        .expect("initialized notification");
+
+    assert_eq!(response.status(), reqwest::StatusCode::ACCEPTED);
+}
+
+async fn tools_list(client: &reqwest::Client, url: &str, session_id: &str) -> reqwest::Response {
+    client
+        .post(url)
+        .header("Accept", ACCEPT_BOTH)
+        .header("Content-Type", "application/json")
+        .header("Mcp-Session-Id", session_id)
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list"
+        }))
+        .send()
+        .await
+        .expect("tools/list request")
+}
+
+async fn call_tool(
+    client: &reqwest::Client,
+    url: &str,
+    session_id: &str,
+    tool_name: &str,
+    arguments: Value,
+    request_id: u64,
+) -> reqwest::Response {
+    client
+        .post(url)
+        .header("Accept", ACCEPT_BOTH)
+        .header("Content-Type", "application/json")
+        .header("Mcp-Session-Id", session_id)
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "tools/call",
+            "params": {
+                "name": tool_name,
+                "arguments": arguments
+            }
+        }))
+        .send()
+        .await
+        .expect("tools/call request")
+}
+
+async fn eventually_status<F, Fut>(mut request: F, expected: reqwest::StatusCode)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = reqwest::Response>,
+{
+    for _ in 0..100 {
+        let response = request().await;
+        if response.status() == expected {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    panic!("timed out waiting for status {expected}");
+}
+
+#[test]
+fn mcp_http_missing_config_reports_error_on_stderr() {
+    let output = std::process::Command::new(cargo_bin("v8-test-runner"))
+        .args([
+            "--config",
+            "/definitely/missing/application.yaml",
+            "mcp",
+            "serve",
+            "http",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("config"));
+    assert!(stderr.contains("not found"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_http_initialize_reuses_session_and_lists_tools() {
+    let (_dir, config_path, url) = setup_http_designer_project(true, 4, 900);
+    let mut server = HttpServerProcess::spawn(&config_path, &url).await;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .expect("http client");
+
+    let (session_id, initialize_payload) = initialize_session(&client, &url).await;
+    assert_eq!(initialize_payload["jsonrpc"], "2.0");
+    assert!(initialize_payload["result"]["capabilities"]["tools"].is_object());
+
+    send_initialized(&client, &url, &session_id).await;
+    let list_response = tools_list(&client, &url, &session_id).await;
+    assert_eq!(list_response.status(), reqwest::StatusCode::OK);
+    let list_payload = extract_sse_json(&list_response.text().await.expect("tools/list body"));
+    let mut names = list_payload["result"]["tools"]
+        .as_array()
+        .expect("tools array")
+        .iter()
+        .map(|tool| tool["name"].as_str().expect("tool name").to_owned())
+        .collect::<Vec<_>>();
+    names.sort();
+    assert_eq!(
+        names,
+        vec![
+            "build_project",
+            "check_syntax_designer_config",
+            "check_syntax_designer_modules",
+            "check_syntax_edt",
+            "dump_config",
+            "launch_app",
+            "run_all_tests",
+            "run_module_tests",
+        ]
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_http_missing_and_expired_sessions_are_deterministic() {
+    let (_dir, config_path, url) = setup_http_designer_project(true, 4, 1);
+    let mut server = HttpServerProcess::spawn(&config_path, &url).await;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .expect("http client");
+
+    let missing_session_post = client
+        .post(&url)
+        .header("Accept", ACCEPT_BOTH)
+        .header("Content-Type", "application/json")
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list"
+        }))
+        .send()
+        .await
+        .expect("missing session post");
+    assert_eq!(missing_session_post.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    let missing_session_get = client
+        .get(&url)
+        .header("Accept", "text/event-stream")
+        .send()
+        .await
+        .expect("missing session get");
+    assert_eq!(missing_session_get.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    let (session_id, _) = initialize_session(&client, &url).await;
+    send_initialized(&client, &url, &session_id).await;
+    tokio::time::sleep(Duration::from_millis(2_000)).await;
+
+    eventually_status(
+        || {
+            let client = client.clone();
+            let url = url.clone();
+            let session_id = session_id.clone();
+            async move {
+                client
+                    .post(url)
+                    .header("Accept", ACCEPT_BOTH)
+                    .header("Content-Type", "application/json")
+                    .header("Mcp-Session-Id", session_id)
+                    .json(&json!({
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/list"
+                    }))
+                    .send()
+                    .await
+                    .expect("expired session request")
+            }
+        },
+        reqwest::StatusCode::NOT_FOUND,
+    )
+    .await;
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_http_delete_closes_session_and_reuse_returns_not_found() {
+    let (_dir, config_path, url) = setup_http_designer_project(true, 4, 900);
+    let mut server = HttpServerProcess::spawn(&config_path, &url).await;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .expect("http client");
+
+    let (session_id, _) = initialize_session(&client, &url).await;
+    send_initialized(&client, &url, &session_id).await;
+
+    let delete_response = client
+        .delete(&url)
+        .header("Mcp-Session-Id", &session_id)
+        .send()
+        .await
+        .expect("delete session");
+    assert_eq!(delete_response.status(), reqwest::StatusCode::ACCEPTED);
+
+    let stale_response = tools_list(&client, &url, &session_id).await;
+    assert_eq!(stale_response.status(), reqwest::StatusCode::NOT_FOUND);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_http_stateless_mode_stays_post_only_and_validates_headers() {
+    let (_dir, config_path, url) = setup_http_designer_project(false, 4, 900);
+    let mut server = HttpServerProcess::spawn(&config_path, &url).await;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .expect("http client");
+
+    let initialize_response = initialize_stateless(&client, &url).await;
+    assert_eq!(initialize_response.status(), reqwest::StatusCode::OK);
+    assert!(initialize_response.headers().get("Mcp-Session-Id").is_none());
+
+    let wrong_accept = client
+        .post(&url)
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/json")
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "http-test", "version": "1.0.0" }
+            }
+        }))
+        .send()
+        .await
+        .expect("wrong accept");
+    assert_eq!(wrong_accept.status(), reqwest::StatusCode::NOT_ACCEPTABLE);
+
+    let wrong_content_type = client
+        .post(&url)
+        .header("Accept", ACCEPT_BOTH)
+        .header("Content-Type", "text/plain")
+        .body("not-json")
+        .send()
+        .await
+        .expect("wrong content type");
+    assert_eq!(
+        wrong_content_type.status(),
+        reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE
+    );
+
+    let get_response = client
+        .get(&url)
+        .header("Accept", "text/event-stream")
+        .send()
+        .await
+        .expect("stateless get");
+    assert_eq!(get_response.status(), reqwest::StatusCode::METHOD_NOT_ALLOWED);
+
+    let delete_response = client.delete(&url).send().await.expect("stateless delete");
+    assert_eq!(delete_response.status(), reqwest::StatusCode::METHOD_NOT_ALLOWED);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_http_max_sessions_returns_503_and_non_initialize_stays_400() {
+    let (_dir, config_path, url) = setup_http_designer_project(true, 1, 900);
+    let mut server = HttpServerProcess::spawn(&config_path, &url).await;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .expect("http client");
+
+    let (session_id, _) = initialize_session(&client, &url).await;
+
+    let overload = initialize_stateless(&client, &url).await;
+    assert_eq!(overload.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        overload.text().await.expect("overload body"),
+        "Service Unavailable: MCP session capacity exhausted"
+    );
+
+    let non_initialize = client
+        .post(&url)
+        .header("Accept", ACCEPT_BOTH)
+        .header("Content-Type", "application/json")
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "tools/list"
+        }))
+        .send()
+        .await
+        .expect("non initialize");
+    assert_eq!(non_initialize.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    let delete_response = client
+        .delete(&url)
+        .header("Mcp-Session-Id", &session_id)
+        .send()
+        .await
+        .expect("delete session");
+    assert_eq!(delete_response.status(), reqwest::StatusCode::ACCEPTED);
+
+    let recovered = initialize_stateless(&client, &url).await;
+    assert_eq!(recovered.status(), reqwest::StatusCode::OK);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_http_parallel_initialize_respects_max_sessions() {
+    let (_dir, config_path, url) = setup_http_designer_project(true, 1, 900);
+    let mut server = HttpServerProcess::spawn(&config_path, &url).await;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .expect("http client");
+
+    let first = initialize_stateless(&client, &url);
+    let second = initialize_stateless(&client, &url);
+    let (first, second) = tokio::join!(first, second);
+    let statuses = [first.status(), second.status()];
+
+    assert!(statuses.contains(&reqwest::StatusCode::OK));
+    assert!(statuses.contains(&reqwest::StatusCode::SERVICE_UNAVAILABLE));
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_http_reuses_one_edt_process_across_sessions_and_shares_capacity() {
+    let validate_handler = "printf 'start\\n' >> \"$lifecycle_log\"\nif [ -n \"$out\" ]; then : > \"$out\"; fi\nsleep 0.15\nprintf 'finish\\n' >> \"$lifecycle_log\"\nprompt";
+    let (_dir, config_path, url, lifecycle_log) =
+        setup_http_edt_project(validate_handler, 4, 900, 1, 1000);
+    let mut server = HttpServerProcess::spawn(&config_path, &url).await;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .expect("http client");
+
+    let (session_a, _) = initialize_session(&client, &url).await;
+    let (session_b, _) = initialize_session(&client, &url).await;
+    send_initialized(&client, &url, &session_a).await;
+    send_initialized(&client, &url, &session_b).await;
+
+    let first = call_tool(
+        &client,
+        &url,
+        &session_a,
+        "check_syntax_edt",
+        json!({ "projectName": "main" }),
+        10,
+    );
+    let second = call_tool(
+        &client,
+        &url,
+        &session_b,
+        "check_syntax_edt",
+        json!({ "projectName": "main" }),
+        11,
+    );
+    let (first, second) = tokio::join!(first, second);
+    assert_eq!(first.status(), reqwest::StatusCode::OK);
+    assert_eq!(second.status(), reqwest::StatusCode::OK);
+    let first_payload = extract_sse_json(&first.text().await.expect("first edt body"));
+    let second_payload = extract_sse_json(&second.text().await.expect("second edt body"));
+    assert_eq!(
+        first_payload["result"]["structuredContent"]["status"],
+        "success"
+    );
+    assert_eq!(
+        second_payload["result"]["structuredContent"]["status"],
+        "success"
+    );
+
+    let lifecycle = fs::read_to_string(&lifecycle_log).expect("lifecycle log");
+    let lines = lifecycle.lines().collect::<Vec<_>>();
+    assert_eq!(lines.first().copied(), Some("startup"));
+    assert_eq!(lines[1..], ["start", "finish", "start", "finish"]);
+
+    server.shutdown().await;
+}

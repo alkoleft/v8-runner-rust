@@ -12,7 +12,7 @@ pub mod port;
 pub mod request;
 /// MCP-facing response DTOs.
 pub mod response;
-/// MCP stdio server transport adapter.
+/// MCP stdio and HTTP transport adapters.
 pub mod server;
 /// MCP-facing service layer over transport-neutral use cases.
 pub mod service;

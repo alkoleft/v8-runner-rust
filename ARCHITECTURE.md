@@ -8,7 +8,7 @@
 2. `config` loads and validates YAML configuration.
 3. `domain` defines structured result types for commands plus shared execution step structs.
 4. `use_cases` owns transport-neutral requests, `ExecutionContext`, structured failures, and business orchestration.
-5. `mcp` now contains both the MCP-facing service boundary and the stdio transport adapter: it maps raw tool inputs into use-case requests, returns MCP-specific DTOs plus structured business/internal failures, and publishes the live stdio tool server.
+5. `mcp` now contains both the MCP-facing service boundary and the stdio/HTTP transport adapters: it maps raw tool inputs into use-case requests, returns MCP-specific DTOs plus structured business/internal failures, and publishes the live MCP tool servers.
 6. `platform` contains process execution, utility discovery, connection argument building, and low-level 1C adapters.
 7. `output` contains CLI presentation primitives such as `Presenter` and `Envelope`.
 8. `change_detection`, `parsers`, and `support` provide shared subsystems and utilities.
@@ -34,7 +34,7 @@ This boundary is designed so Wave 2 can add an EDT-specific interactive runner w
 The CLI/runtime boundary is now split explicitly:
 
 - `app.rs` owns bootstrap concerns only: config loading, logging setup, log cleanup, and top-level error envelopes for pre-command failures.
-- `app.rs` now also branches early for `mcp serve stdio`, because that path must bypass CLI presenters and keep `stdout` reserved for protocol traffic.
+- `app.rs` now also branches early for `mcp serve stdio` and `mcp serve http`, because those paths must bypass CLI presenters and run with MCP-specific bootstrap/logging behavior.
 - `cli::execute` converts `clap` args into transport-neutral request structs and renders command success/failure output.
 - `use_cases::{request,context,result}` define the transport-neutral contract that both CLI and future MCP adapters can consume.
 - `use_cases/*.rs` no longer depend on `clap`, `Presenter`, or `Envelope`.
@@ -43,13 +43,13 @@ This keeps current CLI behavior intact while reserving a stable internal API for
 
 ## Configuration Surface
 
-The typed config model now splits MCP knobs into already-wired stdio guardrails and future HTTP/session settings:
+The typed config model now splits MCP knobs into active HTTP/session settings and shared execution guardrails:
 
-- `mcp.http` still defines listener/session defaults reserved for the future HTTP transport (`bind_address`, `path`, `stateful_sessions`, `max_sessions`, `idle_ttl_secs`).
-- `mcp.execution` already defines active stdio guardrails (`max_concurrent_calls`, `shutdown_grace_period_secs`).
+- `mcp.http` defines the live HTTP listener and session behavior (`bind_address`, `path`, `stateful_sessions`, `max_sessions`, `idle_ttl_secs`).
+- `mcp.execution` defines shared admission/shutdown limits (`max_concurrent_calls`, `shutdown_grace_period_secs`) reused by both stdio and HTTP.
 - `tools.edt_cli` now also carries `startup_timeout_ms` and `command_timeout_ms`; the shared MCP EDT actor reuses these knobs for startup and bounded syntax execution.
 
-This keeps the config surface stable while letting Stage 2 stdio semantics ship without waiting for the later shared EDT actor.
+This keeps the config surface stable while allowing both MCP transports to share the same execution/session infrastructure.
 
 ## MCP Boundary
 
@@ -60,8 +60,10 @@ The MCP adapter no longer needs to talk to `cli::execute` or to reuse domain ser
 - `mcp::response` defines MCP-specific response DTOs, including nested step/test/issue structs that are decoupled from domain serialization details.
 - `mcp::error` splits failures into `McpBusinessFailure<T>` for structured tool responses and `McpInternalError` for adapter/runtime misuse that must not be surfaced as business payloads.
 - `mcp::tool_result` defines the structured transport payload returned by MCP tools for success vs business failure outcomes.
-- `mcp::server::McpStdioServer` is the live rmcp stdio adapter. It exposes tools-only capabilities, maps incoming `camelCase` params into MCP DTOs, gates every tool call through a global semaphore, calls the synchronous `McpService` via `tokio::task::spawn_blocking` for non-EDT tools, and routes live `check_syntax_edt` through `mcp::edt_syntax` plus the shared `EdtSessionManager`.
-- The stdio adapter enforces an absolute deadline for bounded EDT syntax calls: queue wait plus actor-side baseline/reset plus the interactive `validate` command all consume the same `tools.edt_cli.command_timeout_ms` budget.
+- `mcp::server::McpToolServer` is the shared rmcp handler used by both transports. It exposes tools-only capabilities, maps incoming `camelCase` params into MCP DTOs, gates every tool call through a global semaphore, calls the synchronous `McpService` via `tokio::task::spawn_blocking` for non-EDT tools, and routes live `check_syntax_edt` through `mcp::edt_syntax` plus the shared `EdtSessionManager`.
+- The stdio adapter still reserves `stdout` for MCP frames and enforces an absolute deadline for bounded EDT syntax calls: queue wait plus actor-side baseline/reset plus the interactive `validate` command all consume the same `tools.edt_cli.command_timeout_ms` budget.
+- The HTTP adapter is built on `axum` + `rmcp::transport::StreamableHttpService`. A thin wrapper around the rmcp service enforces transport-level overload semantics for new `initialize` requests (`503` when `max_sessions` is exhausted), translates stateful non-`initialize` POSTs without `Mcp-Session-Id` into deterministic `400`, and eagerly releases tracked capacity after `DELETE`.
+- HTTP session capacity is tracked via atomic reservation (`reserve -> delegate initialize -> confirm/release`) plus lazy pruning of expired rmcp sessions, so `max_sessions` remains correct across explicit close, TTL expiry, and failed initializes.
 - Client cancellation returns early for queued and running MCP requests. Detached one-shot work retains the server-side permit until completion, while live `check_syntax_edt` retains both the server-side permit and the shared actor's internal admission slot until the in-flight interactive command finishes.
 - MCP normalization is finalized in the service layer: dump-mode defaulting, launch alias mapping, `allExtensions` tri-state inference, and MCP-only pre-validation for syntax flag dependencies all live there instead of leaking into transport-neutral use cases.
 - The shared actor applies a deterministic baseline contract before each live EDT syntax command: `cd <workPath/edt-workspace>` followed by `cd`, which must echo the same workspace path. Request-budget exhaustion during this pre-dispatch phase stays `QueuedTimeout`; reset/probe faults force session restart and queue drain.
