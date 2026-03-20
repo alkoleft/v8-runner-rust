@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use thiserror::Error;
 
@@ -22,6 +23,7 @@ pub struct EdtDsl<'a> {
     binary: PathBuf,
     workspace: PathBuf,
     runner: &'a dyn ProcessRunner,
+    timeout: Option<Duration>,
 }
 
 impl<'a> EdtDsl<'a> {
@@ -31,7 +33,14 @@ impl<'a> EdtDsl<'a> {
             binary,
             workspace,
             runner,
+            timeout: None,
         }
+    }
+
+    /// Overrides the timeout used for one-shot EDT process execution.
+    pub const fn with_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.timeout = timeout;
+        self
     }
 
     /// `-command export --project <source> --configuration-files <target>`
@@ -86,17 +95,19 @@ impl<'a> EdtDsl<'a> {
             let _ = std::fs::remove_file(path);
         }
 
-        let process = self
-            .runner
-            .run(&ProcessRequest {
-                program: self.binary.clone(),
-                args: args.to_vec(),
-                workdir: None,
-                stdout_log_path: None,
-                stderr_log_path: None,
-                startup_probe: None,
-            })
-            .map_err(EdtError::Spawn)?;
+        let request = ProcessRequest {
+            program: self.binary.clone(),
+            args: args.to_vec(),
+            workdir: None,
+            stdout_log_path: None,
+            stderr_log_path: None,
+            startup_probe: None,
+        };
+        let process = match self.timeout {
+            Some(timeout) => self.runner.run_with_timeout(&request, timeout),
+            None => self.runner.run(&request),
+        }
+        .map_err(EdtError::Spawn)?;
 
         let (platform_log_path, platform_log, platform_log_read_error) = if let Some(path) = out_log
         {
@@ -127,9 +138,13 @@ impl<'a> EdtDsl<'a> {
 #[cfg(test)]
 mod tests {
     use super::EdtDsl;
-    use crate::platform::process::{ProcessExecutor, ProcessRunner};
+    use crate::platform::process::{
+        ProcessError, ProcessExecutor, ProcessRequest, ProcessResult, ProcessRunner, SpawnResult,
+    };
     use std::fs;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
     use tempfile::tempdir;
 
     #[cfg(unix)]
@@ -254,5 +269,53 @@ mod tests {
 
         assert_eq!(result.process.exit_code, 0);
         assert!(workspace.is_dir());
+    }
+
+    #[derive(Default)]
+    struct RecordingRunner {
+        timeout: Arc<Mutex<Option<Duration>>>,
+    }
+
+    impl ProcessRunner for RecordingRunner {
+        fn run(&self, _request: &ProcessRequest) -> Result<ProcessResult, ProcessError> {
+            Ok(ProcessResult {
+                exit_code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+                stdout_log_path: None,
+                stderr_log_path: None,
+            })
+        }
+
+        fn run_with_timeout(
+            &self,
+            request: &ProcessRequest,
+            timeout: Duration,
+        ) -> Result<ProcessResult, ProcessError> {
+            *self.timeout.lock().expect("timeout lock") = Some(timeout);
+            self.run(request)
+        }
+
+        fn spawn(&self, _request: &ProcessRequest) -> Result<SpawnResult, ProcessError> {
+            panic!("spawn must not be called in EDT DSL tests")
+        }
+    }
+
+    #[test]
+    fn validate_project_uses_configured_timeout() {
+        let runner = RecordingRunner::default();
+        let dsl = EdtDsl::new(
+            PathBuf::from("/tmp/1cedtcli"),
+            PathBuf::from("/tmp/ws"),
+            &runner as &dyn ProcessRunner,
+        )
+        .with_timeout(Some(Duration::from_secs(7)));
+
+        let _ = dsl.validate_project(Path::new("/tmp/project"), Path::new("/tmp/log"));
+
+        assert_eq!(
+            *runner.timeout.lock().expect("timeout lock"),
+            Some(Duration::from_secs(7))
+        );
     }
 }

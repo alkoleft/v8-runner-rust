@@ -29,6 +29,7 @@ regex = "1"
 uuid = { version = "1", features = ["v4"] }
 rmcp = { version = "1.2.0", features = ["client", "transport-child-process", "transport-io"] }
 tokio = { version = "1", features = ["io-std", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
+tokio-util = "0.7"
 
 [dev-dependencies]
 assert_cmd = "2"

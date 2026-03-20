@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 /// Identifies the logical command being executed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandName {
@@ -37,12 +39,17 @@ pub enum ExecutionTransport {
 pub struct ExecutionContext {
     command: CommandName,
     transport: ExecutionTransport,
+    edt_timeout: Option<Duration>,
 }
 
 impl ExecutionContext {
     /// Creates an execution context for the specified command and transport.
     pub const fn new(command: CommandName, transport: ExecutionTransport) -> Self {
-        Self { command, transport }
+        Self {
+            command,
+            transport,
+            edt_timeout: None,
+        }
     }
 
     /// Creates a CLI execution context for the specified command.
@@ -69,20 +76,39 @@ impl ExecutionContext {
     pub const fn transport(self) -> ExecutionTransport {
         self.transport
     }
+
+    /// Attaches an EDT subprocess timeout budget to the execution context.
+    pub const fn with_edt_timeout(self, edt_timeout: Option<Duration>) -> Self {
+        Self {
+            command: self.command,
+            transport: self.transport,
+            edt_timeout,
+        }
+    }
+
+    /// Returns the EDT subprocess timeout budget for this execution.
+    pub const fn edt_timeout(self) -> Option<Duration> {
+        self.edt_timeout
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::{CommandName, ExecutionContext, ExecutionTransport};
 
     #[test]
     fn constructs_mcp_contexts() {
-        let stdio = ExecutionContext::mcp_stdio(CommandName::Build);
+        let stdio = ExecutionContext::mcp_stdio(CommandName::Build)
+            .with_edt_timeout(Some(Duration::from_secs(5)));
         let http = ExecutionContext::mcp_http(CommandName::Test);
 
         assert_eq!(stdio.command(), CommandName::Build);
         assert_eq!(stdio.transport(), ExecutionTransport::McpStdio);
+        assert_eq!(stdio.edt_timeout(), Some(Duration::from_secs(5)));
         assert_eq!(http.command(), CommandName::Test);
         assert_eq!(http.transport(), ExecutionTransport::McpHttp);
+        assert_eq!(http.edt_timeout(), None);
     }
 }

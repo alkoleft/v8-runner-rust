@@ -15,7 +15,7 @@ use crate::platform::result::PlatformCommandResult;
 use crate::platform::utilities::PlatformUtilities;
 use crate::support::error::AppError;
 use crate::support::temp::platform_logs_dir;
-use crate::use_cases::context::ExecutionContext;
+use crate::use_cases::context::{CommandName, ExecutionContext};
 use crate::use_cases::request::{
     DesignerConfigSyntaxRequest as DesignerConfigSyntaxArgs,
     DesignerModulesSyntaxRequest as DesignerModulesSyntaxArgs, SyntaxRequest as SyntaxArgs,
@@ -40,7 +40,7 @@ pub fn execute(
         transport = ?context.transport(),
         "executing syntax use case"
     );
-    run_syntax(config, args)
+    run_syntax_with_context(context, config, args)
 }
 
 type SyntaxExecutionFailure = UseCaseFailure<SyntaxCheckResult>;
@@ -67,9 +67,18 @@ impl DesignerCommandKind {
 }
 
 fn run_syntax(config: &AppConfig, args: &SyntaxArgs) -> UseCaseResult<SyntaxCheckResult> {
+    let context = ExecutionContext::cli(CommandName::Syntax);
+    run_syntax_with_context(&context, config, args)
+}
+
+fn run_syntax_with_context(
+    context: &ExecutionContext,
+    config: &AppConfig,
+    args: &SyntaxArgs,
+) -> UseCaseResult<SyntaxCheckResult> {
     let started = Instant::now();
     if let SyntaxTarget::Edt { projects } = &args.target {
-        return run_edt_syntax(config, projects, started);
+        return run_edt_syntax(context, config, projects, started);
     }
 
     let invocation = match normalize_invocation(args) {
@@ -387,6 +396,7 @@ fn validate_edt_supported_matrix(config: &AppConfig) -> Option<AppError> {
 }
 
 fn run_edt_syntax(
+    context: &ExecutionContext,
     config: &AppConfig,
     projects: &[String],
     started: Instant,
@@ -479,7 +489,8 @@ fn run_edt_syntax(
         location.path,
         config.work_path.join("edt-workspace"),
         runner,
-    );
+    )
+    .with_timeout(context.edt_timeout());
     let mut issues = Vec::new();
     let mut status = SyntaxCheckStatus::Clean;
     let mut exit_code = 0;
@@ -536,11 +547,11 @@ fn run_edt_syntax(
             .map(edt_validation::parse)
             .unwrap_or_default();
         let project_status = edt_status_from_result(result.process.exit_code, &project_issues);
-        status = combine_status(status, project_status.clone());
+        status = combine_status(status, project_status);
 
-        if project_status == SyntaxCheckStatus::ToolFailed {
-            exit_code = result.process.exit_code;
-        } else if exit_code == 0 && result.process.exit_code != 0 {
+        if result.process.exit_code != 0
+            && (project_status == SyntaxCheckStatus::ToolFailed || exit_code == 0)
+        {
             exit_code = result.process.exit_code;
         }
 
@@ -569,7 +580,7 @@ fn run_edt_syntax(
         check_name: "edt".to_owned(),
         summary: summarize_issues(&issues),
         issues,
-        duration_ms: started.elapsed().as_millis() as u64,
+        duration_ms: elapsed_millis(started),
         platform_log_path: single_platform_log_path,
         stderr,
         log_read_warning,
@@ -706,7 +717,7 @@ fn build_result(
         check_name: check_name.to_owned(),
         summary: summarize_issues(&issues),
         issues,
-        duration_ms: started.elapsed().as_millis() as u64,
+        duration_ms: elapsed_millis(started),
         platform_log_path,
         stderr,
         log_read_warning,
@@ -729,7 +740,7 @@ fn failed_result(
         check_name: check_name.to_owned(),
         summary: summarize_issues(&issues),
         issues,
-        duration_ms: started.elapsed().as_millis() as u64,
+        duration_ms: elapsed_millis(started),
         platform_log_path,
         stderr,
         log_read_warning,
@@ -742,6 +753,10 @@ fn status_from_exit_code(exit_code: i32) -> SyntaxCheckStatus {
         101 => SyntaxCheckStatus::IssuesFound,
         _ => SyntaxCheckStatus::ToolFailed,
     }
+}
+
+fn elapsed_millis(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 fn summarize_issues(issues: &[Issue]) -> SyntaxIssueSummary {
@@ -842,7 +857,7 @@ fn fallback_edt_issue(
 mod tests {
     use super::{
         modules_has_modes, normalize_config_flags, normalize_modules_flags, run_syntax,
-        status_from_exit_code,
+        run_syntax_with_context, status_from_exit_code,
     };
     use crate::config::model::{
         AppConfig, BuildConfig, BuilderBackend, SourceFormat, SourceSetConfig, SourceSetPurpose,
@@ -850,6 +865,7 @@ mod tests {
     };
     use crate::domain::issue::Issue;
     use crate::domain::syntax::SyntaxCheckStatus;
+    use crate::use_cases::context::{CommandName, ExecutionContext};
     use crate::use_cases::request::{
         DesignerConfigSyntaxRequest as DesignerConfigSyntaxArgs,
         DesignerModulesSyntaxRequest as DesignerModulesSyntaxArgs, SyntaxRequest as SyntaxArgs,
@@ -859,6 +875,7 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
+    use std::time::Duration;
     use tempfile::tempdir;
 
     fn make_executable(path: &Path) {
@@ -1242,6 +1259,40 @@ mod tests {
 
         assert_eq!(result.status, SyntaxCheckStatus::ToolFailed);
         assert_eq!(result.exit_code, 17);
+    }
+
+    #[test]
+    fn syntax_edt_uses_mcp_timeout_budget_for_subprocess() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let main_dir = base.join("main-edt");
+        let ext_dir = base.join("ext-edt");
+        let binary = dir.path().join("edt").join("1cedtcli");
+        fs::create_dir_all(&work).expect("work");
+        fs::create_dir_all(&main_dir).expect("main");
+        fs::create_dir_all(&ext_dir).expect("ext");
+        write_script(&binary, "sleep 1\nexit 0");
+        let mut config = sample_edt_config(&base, &work, &binary);
+        config.tools.edt_cli.command_timeout_ms = 20;
+        let args = SyntaxArgs {
+            target: SyntaxTarget::Edt {
+                projects: vec!["main".to_owned()],
+            },
+        };
+        let context = ExecutionContext::mcp_stdio(CommandName::Syntax)
+            .with_edt_timeout(Some(Duration::from_millis(20)));
+
+        let failure =
+            run_syntax_with_context(&context, &config, &args).expect_err("expected timeout");
+        let message = failure.error.to_string();
+        let payload = failure
+            .payload
+            .expect("syntax EDT failures should preserve a structured payload");
+
+        assert!(message.contains("timed out"));
+        assert_eq!(payload.status, SyntaxCheckStatus::ToolFailed);
+        assert_eq!(payload.exit_code, -1);
     }
 
     #[test]

@@ -6,8 +6,13 @@ use rmcp::{
     model::{CallToolResult, ServerCapabilities, ServerInfo},
     tool, tool_handler, tool_router, ErrorData, ServerHandler, ServiceExt,
 };
+use serde_json::json;
 use thiserror::Error;
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::task::JoinHandle;
+use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
+use tracing::error;
 
 use crate::config::model::AppConfig;
 use crate::mcp::context::McpCallContext;
@@ -22,6 +27,76 @@ use crate::mcp::service::McpService;
 use crate::mcp::tool_result::McpToolResult;
 
 type SharedMcpUseCasePort = Arc<dyn McpUseCasePort + Send + Sync>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum McpTool {
+    RunAllTests,
+    RunModuleTests,
+    BuildProject,
+    DumpConfig,
+    LaunchApp,
+    CheckSyntaxEdt,
+    CheckSyntaxDesignerConfig,
+    CheckSyntaxDesignerModules,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunningInterruptPolicy {
+    AwaitCompletion,
+    ReturnEarly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExecutionStage {
+    Queued,
+    Running,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ErrorReason {
+    Cancelled,
+    Timeout,
+    JoinFailure,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ExecutionPolicy {
+    timeout: Option<Duration>,
+    running_interrupt: RunningInterruptPolicy,
+}
+
+impl ExecutionPolicy {
+    const fn standard() -> Self {
+        Self {
+            timeout: None,
+            running_interrupt: RunningInterruptPolicy::AwaitCompletion,
+        }
+    }
+
+    const fn bounded(timeout: Duration) -> Self {
+        Self {
+            timeout: Some(timeout),
+            running_interrupt: RunningInterruptPolicy::ReturnEarly,
+        }
+    }
+}
+
+impl McpTool {
+    fn execution_policy(self, config: &AppConfig) -> ExecutionPolicy {
+        match self {
+            Self::CheckSyntaxEdt => ExecutionPolicy::bounded(Duration::from_millis(
+                config.tools.edt_cli.command_timeout_ms,
+            )),
+            Self::RunAllTests
+            | Self::RunModuleTests
+            | Self::BuildProject
+            | Self::DumpConfig
+            | Self::LaunchApp
+            | Self::CheckSyntaxDesignerConfig
+            | Self::CheckSyntaxDesignerModules => ExecutionPolicy::standard(),
+        }
+    }
+}
 
 /// Bootstrap errors returned by the MCP stdio server.
 #[derive(Debug, Error)]
@@ -90,8 +165,15 @@ impl McpStdioServer {
 
     async fn execute_tool<TRequest, TResponse>(
         &self,
+        tool: McpTool,
         request: TRequest,
-        method: impl FnOnce(Arc<AppConfig>, SharedMcpUseCasePort, TRequest) -> McpServiceResult<TResponse>
+        cancellation: CancellationToken,
+        method: impl FnOnce(
+                Arc<AppConfig>,
+                SharedMcpUseCasePort,
+                McpCallContext,
+                TRequest,
+            ) -> McpServiceResult<TResponse>
             + Send
             + 'static,
     ) -> Result<CallToolResult, ErrorData>
@@ -99,31 +181,91 @@ impl McpStdioServer {
         TRequest: Send + 'static,
         TResponse: serde::Serialize + Send + 'static,
     {
-        let _permit = self
-            .concurrency_limit
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+        let policy = tool.execution_policy(self.config.as_ref());
+        let timeout = policy.timeout;
+        let deadline = timeout.map(|value| Instant::now() + value);
+        let permit = self
+            .acquire_execution_slot(cancellation.clone(), deadline, timeout)
+            .await?;
+        let remaining_timeout = remaining_timeout(deadline);
+        if cancellation.is_cancelled() {
+            return Err(execution_error(
+                ErrorReason::Cancelled,
+                ExecutionStage::Queued,
+                timeout,
+            ));
+        }
+        if timeout.is_some() && remaining_timeout.is_some_and(|value| value.is_zero()) {
+            return Err(execution_error(
+                ErrorReason::Timeout,
+                ExecutionStage::Queued,
+                timeout,
+            ));
+        }
+
         let config = self.config.clone();
         let port = self.port.clone();
-        let result = tokio::task::spawn_blocking(move || method(config, port, request))
-            .await
-            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+        let call_context = McpCallContext::stdio().with_edt_timeout(remaining_timeout);
+        let mut handle =
+            tokio::task::spawn_blocking(move || method(config, port, call_context, request));
 
-        match result {
-            Ok(response) => Ok(CallToolResult::structured(
-                serde_json::to_value(McpToolResult::success(response))
-                    .map_err(|error| ErrorData::internal_error(error.to_string(), None))?,
-            )),
-            Err(crate::mcp::error::McpServiceError::Business(failure)) => {
-                Ok(CallToolResult::structured_error(
-                    serde_json::to_value(McpToolResult::business_failure(failure))
-                        .map_err(|error| ErrorData::internal_error(error.to_string(), None))?,
-                ))
+        if matches!(
+            policy.running_interrupt,
+            RunningInterruptPolicy::AwaitCompletion
+        ) {
+            let result = handle.await.map_err(|_| {
+                execution_error(ErrorReason::JoinFailure, ExecutionStage::Running, timeout)
+            })?;
+            return map_tool_result(result);
+        }
+
+        tokio::select! {
+            result = &mut handle => {
+                let result = result
+                    .map_err(|_| execution_error(ErrorReason::JoinFailure, ExecutionStage::Running, timeout))?;
+                map_tool_result(result)
             }
-            Err(crate::mcp::error::McpServiceError::Internal(error)) => {
-                Err(internal_error_to_mcp(error))
+            _ = cancellation.cancelled() => {
+                reap_detached_call(handle, permit);
+                Err(execution_error(ErrorReason::Cancelled, ExecutionStage::Running, timeout))
+            }
+            _ = wait_for_deadline(deadline), if deadline.is_some() => {
+                reap_detached_call(handle, permit);
+                Err(execution_error(ErrorReason::Timeout, ExecutionStage::Running, timeout))
+            }
+        }
+    }
+
+    async fn acquire_execution_slot(
+        &self,
+        cancellation: CancellationToken,
+        deadline: Option<Instant>,
+        timeout: Option<Duration>,
+    ) -> Result<OwnedSemaphorePermit, ErrorData> {
+        let acquire = self.concurrency_limit.clone().acquire_owned();
+        tokio::pin!(acquire);
+
+        match deadline {
+            Some(deadline) => {
+                tokio::select! {
+                    _ = cancellation.cancelled() => {
+                        Err(execution_error(ErrorReason::Cancelled, ExecutionStage::Queued, timeout))
+                    }
+                    _ = tokio::time::sleep_until(deadline) => {
+                        Err(execution_error(ErrorReason::Timeout, ExecutionStage::Queued, timeout))
+                    }
+                    permit = &mut acquire => permit
+                        .map_err(|error| ErrorData::internal_error(error.to_string(), None)),
+                }
+            }
+            None => {
+                tokio::select! {
+                    _ = cancellation.cancelled() => {
+                        Err(execution_error(ErrorReason::Cancelled, ExecutionStage::Queued, timeout))
+                    }
+                    permit = &mut acquire => permit
+                        .map_err(|error| ErrorData::internal_error(error.to_string(), None)),
+                }
             }
         }
     }
@@ -135,11 +277,17 @@ impl McpStdioServer {
     async fn run_all_tests(
         &self,
         Parameters(request): Parameters<McpRunAllTestsRequest>,
+        cancellation: CancellationToken,
     ) -> Result<CallToolResult, ErrorData> {
-        self.execute_tool(request, |config, port, request| {
-            let service = McpService::with_port(config.as_ref(), port);
-            service.run_all_tests(McpCallContext::stdio(), &request)
-        })
+        self.execute_tool(
+            McpTool::RunAllTests,
+            request,
+            cancellation,
+            |config, port, call_context, request| {
+                let service = McpService::with_port(config.as_ref(), port);
+                service.run_all_tests(call_context, &request)
+            },
+        )
         .await
     }
 
@@ -147,11 +295,17 @@ impl McpStdioServer {
     async fn run_module_tests(
         &self,
         Parameters(request): Parameters<McpRunModuleTestsRequest>,
+        cancellation: CancellationToken,
     ) -> Result<CallToolResult, ErrorData> {
-        self.execute_tool(request, |config, port, request| {
-            let service = McpService::with_port(config.as_ref(), port);
-            service.run_module_tests(McpCallContext::stdio(), &request)
-        })
+        self.execute_tool(
+            McpTool::RunModuleTests,
+            request,
+            cancellation,
+            |config, port, call_context, request| {
+                let service = McpService::with_port(config.as_ref(), port);
+                service.run_module_tests(call_context, &request)
+            },
+        )
         .await
     }
 
@@ -159,11 +313,17 @@ impl McpStdioServer {
     async fn build_project(
         &self,
         Parameters(request): Parameters<McpBuildProjectRequest>,
+        cancellation: CancellationToken,
     ) -> Result<CallToolResult, ErrorData> {
-        self.execute_tool(request, |config, port, request| {
-            let service = McpService::with_port(config.as_ref(), port);
-            service.build_project(McpCallContext::stdio(), &request)
-        })
+        self.execute_tool(
+            McpTool::BuildProject,
+            request,
+            cancellation,
+            |config, port, call_context, request| {
+                let service = McpService::with_port(config.as_ref(), port);
+                service.build_project(call_context, &request)
+            },
+        )
         .await
     }
 
@@ -171,11 +331,17 @@ impl McpStdioServer {
     async fn dump_config(
         &self,
         Parameters(request): Parameters<McpDumpConfigRequest>,
+        cancellation: CancellationToken,
     ) -> Result<CallToolResult, ErrorData> {
-        self.execute_tool(request, |config, port, request| {
-            let service = McpService::with_port(config.as_ref(), port);
-            service.dump_config(McpCallContext::stdio(), &request)
-        })
+        self.execute_tool(
+            McpTool::DumpConfig,
+            request,
+            cancellation,
+            |config, port, call_context, request| {
+                let service = McpService::with_port(config.as_ref(), port);
+                service.dump_config(call_context, &request)
+            },
+        )
         .await
     }
 
@@ -183,11 +349,17 @@ impl McpStdioServer {
     async fn launch_app(
         &self,
         Parameters(request): Parameters<McpLaunchAppRequest>,
+        cancellation: CancellationToken,
     ) -> Result<CallToolResult, ErrorData> {
-        self.execute_tool(request, |config, port, request| {
-            let service = McpService::with_port(config.as_ref(), port);
-            service.launch_app(McpCallContext::stdio(), &request)
-        })
+        self.execute_tool(
+            McpTool::LaunchApp,
+            request,
+            cancellation,
+            |config, port, call_context, request| {
+                let service = McpService::with_port(config.as_ref(), port);
+                service.launch_app(call_context, &request)
+            },
+        )
         .await
     }
 
@@ -195,11 +367,17 @@ impl McpStdioServer {
     async fn check_syntax_edt(
         &self,
         Parameters(request): Parameters<McpCheckSyntaxEdtRequest>,
+        cancellation: CancellationToken,
     ) -> Result<CallToolResult, ErrorData> {
-        self.execute_tool(request, |config, port, request| {
-            let service = McpService::with_port(config.as_ref(), port);
-            service.check_syntax_edt(McpCallContext::stdio(), &request)
-        })
+        self.execute_tool(
+            McpTool::CheckSyntaxEdt,
+            request,
+            cancellation,
+            |config, port, call_context, request| {
+                let service = McpService::with_port(config.as_ref(), port);
+                service.check_syntax_edt(call_context, &request)
+            },
+        )
         .await
     }
 
@@ -207,11 +385,17 @@ impl McpStdioServer {
     async fn check_syntax_designer_config(
         &self,
         Parameters(request): Parameters<McpCheckSyntaxDesignerConfigRequest>,
+        cancellation: CancellationToken,
     ) -> Result<CallToolResult, ErrorData> {
-        self.execute_tool(request, |config, port, request| {
-            let service = McpService::with_port(config.as_ref(), port);
-            service.check_syntax_designer_config(McpCallContext::stdio(), &request)
-        })
+        self.execute_tool(
+            McpTool::CheckSyntaxDesignerConfig,
+            request,
+            cancellation,
+            |config, port, call_context, request| {
+                let service = McpService::with_port(config.as_ref(), port);
+                service.check_syntax_designer_config(call_context, &request)
+            },
+        )
         .await
     }
 
@@ -219,11 +403,17 @@ impl McpStdioServer {
     async fn check_syntax_designer_modules(
         &self,
         Parameters(request): Parameters<McpCheckSyntaxDesignerModulesRequest>,
+        cancellation: CancellationToken,
     ) -> Result<CallToolResult, ErrorData> {
-        self.execute_tool(request, |config, port, request| {
-            let service = McpService::with_port(config.as_ref(), port);
-            service.check_syntax_designer_modules(McpCallContext::stdio(), &request)
-        })
+        self.execute_tool(
+            McpTool::CheckSyntaxDesignerModules,
+            request,
+            cancellation,
+            |config, port, call_context, request| {
+                let service = McpService::with_port(config.as_ref(), port);
+                service.check_syntax_designer_modules(call_context, &request)
+            },
+        )
         .await
     }
 }
@@ -237,6 +427,91 @@ impl ServerHandler for McpStdioServer {
 
 fn internal_error_to_mcp(error: McpInternalError) -> ErrorData {
     ErrorData::internal_error(error.message, None)
+}
+
+fn map_tool_result<TResponse>(
+    result: McpServiceResult<TResponse>,
+) -> Result<CallToolResult, ErrorData>
+where
+    TResponse: serde::Serialize + Send + 'static,
+{
+    match result {
+        Ok(response) => Ok(CallToolResult::structured(
+            serde_json::to_value(McpToolResult::success(response))
+                .map_err(|error| ErrorData::internal_error(error.to_string(), None))?,
+        )),
+        Err(crate::mcp::error::McpServiceError::Business(failure)) => {
+            Ok(CallToolResult::structured_error(
+                serde_json::to_value(McpToolResult::business_failure(failure))
+                    .map_err(|error| ErrorData::internal_error(error.to_string(), None))?,
+            ))
+        }
+        Err(crate::mcp::error::McpServiceError::Internal(error)) => {
+            Err(internal_error_to_mcp(error))
+        }
+    }
+}
+
+fn execution_error(
+    reason: ErrorReason,
+    stage: ExecutionStage,
+    timeout: Option<Duration>,
+) -> ErrorData {
+    let message = match (reason, stage) {
+        (ErrorReason::Cancelled, ExecutionStage::Queued) => {
+            "MCP call cancelled while waiting for execution slot"
+        }
+        (ErrorReason::Cancelled, ExecutionStage::Running) => "MCP call cancelled during execution",
+        (ErrorReason::Timeout, ExecutionStage::Queued) => {
+            "MCP call timed out while waiting for execution slot"
+        }
+        (ErrorReason::Timeout, ExecutionStage::Running) => "MCP call timed out during execution",
+        (ErrorReason::JoinFailure, ExecutionStage::Queued) => "MCP queue task failed unexpectedly",
+        (ErrorReason::JoinFailure, ExecutionStage::Running) => {
+            "MCP execution task failed unexpectedly"
+        }
+    };
+    let data = json!({
+        "reason": match reason {
+            ErrorReason::Cancelled => "cancelled",
+            ErrorReason::Timeout => "timeout",
+            ErrorReason::JoinFailure => "join_failure",
+        },
+        "stage": match stage {
+            ExecutionStage::Queued => "queued",
+            ExecutionStage::Running => "running",
+        },
+        "timeoutMs": timeout.map(duration_to_millis),
+    });
+    ErrorData::internal_error(message, Some(data))
+}
+
+fn remaining_timeout(deadline: Option<Instant>) -> Option<Duration> {
+    deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()))
+}
+
+fn duration_to_millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+async fn wait_for_deadline(deadline: Option<Instant>) {
+    if let Some(deadline) = deadline {
+        tokio::time::sleep_until(deadline).await;
+    }
+}
+
+fn reap_detached_call<TResponse>(
+    handle: JoinHandle<McpServiceResult<TResponse>>,
+    permit: OwnedSemaphorePermit,
+) where
+    TResponse: Send + 'static,
+{
+    tokio::spawn(async move {
+        let _permit = permit;
+        if let Err(join_error) = handle.await {
+            error!(?join_error, "detached MCP execution task failed");
+        }
+    });
 }
 
 fn max_concurrent_calls(config: &AppConfig) -> usize {
@@ -253,14 +528,19 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
+    use std::time::Instant;
 
-    use super::{max_concurrent_calls, shutdown_grace_period, McpStdioServer};
+    use super::{
+        execution_error, max_concurrent_calls, shutdown_grace_period, ErrorReason, ExecutionStage,
+        McpStdioServer, McpTool,
+    };
     use crate::config::model::{
         AppConfig, BuildConfig, BuilderBackend, McpConfig, McpExecutionConfig, McpHttpConfig,
         PlatformToolConfig, SourceFormat, SourceSetConfig, SourceSetPurpose, TestsConfig,
         ToolsConfig,
     };
     use crate::mcp::port::DefaultMcpUseCasePort;
+    use tokio_util::sync::CancellationToken;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn execute_tool_respects_configured_concurrency_limit() {
@@ -271,10 +551,18 @@ mod tests {
 
         let first = tokio::spawn(run_probe_call(
             server.clone(),
+            McpTool::RunAllTests,
             active.clone(),
             max_active.clone(),
+            CancellationToken::new(),
         ));
-        let second = tokio::spawn(run_probe_call(server, active, max_active.clone()));
+        let second = tokio::spawn(run_probe_call(
+            server,
+            McpTool::RunAllTests,
+            active,
+            max_active.clone(),
+            CancellationToken::new(),
+        ));
 
         first.await.expect("first task join").expect("first call");
         second
@@ -293,13 +581,207 @@ mod tests {
         assert_eq!(shutdown_grace_period(&config), Duration::from_secs(42));
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn queued_cancellation_returns_transport_error_without_running_call() {
+        let server =
+            McpStdioServer::with_port(Arc::new(test_config(1, 9)), Arc::new(DefaultMcpUseCasePort));
+        let started = Arc::new(AtomicUsize::new(0));
+
+        let first = tokio::spawn(run_probe_call(
+            server.clone(),
+            McpTool::RunAllTests,
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicUsize::new(0)),
+            CancellationToken::new(),
+        ));
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        let cancellation = CancellationToken::new();
+        let started_clone = started.clone();
+        let queued_cancellation = cancellation.clone();
+        let second = tokio::spawn(async move {
+            server
+                .execute_tool(
+                    McpTool::RunAllTests,
+                    (),
+                    queued_cancellation,
+                    move |_, _, _, ()| {
+                        started_clone.fetch_add(1, Ordering::SeqCst);
+                        Ok(String::from("unexpected"))
+                    },
+                )
+                .await
+                .expect_err("queued call must be cancelled")
+        });
+
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        cancellation.cancel();
+
+        let error = second.await.expect("second task join");
+        first.await.expect("first task join").expect("first call");
+
+        assert_eq!(
+            error,
+            execution_error(ErrorReason::Cancelled, ExecutionStage::Queued, None)
+        );
+        assert_eq!(started.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn queued_timeout_returns_transport_error() {
+        let server = McpStdioServer::with_port(
+            Arc::new(test_config_with_edt_timeout(1, 9, 20)),
+            Arc::new(DefaultMcpUseCasePort),
+        );
+
+        let first = tokio::spawn(run_probe_call(
+            server.clone(),
+            McpTool::RunAllTests,
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicUsize::new(0)),
+            CancellationToken::new(),
+        ));
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        let started = Arc::new(AtomicUsize::new(0));
+        let started_clone = started.clone();
+        let error = server
+            .execute_tool(
+                McpTool::CheckSyntaxEdt,
+                (),
+                CancellationToken::new(),
+                move |_, _, _, ()| {
+                    started_clone.fetch_add(1, Ordering::SeqCst);
+                    Ok(String::from("unexpected"))
+                },
+            )
+            .await
+            .expect_err("queued call must time out");
+
+        first.await.expect("first task join").expect("first call");
+
+        assert_eq!(
+            error,
+            execution_error(
+                ErrorReason::Timeout,
+                ExecutionStage::Queued,
+                Some(Duration::from_millis(20))
+            )
+        );
+        assert_eq!(started.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn running_cancellation_returns_early_and_retains_capacity_until_worker_finishes() {
+        let server = McpStdioServer::with_port(
+            Arc::new(test_config_with_edt_timeout(1, 9, 500)),
+            Arc::new(DefaultMcpUseCasePort),
+        );
+        let active = Arc::new(AtomicUsize::new(0));
+        let max_active = Arc::new(AtomicUsize::new(0));
+        let cancellation = CancellationToken::new();
+
+        let first_server = server.clone();
+        let first_active = active.clone();
+        let first_max = max_active.clone();
+        let first_cancel = cancellation.clone();
+        let started = Instant::now();
+        let first = tokio::spawn(async move {
+            first_server
+                .execute_tool(
+                    McpTool::CheckSyntaxEdt,
+                    (),
+                    first_cancel,
+                    move |_, _, _, ()| {
+                        let current = first_active.fetch_add(1, Ordering::SeqCst) + 1;
+                        first_max.fetch_max(current, Ordering::SeqCst);
+                        std::thread::sleep(Duration::from_millis(80));
+                        first_active.fetch_sub(1, Ordering::SeqCst);
+                        Ok(String::from("ok"))
+                    },
+                )
+                .await
+                .expect_err("running call must be cancelled")
+        });
+
+        tokio::time::sleep(Duration::from_millis(15)).await;
+        cancellation.cancel();
+        let error = first.await.expect("first task join");
+        assert!(started.elapsed() < Duration::from_millis(80));
+        assert_eq!(
+            error,
+            execution_error(
+                ErrorReason::Cancelled,
+                ExecutionStage::Running,
+                Some(Duration::from_millis(500))
+            )
+        );
+
+        run_probe_call(
+            server,
+            McpTool::RunAllTests,
+            active,
+            max_active.clone(),
+            CancellationToken::new(),
+        )
+        .await
+        .expect("second call");
+
+        assert_eq!(max_active.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn running_timeout_returns_early_and_capacity_recovers() {
+        let server = McpStdioServer::with_port(
+            Arc::new(test_config_with_edt_timeout(1, 9, 20)),
+            Arc::new(DefaultMcpUseCasePort),
+        );
+
+        for _ in 0..2 {
+            let error = server
+                .execute_tool(
+                    McpTool::CheckSyntaxEdt,
+                    (),
+                    CancellationToken::new(),
+                    move |_, _, _, ()| {
+                        std::thread::sleep(Duration::from_millis(60));
+                        Ok(String::from("ok"))
+                    },
+                )
+                .await
+                .expect_err("call must time out");
+
+            assert_eq!(
+                error,
+                execution_error(
+                    ErrorReason::Timeout,
+                    ExecutionStage::Running,
+                    Some(Duration::from_millis(20))
+                )
+            );
+            tokio::time::sleep(Duration::from_millis(70)).await;
+        }
+
+        run_probe_call(
+            server,
+            McpTool::RunAllTests,
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicUsize::new(0)),
+            CancellationToken::new(),
+        )
+        .await
+        .expect("capacity must recover after timed out calls");
+    }
+
     async fn run_probe_call(
         server: McpStdioServer,
+        tool: McpTool,
         active: Arc<AtomicUsize>,
         max_active: Arc<AtomicUsize>,
+        cancellation: CancellationToken,
     ) -> Result<(), rmcp::ErrorData> {
         server
-            .execute_tool((), move |_, _, ()| {
+            .execute_tool(tool, (), cancellation, move |_, _, _, ()| {
                 let current = active.fetch_add(1, Ordering::SeqCst) + 1;
                 max_active.fetch_max(current, Ordering::SeqCst);
                 std::thread::sleep(Duration::from_millis(50));
@@ -311,6 +793,14 @@ mod tests {
     }
 
     fn test_config(max_concurrent_calls: usize, shutdown_grace_period_secs: u64) -> AppConfig {
+        test_config_with_edt_timeout(max_concurrent_calls, shutdown_grace_period_secs, 300_000)
+    }
+
+    fn test_config_with_edt_timeout(
+        max_concurrent_calls: usize,
+        shutdown_grace_period_secs: u64,
+        edt_timeout_ms: u64,
+    ) -> AppConfig {
         AppConfig {
             base_path: PathBuf::from("/tmp/project"),
             work_path: PathBuf::from("/tmp/work"),
@@ -326,7 +816,10 @@ mod tests {
             build: BuildConfig::default(),
             tools: ToolsConfig {
                 platform: PlatformToolConfig::default(),
-                edt_cli: Default::default(),
+                edt_cli: crate::config::model::EdtCliConfig {
+                    command_timeout_ms: edt_timeout_ms,
+                    ..Default::default()
+                },
             },
             mcp: McpConfig {
                 http: McpHttpConfig::default(),

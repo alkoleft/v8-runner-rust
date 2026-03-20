@@ -376,7 +376,8 @@ fn execution_context(
 ) -> Result<ExecutionContext, McpInternalError> {
     match call_context.transport() {
         transport @ (ExecutionTransport::McpStdio | ExecutionTransport::McpHttp) => {
-            Ok(ExecutionContext::new(command, transport))
+            Ok(ExecutionContext::new(command, transport)
+                .with_edt_timeout(call_context.edt_timeout()))
         }
         ExecutionTransport::Cli => Err(McpInternalError::new(format!(
             "mcp service received non-MCP transport for {}",

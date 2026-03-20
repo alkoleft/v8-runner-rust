@@ -7,8 +7,9 @@ use std::process::Stdio;
 use assert_cmd::cargo::cargo_bin;
 use rmcp::{
     model::CallToolRequestParams,
+    model::ErrorCode,
     transport::{ConfigureCommandExt, TokioChildProcess},
-    ServiceExt,
+    ServiceError, ServiceExt,
 };
 use serde_json::{json, Value};
 use tempfile::tempdir;
@@ -21,6 +22,16 @@ fn write_config(path: &Path, base_path: &Path, work_path: &Path, platform_path: 
         platform_path.display(),
     );
     fs::write(path, config).expect("config");
+}
+
+fn write_edt_config(path: &Path, base_path: &Path, work_path: &Path, edt_path: &Path) {
+    let config = format!(
+        "basePath: '{}'\nworkPath: '{}'\nformat: EDT\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: main-edt\ntools:\n  edt_cli:\n    path: '{}'\n    command_timeout_ms: 20\n",
+        base_path.display(),
+        work_path.display(),
+        edt_path.display(),
+    );
+    fs::write(path, config).expect("edt config");
 }
 
 fn setup_project() -> (tempfile::TempDir, PathBuf) {
@@ -36,6 +47,41 @@ fn setup_project() -> (tempfile::TempDir, PathBuf) {
     write_config(&config_path, &base_path, &work_path, &platform_path);
 
     (dir, config_path)
+}
+
+fn setup_edt_project() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempdir().expect("tempdir");
+    let base_path = dir.path().join("project");
+    let work_path = dir.path().join("work");
+    let edt_dir = dir.path().join("edt");
+    let edt_path = edt_dir.join("1cedtcli");
+    let config_path = dir.path().join("application.yaml");
+
+    fs::create_dir_all(base_path.join("main-edt")).expect("main edt");
+    fs::create_dir_all(&work_path).expect("work");
+    fs::create_dir_all(&edt_dir).expect("edt dir");
+    write_script(&edt_path, "sleep 1\nexit 0");
+    write_edt_config(&config_path, &base_path, &work_path, &edt_path);
+
+    (dir, config_path)
+}
+
+#[cfg(unix)]
+fn make_executable(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut perms = fs::metadata(path).expect("metadata").permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(path, perms).expect("chmod");
+}
+
+#[cfg(unix)]
+fn write_script(path: &Path, body: &str) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("create dirs");
+    }
+    fs::write(path, format!("#!/bin/sh\n{body}\n")).expect("write script");
+    make_executable(path);
 }
 
 #[test]
@@ -149,6 +195,49 @@ async fn mcp_stdio_returns_structured_business_failure() {
     assert_eq!(payload["status"], "business_failure");
     assert_eq!(payload["error"]["code"], "invalid_argument");
     assert_eq!(payload["response"]["success"], false);
+
+    client.cancel().await.expect("cancel client");
+}
+
+#[tokio::test]
+async fn mcp_stdio_returns_transport_timeout_for_edt_syntax() {
+    let (_dir, config_path) = setup_edt_project();
+    let transport = TokioChildProcess::new(
+        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+            cmd.arg("--config")
+                .arg(config_path.as_os_str())
+                .arg("mcp")
+                .arg("serve")
+                .arg("stdio");
+        }),
+    )
+    .expect("spawn stdio transport");
+
+    let client = ().serve(transport).await.expect("connect rmcp client");
+    let error = client
+        .peer()
+        .call_tool(
+            CallToolRequestParams::new("check_syntax_edt").with_arguments(
+                serde_json::from_value(json!({ "projectName": "main" })).expect("arguments"),
+            ),
+        )
+        .await
+        .expect_err("tool call must return MCP transport error");
+
+    match error {
+        ServiceError::McpError(error_data) => {
+            assert_eq!(error_data.code, ErrorCode::INTERNAL_ERROR);
+            assert_eq!(
+                error_data.data.as_ref().and_then(|data| data.get("reason")),
+                Some(&json!("timeout"))
+            );
+            assert_eq!(
+                error_data.data.as_ref().and_then(|data| data.get("stage")),
+                Some(&json!("running"))
+            );
+        }
+        other => panic!("expected MCP error, got {other:?}"),
+    }
 
     client.cancel().await.expect("cancel client");
 }
