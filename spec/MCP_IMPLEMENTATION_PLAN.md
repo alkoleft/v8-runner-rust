@@ -121,7 +121,8 @@
   - Расхождение задокументировано в `README.md`: `dump_config(mode=null|blank)` в MCP трактуется как `INCREMENTAL`.
 - [x] 2026-03-20: Зафиксировать, что этот staged MCP plan был полностью закрыт к началу следующего task workflow.
   - Следующая работа продолжена из общего backlog в `spec/IMPLEMENTATION_TODO.md`, без переоткрытия закрытых Stage 1-5 задач.
-- Сохранять этот документ как основной staged plan для MCP-работ.
+- [x] 2026-03-21: Сохранить этот документ как canonical staged MCP rollout history/reference.
+  - `spec/MCP_IMPLEMENTATION_PLAN.md` остаётся основным staged record для закрытого MCP rollout Stage 1-5, а новая реализационная работа продолжается из общего backlog в `spec/IMPLEMENTATION_TODO.md`.
 
 ## Public Changes
 

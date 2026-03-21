@@ -158,3 +158,4 @@
 - [x] Переиспользовать shared EDT actor и общий execution semaphore для HTTP MCP sessions
 - [x] Добавить MCP runtime telemetry: semaphore wait time, EDT queue depth, restart count и shutdown/restart drain stats
 - [x] Расширить MCP regression/stress suite: `tools/list` contract, все 8 stdio tools, HTTP admission/tool-call regressions и `dump_config(PARTIAL)` matrix для `DESIGNER`/`IBCMD`
+- [x] 2026-03-21: `spec/MCP_IMPLEMENTATION_PLAN.md` сохранён как canonical staged MCP rollout history/reference; `spec/IMPLEMENTATION_TODO.md` остаётся активным backlog для follow-up и немигрированных EDT-задач.

@@ -159,3 +159,5 @@ MCP runtime telemetry is now emitted into the existing MCP action log (`workPath
 - `mcp_edt_shutdown_drain` records restart/shutdown drain totals and `drained_jobs`.
 
 This stage intentionally keeps telemetry on top of `tracing` rather than adding a separate metrics backend, so MCP stdout semantics remain unchanged.
+
+Planning note: `spec/MCP_IMPLEMENTATION_PLAN.md` remains the canonical staged MCP rollout history/reference for the closed Stage 1-5 MCP rollout, while active follow-up backlog items now live in `spec/IMPLEMENTATION_TODO.md`.

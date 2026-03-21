@@ -4,7 +4,7 @@
 
 For every task:
 
-1. Take the next concrete item from the spec or `spec/MCP_IMPLEMENTATION_PLAN.md`.
+1. Take the next concrete item from the active spec backlog: use `spec/IMPLEMENTATION_TODO.md` by default, and use `spec/MCP_IMPLEMENTATION_PLAN.md` only when the task explicitly targets the closed MCP rollout history/reference.
 2. Extract scope, constraints, acceptance criteria, and affected files before editing code.
 3. Draft an implementation plan with files, decisions, risks, and test strategy.
 4. Run a plan review loop with two `reviewer` subagents in parallel.
@@ -17,7 +17,7 @@ For every task:
    - tests (`cargo test`)
    - Rust best-practices review
 10. Fix findings and rerun once if needed.
-11. Update `spec/MCP_IMPLEMENTATION_PLAN.md`, public docs, and `ARCHITECTURE.md`.
+11. Update the governing spec document for the task (`spec/IMPLEMENTATION_TODO.md` by default; `spec/MCP_IMPLEMENTATION_PLAN.md` only for explicit MCP rollout history/reference work), public docs, and `ARCHITECTURE.md`.
 12. Commit only after all review and test gates pass.
 
 Hard limits:
@@ -30,7 +30,7 @@ Hard limits:
 1. **Review** — run `/rust-expert-best-practices-code-review` skill on changed code before committing
 2. **Compile check** — each stage must produce compilable code (`cargo check` must pass)
 3. **Mark progress** — update task status in the task list (in_progress → completed)
-4. **Update docs** — update `spec/IMPLEMENTATION_TODO.md` (mark completed items `[x]`) and add/update doc comments (`///`) on all public types, functions, and modules introduced in the stage
+4. **Update docs** — update the active task list (`spec/IMPLEMENTATION_TODO.md` by default, and `spec/MCP_IMPLEMENTATION_PLAN.md` only when explicitly maintaining the closed MCP rollout history/reference), and add/update doc comments (`///`) on all public types, functions, and modules introduced in the stage
 5. **Update architecture** — if new modules or significant components are added, update `ARCHITECTURE.md` to reflect the current structure
 6. **Commit** — create a git commit with a clear message describing the stage
 
@@ -40,7 +40,7 @@ A stage is complete when:
 - All tasks for that epic/group are marked completed
 - `cargo check` passes with no errors
 - Rust best practices review has been applied and issues fixed
-- `spec/IMPLEMENTATION_TODO.md` is updated: completed items marked with `[x]`
+- The governing task list is updated: `spec/IMPLEMENTATION_TODO.md` by default, or `spec/MCP_IMPLEMENTATION_PLAN.md` for explicit closed MCP rollout history/reference tasks; completed items marked with `[x]`
 - Public types and functions have `///` doc comments
 - `ARCHITECTURE.md` reflects any new modules or components
 

@@ -72,7 +72,8 @@ The MCP adapter no longer needs to talk to `cli::execute` or to reuse domain ser
 
 Important staging note:
 
-- The shared actor is wired only into live MCP `check_syntax_edt`. CLI EDT execution and future EDT export/build flows still use the existing one-shot path until the remaining EDT rollout tasks land.
+- The shared actor is wired only into live MCP `check_syntax_edt`. CLI EDT execution and future EDT export/build flows still use the existing one-shot path until the remaining EDT rollout tasks in `spec/IMPLEMENTATION_TODO.md` land.
+- `spec/MCP_IMPLEMENTATION_PLAN.md` remains the canonical staged MCP rollout history/reference for the closed Stage 1-5 MCP rollout; it is not the active backlog for follow-up EDT work.
 
 ## Backend Dispatch
 
