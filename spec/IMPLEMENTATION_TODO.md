@@ -1,5 +1,7 @@
 # TODO реализации Rust CLI
 
+> Примечание: это внутренний рабочий документ. Английские названия разделов и терминов оставлены там, где они совпадают с именами стадий, команд или устоявшимися техническими идентификаторами.
+
 ## Foundation
 
 - [x] Создать `Cargo.toml` для бинаря `v8-test-runner`
@@ -109,6 +111,8 @@
 - [x] Добавить integration tests для CLI команд
 - [x] 2026-03-20: Подготовить fixture-наборы логов и XML
 - [x] Обновить `README.md`
+- [x] 2026-03-22: Перепаковать public docs: новый onboarding `README.md`, `docs/CAPABILITIES.md`, `docs/DEEP_DIVE.md`, и явно развести public docs vs internal reference docs
+- [x] 2026-03-22: Перевести public docs layer на русский (`README.md`, `docs/CAPABILITIES.md`, `docs/DEEP_DIVE.md`)
 
 ## Волна 2: EDT
 

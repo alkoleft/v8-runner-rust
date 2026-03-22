@@ -13,6 +13,7 @@
 .env.*
 !.env.example
 .direnv/
+claude-set-api.sh
 
 # IDE and local tooling
 .claude/

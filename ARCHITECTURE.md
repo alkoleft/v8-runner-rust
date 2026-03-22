@@ -1,5 +1,7 @@
 # Architecture
 
+> Contributor note: this file is the internal module and boundary map. For the user-facing operational guide, see `docs/DEEP_DIVE.md`.
+
 ## Overview
 
 `v8-test-runner` is a Rust CLI for orchestrating local 1C platform operations. The current codebase is organized into eight main layers:
@@ -107,4 +109,4 @@ Use cases now return transport-neutral payloads or structured failures.
 - `workPath/temp/partial-lists/` stores partial load and partial dump list files.
 - `workPath/temp/yaxunit/` stores temporary YaXUnit config files.
 - `workPath/hash-storages/` remains reserved for change detection state.
-- `workPath/<sourceSetName>/` is reserved for the future EDT export flow and is not created yet.
+- `workPath/<sourceSetName>/` is used by the EDT export/build flow as the generated Designer-format output area for a source-set.
