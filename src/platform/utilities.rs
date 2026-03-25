@@ -1,5 +1,5 @@
 use crate::config::model::AppConfig;
-use crate::platform::locator::{Locator, PlatformVersion, UtilityLocation, UtilityType};
+use crate::platform::locator::{EdtVersion, Locator, PlatformVersion, UtilityLocation, UtilityType};
 use crate::platform::process::{ProcessExecutor, ProcessRunner};
 use tracing::info;
 
@@ -12,6 +12,28 @@ pub struct PlatformUtilities {
 impl PlatformUtilities {
     /// Build platform utilities facade from application configuration.
     pub fn from_config(config: &AppConfig) -> Self {
+        let edt_hint = config.tools.edt_cli.path.clone().filter(|path| {
+            path.is_absolute()
+                || path.components().count() > 1
+                || path.exists()
+                || config.tools.edt_cli.version.is_none()
+        });
+        let edt_version = config
+            .tools
+            .edt_cli
+            .version
+            .as_deref()
+            .and_then(EdtVersion::parse_lenient)
+            .or_else(|| {
+                config
+                    .tools
+                    .edt_cli
+                    .path
+                    .as_ref()
+                    .and_then(|path| path.to_str())
+                    .filter(|value| !value.contains(std::path::MAIN_SEPARATOR))
+                    .and_then(EdtVersion::parse_lenient)
+            });
         Self {
             locator: Locator::new(
                 config.tools.platform.path.clone(),
@@ -21,7 +43,8 @@ impl PlatformUtilities {
                     .version
                     .as_deref()
                     .and_then(PlatformVersion::parse_strict),
-                config.tools.edt_cli.path.clone(),
+                edt_hint,
+                edt_version,
             ),
             standard_runner: ProcessExecutor,
         }
@@ -59,7 +82,7 @@ impl PlatformUtilities {
 #[cfg(test)]
 mod tests {
     use super::PlatformUtilities;
-    use crate::platform::locator::{Locator, LocatorError, UtilityType};
+    use crate::platform::locator::{EdtVersion, Locator, LocatorError, UtilityType};
     use std::fs;
     use std::path::Path;
     use tempfile::tempdir;
@@ -80,7 +103,7 @@ mod tests {
         let binary = dir.path().join("1cedtcli");
         fs::write(&binary, "#!/bin/sh\nexit 0\n").expect("write");
         make_executable(&binary);
-        let locator = Locator::with_roots(None, None, Some(binary.clone()), vec![], vec![]);
+        let locator = Locator::with_roots(None, None, Some(binary.clone()), None, vec![], vec![]);
         let mut utilities = PlatformUtilities::with_locator(locator);
 
         let location = utilities.locate(UtilityType::EdtCli).expect("locate edt");
@@ -91,7 +114,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn locate_edt_cli_returns_not_found_when_unconfigured() {
-        let locator = Locator::with_roots(None, None, None, vec![], vec![]);
+        let locator = Locator::with_roots(None, None, None, None, vec![], vec![]);
         let mut utilities = PlatformUtilities::with_locator(locator);
 
         let error = utilities
@@ -99,5 +122,40 @@ mod tests {
             .expect_err("expected not found");
 
         assert!(matches!(error, LocatorError::NotFound(UtilityType::EdtCli)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn locate_edt_cli_uses_version_filtered_autodiscovery() {
+        let dir = tempdir().expect("tempdir");
+        let root = dir.path().join("components");
+        let wanted = root
+            .join("1c-edt-2025.2.3+30-x86_64")
+            .join("1cedt")
+            .join("1cedtcli");
+        let older = root
+            .join("1c-edt-2025.1.9+10-x86_64")
+            .join("1cedt")
+            .join("1cedtcli");
+        fs::create_dir_all(wanted.parent().expect("wanted parent")).expect("wanted dirs");
+        fs::create_dir_all(older.parent().expect("older parent")).expect("older dirs");
+        fs::write(&wanted, "#!/bin/sh\nexit 0\n").expect("wanted");
+        fs::write(&older, "#!/bin/sh\nexit 0\n").expect("older");
+        make_executable(&wanted);
+        make_executable(&older);
+
+        let locator = Locator::with_roots(
+            None,
+            None,
+            None,
+            Some(EdtVersion::parse_lenient("1c-edt-2025.2.3").expect("version")),
+            vec![],
+            vec![root],
+        );
+        let mut utilities = PlatformUtilities::with_locator(locator);
+
+        let location = utilities.locate(UtilityType::EdtCli).expect("locate edt");
+
+        assert_eq!(location.path, wanted);
     }
 }

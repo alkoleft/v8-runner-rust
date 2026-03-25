@@ -147,6 +147,7 @@ pub struct Locator {
     platform_hint: Option<PathBuf>,
     platform_version: Option<PlatformVersion>,
     edt_hint: Option<PathBuf>,
+    edt_version: Option<EdtVersion>,
     cache: HashMap<(UtilityType, Option<String>), UtilityLocation>,
     platform_roots: Vec<PathBuf>,
     edt_roots: Vec<PathBuf>,
@@ -158,11 +159,13 @@ impl Locator {
         platform_hint: Option<PathBuf>,
         platform_version: Option<PlatformVersion>,
         edt_hint: Option<PathBuf>,
+        edt_version: Option<EdtVersion>,
     ) -> Self {
         Self {
             platform_hint,
             platform_version,
             edt_hint,
+            edt_version,
             cache: HashMap::new(),
             platform_roots: default_platform_roots(),
             edt_roots: default_edt_roots(),
@@ -203,6 +206,7 @@ impl Locator {
         platform_hint: Option<PathBuf>,
         platform_version: Option<PlatformVersion>,
         edt_hint: Option<PathBuf>,
+        edt_version: Option<EdtVersion>,
         platform_roots: Vec<PathBuf>,
         edt_roots: Vec<PathBuf>,
     ) -> Self {
@@ -210,6 +214,7 @@ impl Locator {
             platform_hint,
             platform_version,
             edt_hint,
+            edt_version,
             cache: HashMap::new(),
             platform_roots,
             edt_roots,
@@ -220,7 +225,14 @@ impl Locator {
         if utility.is_platform() {
             self.platform_version.as_ref().map(ToString::to_string)
         } else {
-            None
+            self.edt_version.as_ref().map(|version| {
+                version
+                    .parts
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(".")
+            })
         }
     }
 
@@ -260,7 +272,15 @@ impl Locator {
                 ));
             }
         } else {
-            candidates.extend(edt_candidates_any_version(utility, &self.edt_roots));
+            if let Some(required) = &self.edt_version {
+                candidates.extend(edt_candidates_for_version(
+                    utility,
+                    required,
+                    &self.edt_roots,
+                ));
+            } else {
+                candidates.extend(edt_candidates_any_version(utility, &self.edt_roots));
+            }
         }
 
         candidates.extend(path_candidates(utility));
@@ -289,7 +309,11 @@ impl Locator {
                 return Vec::new();
             }
 
-            edt_candidates_any_version(utility, std::slice::from_ref(hint))
+            if let Some(required) = &self.edt_version {
+                edt_candidates_for_version(utility, required, std::slice::from_ref(hint))
+            } else {
+                edt_candidates_any_version(utility, std::slice::from_ref(hint))
+            }
         }
     }
 
@@ -472,6 +496,33 @@ fn edt_candidates_any_version(utility: UtilityType, roots: &[PathBuf]) -> Vec<Ca
     candidates
 }
 
+fn edt_candidates_for_version(
+    utility: UtilityType,
+    required: &EdtVersion,
+    roots: &[PathBuf],
+) -> Vec<Candidate> {
+    edt_candidates_any_version(utility, roots)
+        .into_iter()
+        .filter(|candidate| {
+            matches!(
+                candidate.version.as_ref(),
+                Some(UtilityVersion::Edt(version)) if edt_version_matches(required, version)
+            )
+        })
+        .collect()
+}
+
+fn edt_version_matches(required: &EdtVersion, candidate: &EdtVersion) -> bool {
+    if required.parts.is_empty() {
+        return false;
+    }
+
+    candidate
+        .parts
+        .windows(required.parts.len())
+        .any(|window| window == required.parts.as_slice())
+}
+
 fn path_candidates(utility: UtilityType) -> Vec<Candidate> {
     std::env::var_os("PATH")
         .map(|paths| {
@@ -637,7 +688,7 @@ mod tests {
         touch_executable(&v8);
         touch_executable(&v8c);
 
-        let mut locator = Locator::with_roots(Some(v8.clone()), None, None, vec![], vec![]);
+        let mut locator = Locator::with_roots(Some(v8.clone()), None, None, None, vec![], vec![]);
 
         assert_eq!(locator.locate(UtilityType::V8C).expect("locate").path, v8c);
     }
@@ -650,7 +701,7 @@ mod tests {
         let binary = install_dir.join("bin").join("1cv8");
         touch_executable(&binary);
 
-        let mut locator = Locator::with_roots(Some(install_dir), None, None, vec![], vec![]);
+        let mut locator = Locator::with_roots(Some(install_dir), None, None, None, vec![], vec![]);
 
         assert_eq!(
             locator.locate(UtilityType::V8).expect("locate").path,
@@ -667,7 +718,7 @@ mod tests {
         let thin = root.join("8.3.25.1234").join("bin").join("1cv8c");
         touch_executable(&thin);
 
-        let mut locator = Locator::with_roots(Some(root), Some(version), None, vec![], vec![]);
+        let mut locator = Locator::with_roots(Some(root), Some(version), None, None, vec![], vec![]);
 
         assert_eq!(locator.locate(UtilityType::V8C).expect("locate").path, thin);
     }
@@ -685,6 +736,7 @@ mod tests {
         let mut locator = Locator::with_roots(
             None,
             Some(PlatformVersion::parse_strict("8.3.25.1234").expect("version")),
+            None,
             None,
             vec![root],
             vec![],
@@ -714,7 +766,7 @@ mod tests {
         touch_executable(&newer);
         touch_executable(&older);
 
-        let mut locator = Locator::with_roots(None, None, None, vec![], vec![root]);
+        let mut locator = Locator::with_roots(None, None, None, None, vec![], vec![root]);
 
         assert_eq!(
             locator.locate(UtilityType::EdtCli).expect("locate").path,
@@ -732,7 +784,7 @@ mod tests {
         touch_executable(&first);
 
         let mut locator =
-            Locator::with_roots(None, Some(version), None, vec![root.clone()], vec![]);
+            Locator::with_roots(None, Some(version), None, None, vec![root.clone()], vec![]);
         let first_path = locator.locate(UtilityType::V8).expect("first").path;
         assert_eq!(first_path, first);
 
@@ -750,5 +802,67 @@ mod tests {
         let version = super::infer_version(UtilityType::V8, &path);
 
         assert!(matches!(version, Some(UtilityVersion::Platform(_))));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn edt_search_accepts_version_prefix_hint() {
+        let dir = tempdir().expect("tempdir");
+        let root = dir.path().join("edt");
+        let wanted = root
+            .join("1c-edt-2025.2.3+30-x86_64")
+            .join("1cedt")
+            .join("1cedtcli");
+        let other = root
+            .join("1c-edt-2025.1.9+100-x86_64")
+            .join("1cedt")
+            .join("1cedtcli");
+        touch_executable(&wanted);
+        touch_executable(&other);
+
+        let mut locator = Locator::with_roots(
+            None,
+            None,
+            None,
+            Some(EdtVersion::parse_lenient("1c-edt-2025.2.3").expect("version")),
+            vec![],
+            vec![root],
+        );
+
+        assert_eq!(
+            locator.locate(UtilityType::EdtCli).expect("locate").path,
+            wanted
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn edt_search_accepts_plain_numeric_version_hint() {
+        let dir = tempdir().expect("tempdir");
+        let root = dir.path().join("edt");
+        let wanted = root
+            .join("1c-edt-2025.2.3+30-x86_64")
+            .join("1cedt")
+            .join("1cedtcli");
+        let other = root
+            .join("1c-edt-2025.1.9+100-x86_64")
+            .join("1cedt")
+            .join("1cedtcli");
+        touch_executable(&wanted);
+        touch_executable(&other);
+
+        let mut locator = Locator::with_roots(
+            None,
+            None,
+            None,
+            Some(EdtVersion::parse_lenient("2025.2.3").expect("version")),
+            vec![],
+            vec![root],
+        );
+
+        assert_eq!(
+            locator.locate(UtilityType::EdtCli).expect("locate").path,
+            wanted
+        );
     }
 }

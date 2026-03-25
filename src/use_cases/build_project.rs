@@ -1622,7 +1622,13 @@ mod tests {
         assert!(edt_calls_text.contains("export --project"));
         assert!(edt_calls_text.contains(base.join("main").display().to_string().as_str()));
         assert!(designer_calls_text.contains("/LoadConfigFromFiles"));
-        assert!(designer_calls_text.contains(work.join("main").display().to_string().as_str()));
+        assert!(designer_calls_text.contains(
+            work.join("designer")
+                .join("main")
+                .display()
+                .to_string()
+                .as_str()
+        ));
         assert_eq!(edt_storage_generation(&config, "main"), 2);
     }
 

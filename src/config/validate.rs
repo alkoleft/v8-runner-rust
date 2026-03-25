@@ -216,7 +216,7 @@ fn validate_edt_runtime_paths(
         std::fs::canonicalize(&config.work_path).unwrap_or_else(|_| config.work_path.clone());
 
     for (generated_for, _) in edt_source_paths {
-        let generated_path = canonical_work_path.join(generated_for);
+        let generated_path = canonical_work_path.join("designer").join(generated_for);
         for (source_set, source_path) in edt_source_paths {
             if paths_overlap(source_path, &generated_path) {
                 return Err(
@@ -242,7 +242,7 @@ fn is_reserved_workdir_name(name: &str) -> bool {
     let normalized = name.to_ascii_lowercase();
     matches!(
         normalized.as_str(),
-        "hash-storages" | "logs" | "temp" | "edt-workspace"
+        "hash-storages" | "logs" | "temp" | "edt-workspace" | "designer"
     )
 }
 
@@ -707,7 +707,7 @@ mod tests {
     #[test]
     fn rejects_edt_source_set_path_overlapping_generated_work_target() {
         let shared = tempdir().expect("shared");
-        let source_dir = shared.path().join("main");
+        let source_dir = shared.path().join("designer").join("main");
         std::fs::create_dir_all(&source_dir).expect("source dir");
 
         let config = AppConfig {
@@ -720,7 +720,7 @@ mod tests {
             source_sets: vec![SourceSetConfig {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
-                path: std::path::PathBuf::from("main"),
+                path: std::path::PathBuf::from("designer/main"),
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig::default(),

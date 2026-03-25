@@ -236,8 +236,11 @@ pub struct PlatformToolConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct EdtCliConfig {
-    /// Path to 1cedtcli binary
+    /// Path to 1cedtcli binary, installation root, or version-like discovery hint.
     pub path: Option<PathBuf>,
+
+    /// Optional EDT version hint used for auto-discovery, for example `1c-edt-2025.2.3`.
+    pub version: Option<String>,
 
     /// Auto-start interactive EDT session on startup
     #[serde(default)]
@@ -264,6 +267,7 @@ impl Default for EdtCliConfig {
     fn default() -> Self {
         Self {
             path: None,
+            version: None,
             auto_start: false,
             startup_timeout_ms: default_edt_cli_startup_timeout_ms(),
             command_timeout_ms: default_edt_cli_command_timeout_ms(),

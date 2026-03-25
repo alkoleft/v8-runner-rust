@@ -8,7 +8,7 @@ use crate::domain::source_set::SourceSetContext;
 ///
 /// - `DESIGNER` format: one context per source-set, rooted at `basePath/ss.path`.
 /// - `EDT` format (Wave 2): two contexts per source-set — the original EDT path
-///   and a generated Designer copy under `workPath/<name>/`.
+///   and a generated Designer copy under `workPath/designer/<name>/`.
 pub struct SourceSetsService<'a> {
     config: &'a AppConfig,
 }
@@ -21,7 +21,8 @@ impl<'a> SourceSetsService<'a> {
     /// Return all Designer-format contexts that should be scanned and built.
     ///
     /// In `DESIGNER` mode this is simply each source-set resolved against `basePath`.
-    /// In `EDT` mode (Wave 2) this returns the generated Designer copies in `workPath`.
+    /// In `EDT` mode (Wave 2) this returns the generated Designer copies in
+    /// `workPath/designer`.
     pub fn designer_contexts(&self) -> Vec<SourceSetContext> {
         let base_path = absolutize_path(&self.config.base_path);
         let work_path = absolutize_path(&self.config.work_path);
@@ -46,8 +47,8 @@ impl<'a> SourceSetsService<'a> {
                 .source_sets
                 .iter()
                 .map(|ss| {
-                    // Generated Designer copy lives at workPath/<name>/
-                    let path = work_path.join(&ss.name);
+                    // Generated Designer copy lives at workPath/designer/<name>/
+                    let path = work_path.join("designer").join(&ss.name);
                     SourceSetContext::new(&ss.name, path, format!("designer-{}", ss.name))
                 })
                 .collect(),
@@ -130,5 +131,32 @@ mod tests {
         assert_eq!(contexts.len(), 1);
         assert!(contexts[0].path().is_absolute());
         assert!(contexts[0].path().ends_with(Path::new("src")));
+    }
+
+    #[test]
+    fn edt_designer_contexts_use_nested_designer_directory() {
+        let config = AppConfig {
+            base_path: std::path::PathBuf::from("."),
+            work_path: std::path::PathBuf::from("target/tmp-work"),
+            format: SourceFormat::Edt,
+            builder: BuilderBackend::Designer,
+            connection: "File=/tmp/ib".to_owned(),
+            credentials: Default::default(),
+            source_sets: vec![SourceSetConfig {
+                name: "main".to_owned(),
+                purpose: SourceSetPurpose::Configuration,
+                path: std::path::PathBuf::from("src"),
+            }],
+            build: BuildConfig::default(),
+            tools: ToolsConfig::default(),
+            mcp: Default::default(),
+            tests: TestsConfig::default(),
+        };
+
+        let service = SourceSetsService::new(&config);
+        let contexts = service.designer_contexts();
+
+        assert_eq!(contexts.len(), 1);
+        assert!(contexts[0].path().ends_with(Path::new("target/tmp-work/designer/main")));
     }
 }

@@ -231,4 +231,38 @@ mod tests {
         assert_eq!(config.tools.edt_cli.startup_timeout_ms, 2222);
         assert_eq!(config.tools.edt_cli.command_timeout_ms, 3333);
     }
+
+    #[test]
+    fn load_config_reads_edt_version_hint_fields() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).expect("src dir");
+        let config_path = dir.path().join("application.yaml");
+        std::fs::write(
+            &config_path,
+            format!(
+                "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: \"File=/tmp/ib\"\ntools:\n  platform:\n    version: 8.3.27.1859\n  edt-cli:\n    path: 1c-edt-2025.2.3\n    version: 1c-edt-2025.2.3\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: src\n",
+                base.display(),
+                work.display()
+            ),
+        )
+        .expect("write config");
+
+        let config = load_config(config_path.to_str(), None).expect("load config");
+
+        assert_eq!(
+            config.tools.platform.version.as_deref(),
+            Some("8.3.27.1859")
+        );
+        assert_eq!(
+            config.tools.edt_cli.path.as_deref(),
+            Some(std::path::Path::new("1c-edt-2025.2.3"))
+        );
+        assert_eq!(
+            config.tools.edt_cli.version.as_deref(),
+            Some("1c-edt-2025.2.3")
+        );
+    }
 }

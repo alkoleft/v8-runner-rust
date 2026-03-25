@@ -41,11 +41,16 @@ tools:
     # ...or to an installation root with versioned subdirectories:
     # path: /opt/1cv8/x86_64
     #
-    # Exact platform version for auto-discovery:
-    version: "8.3.25.1234"
+    # ...or you can omit path and use exact version for auto-discovery:
+    version: "8.3.27.1859"
 
   edt_cli:
-    # path: /opt/1C/1CE/components/1c-edt-2025.1.0+656-x86_64/1cedt/1cedtcli
+    # Path can point to the binary directly:
+    # path: /opt/1C/1CE/components/1c-edt-2025.2.3+30-x86_64/1cedt/1cedtcli
+    #
+    # ...or it can be a version-like discovery hint:
+    path: 2025.2.3
+    # version: 2025.2.3
     auto-start: false
     startup_timeout_ms: 300000
     command_timeout_ms: 300000

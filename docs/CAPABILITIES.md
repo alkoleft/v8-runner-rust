@@ -54,7 +54,7 @@ v8-test-runner build [--full-rebuild]
 
 - `format=DESIGNER`, `builder=DESIGNER`: загружает изменённые Designer-исходники напрямую через бэкенд Designer.
 - `format=DESIGNER`, `builder=IBCMD`: загружает исходники в Designer-формате через `ibcmd`.
-- `format=EDT`, `builder=DESIGNER`: экспортирует изменённые EDT `source-set` во временные Designer-файлы под `workPath`, затем запускает обычный конвейер Designer.
+- `format=EDT`, `builder=DESIGNER`: экспортирует изменённые EDT `source-set` во временные Designer-файлы под `workPath/designer`, затем запускает обычный конвейер Designer.
 
 Важные детали:
 
@@ -253,7 +253,8 @@ v8-test-runner mcp serve http
 | `tests.execution_timeout_seconds` | Нет | `300` |
 | `tools.platform.path` | Нет | Может указывать на бинарь, `bin`-директорию или корень платформы с версиями |
 | `tools.platform.version` | Нет | Точная подсказка по версии платформы |
-| `tools.edt_cli.path` | Нет | Опциональный путь к `1cedtcli` |
+| `tools.edt_cli.path` | Нет | Опциональный путь к `1cedtcli`, корню установки EDT или version-like подсказка для автопоиска |
+| `tools.edt_cli.version` | Нет | Отдельная version-like подсказка для автопоиска EDT, например `2025.2.3` |
 | `tools.edt_cli.auto-start` | Нет | `false` |
 | `tools.edt_cli.startup_timeout_ms` | Нет | `300000`; также принимает `startup-timeout-ms` |
 | `tools.edt_cli.command_timeout_ms` | Нет | `300000`; также принимает `command-timeout-ms` |

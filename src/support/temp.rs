@@ -40,7 +40,7 @@ pub fn yaxunit_dir(work_path: &Path) -> std::io::Result<PathBuf> {
 
 /// Return the reserved future EDT work directory for a source set.
 pub fn reserved_source_set_dir(work_path: &Path, source_set_name: &str) -> PathBuf {
-    work_path.join(source_set_name)
+    work_path.join("designer").join(source_set_name)
 }
 
 /// Create a temporary JSON file for a YaXUnit run config inside `work_path/temp/yaxunit`.
@@ -114,6 +114,6 @@ mod tests {
         let reserved = reserved_source_set_dir(dir.path(), "main");
 
         assert!(!reserved.exists());
-        assert!(reserved.ends_with("main"));
+        assert!(reserved.ends_with("designer/main"));
     }
 }
