@@ -1374,7 +1374,7 @@ mod tests {
             })
             .unwrap_or_default();
         let body = format!(
-            "args=\"$*\"\nproject=\"\"\ntarget=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"--project\" ]; then project=\"$arg\"; fi\n  if [ \"$prev\" = \"--configuration-files\" ]; then target=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$target\" ]; then mkdir -p \"$target\"; printf 'exported from %s\\n' \"$project\" > \"$target/exported.txt\"; fi\nprintf '%s\\n' \"$args\" >> \"{}\"\n{}\nexit 0",
+            "args=\"$*\"\nproject=\"\"\ntarget=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"--project-name\" ]; then project=\"$arg\"; fi\n  if [ \"$prev\" = \"--configuration-files\" ]; then target=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$target\" ]; then mkdir -p \"$target\"; printf 'exported from %s\\n' \"$project\" > \"$target/exported.txt\"; fi\nprintf '%s\\n' \"$args\" >> \"{}\"\n{}\nexit 0",
             calls_log.display(),
             pattern_branch
         );
@@ -1408,7 +1408,7 @@ mod tests {
                    target=\"\"\n\
                    prev=\"\"\n\
                    for arg in \"$@\"; do\n\
-                     if [ \"$prev\" = \"--project\" ]; then project=\"$arg\"; fi\n\
+                     if [ \"$prev\" = \"--project-name\" ]; then project=\"$arg\"; fi\n\
                      if [ \"$prev\" = \"--configuration-files\" ]; then target=\"$arg\"; fi\n\
                      prev=\"$arg\"\n\
                    done\n\
@@ -1728,8 +1728,7 @@ mod tests {
             .steps
             .iter()
             .any(|step| matches!(step.mode, BuildMode::EdtExport) && step.ok));
-        assert!(edt_calls_text.contains("export --project"));
-        assert!(edt_calls_text.contains(base.join("main").display().to_string().as_str()));
+        assert!(edt_calls_text.contains("export --project-name main"));
         assert!(designer_calls_text.contains("/LoadConfigFromFiles"));
         assert!(designer_calls_text.contains(
             work.join("designer")
@@ -1783,7 +1782,7 @@ mod tests {
         assert!(result.ok);
         assert_eq!(edt_calls_text.matches("START").count(), 1);
         assert_eq!(edt_calls_text.matches("EXIT").count(), 1);
-        assert_eq!(edt_calls_text.matches("export --project").count(), 2);
+        assert_eq!(edt_calls_text.matches("export --project-name").count(), 2);
     }
 
     #[cfg(unix)]
@@ -1798,7 +1797,7 @@ mod tests {
         let edt_calls = dir.path().join("edt-calls.log");
         create_source_tree(&base);
         write_designer_script(&platform_script, &designer_calls, None);
-        write_edt_script(&edt_script, &edt_calls, Some("export --project"));
+        write_edt_script(&edt_script, &edt_calls, Some("export --project-name"));
         let config = build_edt_config(&base, &work, &dir.path().join("platform"), &edt_script);
         prime_edt_snapshots(&config);
 

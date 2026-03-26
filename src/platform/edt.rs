@@ -96,7 +96,7 @@ impl<'a> EdtDsl<'a> {
         self
     }
 
-    /// `-command export --project <source> --configuration-files <target>`
+    /// `-command export --project-name <source_name> --configuration-files <target>`
     pub fn export_project(
         &self,
         source: &Path,
@@ -330,10 +330,14 @@ fn output_indicates_interactive_command_error(stdout: &str, stderr: &str) -> boo
 }
 
 fn export_command_arguments(source: &Path, target: &Path) -> Vec<String> {
+    let project_name = source
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_else(|| source.as_os_str().to_str().unwrap_or_default());
     vec![
         "export".to_owned(),
-        "--project".to_owned(),
-        source.display().to_string(),
+        "--project-name".to_owned(),
+        project_name.to_owned(),
         "--configuration-files".to_owned(),
         target.display().to_string(),
     ]
@@ -434,8 +438,8 @@ mod tests {
         let args = fs::read_to_string(args_log).expect("args log");
         assert!(args.contains("-command"));
         assert!(args.contains("export"));
-        assert!(args.contains("--project"));
-        assert!(args.contains("/tmp/project"));
+        assert!(args.contains("--project-name"));
+        assert!(args.contains("project"));
         assert!(args.contains("--configuration-files"));
         assert!(args.contains("/tmp/out"));
     }
@@ -661,7 +665,7 @@ mod tests {
 
         let commands = fs::read_to_string(command_log).expect("command log");
         assert!(commands.contains("cd "));
-        assert!(commands.contains("export --project /tmp/project --configuration-files /tmp/out"));
+        assert!(commands.contains("export --project-name project --configuration-files /tmp/out"));
         assert!(commands.contains("import --project /tmp/project"));
         assert!(!commands.contains("-command"));
     }
