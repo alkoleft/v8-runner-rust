@@ -1,6 +1,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
@@ -9,6 +10,7 @@ use tracing_subscriber::fmt::time::FormatTime;
 use tracing_subscriber::EnvFilter;
 
 const ACTION_LOG_FILE_ENV: &str = "V8TR_ACTION_LOG_FILE";
+static RICH_LOG_EMPHASIS_ENABLED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Error)]
 pub enum LoggingInitError {
@@ -22,8 +24,10 @@ pub enum LoggingInitError {
 pub fn init_action_logging(
     level: &str,
     output_format: &str,
+    color_enabled: bool,
     work_path: &Path,
 ) -> Result<Option<PathBuf>, LoggingInitError> {
+    RICH_LOG_EMPHASIS_ENABLED.store(output_format == "text" && color_enabled, Ordering::Relaxed);
     let writer = ActionLogMakeWriter {
         stdout_enabled: output_format == "text",
         file: open_log_file(resolve_action_log_path(output_format, work_path).as_deref())?,
@@ -40,6 +44,14 @@ pub fn init_action_logging(
         .map_err(|error| LoggingInitError::Install(error.to_string()))?;
 
     Ok(log_path)
+}
+
+pub fn emphasize(text: &str) -> String {
+    if RICH_LOG_EMPHASIS_ENABLED.load(Ordering::Relaxed) {
+        format!("\u{1b}[1m{text}\u{1b}[22m")
+    } else {
+        text.to_owned()
+    }
 }
 
 fn resolve_action_log_path(output_format: &str, work_path: &Path) -> Option<PathBuf> {

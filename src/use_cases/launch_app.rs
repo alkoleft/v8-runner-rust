@@ -6,6 +6,7 @@ use crate::platform::locator::UtilityType;
 use crate::platform::process::ProcessRequest;
 use crate::platform::utilities::PlatformUtilities;
 use crate::support::error::AppError;
+use crate::support::logging::emphasize;
 use crate::use_cases::context::ExecutionContext;
 use crate::use_cases::request::{LaunchModeRequest, LaunchRequest as LaunchArgs};
 use crate::use_cases::result::{UseCaseFailure, UseCaseResult};
@@ -44,7 +45,11 @@ pub fn execute(
         process_args.extend(config.tools.enterprise.additional_launch_keys.clone());
     }
 
-    info!("Запуск приложения: {}", mode_label(args.mode));
+    info!(
+        "{} приложения: {}",
+        emphasize("Запуск"),
+        emphasize(mode_label(args.mode))
+    );
     let spawned = utilities
         .runner_for(utility)
         .spawn(&ProcessRequest {

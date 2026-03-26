@@ -30,7 +30,12 @@ pub fn run() -> i32 {
 
     let level = cli.log_level.as_deref().unwrap_or("info");
     let action_log_path =
-        match crate::support::logging::init_action_logging(level, &cli.output, &config.work_path) {
+        match crate::support::logging::init_action_logging(
+            level,
+            &cli.output,
+            !cli.no_color,
+            &config.work_path,
+        ) {
             Ok(path) => path,
             Err(e) => {
                 presenter.print_error(&format!("{e}"));
@@ -147,7 +152,7 @@ fn prepare_mcp_runtime(
 
     let level = cli.log_level.as_deref().unwrap_or("info");
     if let Err(error) =
-        crate::support::logging::init_action_logging(level, "json", &config.work_path)
+        crate::support::logging::init_action_logging(level, "json", false, &config.work_path)
     {
         eprintln!("{error}");
         return Err(crate::output::exit_codes::RUNTIME_ERROR);

@@ -20,6 +20,7 @@ use crate::platform::process::ProcessRunner;
 use crate::platform::result::PlatformCommandResult;
 use crate::platform::utilities::PlatformUtilities;
 use crate::support::error::AppError;
+use crate::support::logging::emphasize;
 use crate::support::temp::{partial_list_file, platform_logs_dir, reserved_source_set_dir};
 use crate::use_cases::context::ExecutionContext;
 use crate::use_cases::request::BuildRequest as BuildArgs;
@@ -338,7 +339,9 @@ fn log_change_analysis(source_set_name: &str, changes: &[analyzer::FileChange]) 
     }
 
     info!(
-        "Изменения в {source_set_name}: найдено {} (новых {added}, изменено {modified}, удалено {deleted})",
+        "{} в {source_set_name}: {} {} (новых {added}, изменено {modified}, удалено {deleted})",
+        emphasize("Изменения"),
+        emphasize("найдено"),
         changes.len()
     );
 }
@@ -645,6 +648,7 @@ fn run_build_edt(
     let mut utilities = PlatformUtilities::from_config(config);
     let mut designer_binary: Option<PathBuf> = None;
     let mut edt_binary: Option<PathBuf> = None;
+    let mut interactive_edt = None;
     let mut steps = Vec::new();
 
     for (index, source_set) in ordered_source_sets.iter().enumerate() {
@@ -776,17 +780,60 @@ fn run_build_edt(
 
                 let export_started = Instant::now();
                 info!(
-                    "Конвертация EDT в файлы Конфигуратора: {}",
+                    "{} в файлы {}: {}",
+                    emphasize("Конвертация"),
+                    emphasize("Конфигуратора"),
                     source_set.name
                 );
-                if let Err(error) = execute_edt_export_step(
-                    config,
-                    &edt,
-                    utilities.runner_for(UtilityType::EdtCli),
-                    source_set,
-                    &edt_context,
-                    &designer_context,
-                ) {
+                let export_result = if config.tools.edt_cli.interactive_mode {
+                    if interactive_edt.is_none() {
+                        interactive_edt = Some(match EdtDsl::new_interactive(
+                            edt.clone(),
+                            config.work_path.join("edt-workspace"),
+                            Duration::from_millis(config.tools.edt_cli.startup_timeout_ms),
+                            Duration::from_millis(config.tools.edt_cli.command_timeout_ms),
+                        ) {
+                            Ok(dsl) => dsl,
+                            Err(error) => {
+                                let app_error = AppError::Platform(error.to_string());
+                                let result = fail_with_remaining_steps(
+                                    started,
+                                    steps,
+                                    ordered_source_sets
+                                        .iter()
+                                        .skip(index)
+                                        .copied()
+                                        .collect::<Vec<_>>(),
+                                    source_set,
+                                    BuildMode::EdtExport,
+                                    app_error.to_string(),
+                                );
+                                return Err(BuildExecutionFailure::with_payload(app_error, result));
+                            }
+                        });
+                    }
+                    execute_edt_export_step(
+                        config,
+                        interactive_edt.as_ref().expect("interactive edt dsl"),
+                        source_set,
+                        &edt_context,
+                        &designer_context,
+                    )
+                } else {
+                    let one_shot_edt = EdtDsl::new(
+                        edt.clone(),
+                        config.work_path.join("edt-workspace"),
+                        utilities.runner_for(UtilityType::EdtCli),
+                    );
+                    execute_edt_export_step(
+                        config,
+                        &one_shot_edt,
+                        source_set,
+                        &edt_context,
+                        &designer_context,
+                    )
+                };
+                if let Err(error) = export_result {
                     let result = fail_with_remaining_steps(
                         started,
                         steps,
@@ -913,8 +960,7 @@ fn ordered_source_sets(config: &AppConfig) -> Vec<&SourceSetConfig> {
 
 fn execute_edt_export_step(
     config: &AppConfig,
-    binary: &Path,
-    runner: &dyn ProcessRunner,
+    dsl: &EdtDsl<'_>,
     source_set: &SourceSetConfig,
     edt_context: &SourceSetContext,
     designer_context: &SourceSetContext,
@@ -926,21 +972,6 @@ fn execute_edt_export_step(
             export_target.display()
         ))
     })?;
-    let dsl = if config.tools.edt_cli.interactive_mode {
-        EdtDsl::new_interactive(
-            binary.to_path_buf(),
-            config.work_path.join("edt-workspace"),
-            Duration::from_millis(config.tools.edt_cli.startup_timeout_ms),
-            Duration::from_millis(config.tools.edt_cli.command_timeout_ms),
-        )
-        .map_err(|error| AppError::Platform(error.to_string()))?
-    } else {
-        EdtDsl::new(
-            binary.to_path_buf(),
-            config.work_path.join("edt-workspace"),
-            runner,
-        )
-    };
     let export_result = dsl
         .export_project(edt_context.path(), designer_context.path())
         .map_err(|error| AppError::Platform(error.to_string()))?;
@@ -965,12 +996,16 @@ fn execute_source_set_step(
 ) -> Result<(), AppError> {
     if partial_paths.is_some() {
         info!(
-            "Загрузка изменений в базу через Конфигуратор: {}",
+            "{} изменений в базу через {}: {}",
+            emphasize("Загрузка"),
+            emphasize("Конфигуратор"),
             source_set.name
         );
     } else {
         info!(
-            "Загрузка в базу через Конфигуратор: {}",
+            "{} в базу через {}: {}",
+            emphasize("Загрузка"),
+            emphasize("Конфигуратор"),
             source_set.name
         );
     }
@@ -1040,9 +1075,19 @@ fn execute_source_set_step_ibcmd(
     commit: &StepCommit,
 ) -> Result<(), AppError> {
     if partial_paths.is_some() {
-        info!("Загрузка изменений в базу через ibcmd: {}", source_set.name);
+        info!(
+            "{} изменений в базу через {}: {}",
+            emphasize("Загрузка"),
+            emphasize("ibcmd"),
+            source_set.name
+        );
     } else {
-        info!("Загрузка в базу через ibcmd: {}", source_set.name);
+        info!(
+            "{} в базу через {}: {}",
+            emphasize("Загрузка"),
+            emphasize("ibcmd"),
+            source_set.name
+        );
     }
 
     let dsl = build_ibcmd_dsl(config, binary, runner)?;
@@ -1332,6 +1377,53 @@ mod tests {
             "args=\"$*\"\nproject=\"\"\ntarget=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"--project\" ]; then project=\"$arg\"; fi\n  if [ \"$prev\" = \"--configuration-files\" ]; then target=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$target\" ]; then mkdir -p \"$target\"; printf 'exported from %s\\n' \"$project\" > \"$target/exported.txt\"; fi\nprintf '%s\\n' \"$args\" >> \"{}\"\n{}\nexit 0",
             calls_log.display(),
             pattern_branch
+        );
+
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create dirs");
+        }
+        fs::write(path, format!("#!/bin/sh\n{body}\n")).expect("write script");
+        make_executable(path);
+    }
+
+    #[cfg(unix)]
+    fn write_interactive_edt_script(path: &Path, calls_log: &Path) {
+        let body = format!(
+            "set -eu\n\
+             prompt() {{ printf '1C:EDT>'; }}\n\
+             printf 'START\\n' >> '{}'\n\
+             trap 'printf \"EXIT\\\\n\" >> \"{}\"' EXIT\n\
+             prompt\n\
+             while IFS= read -r line; do\n\
+               printf '%s\\n' \"$line\" >> '{}'\n\
+               eval \"set -- $line\"\n\
+               cmd=\"${{1:-}}\"\n\
+               if [ \"$#\" -gt 0 ]; then shift; fi\n\
+               case \"$cmd\" in\n\
+                 cd)\n\
+                   prompt\n\
+                   ;;\n\
+                 export)\n\
+                   project=\"\"\n\
+                   target=\"\"\n\
+                   prev=\"\"\n\
+                   for arg in \"$@\"; do\n\
+                     if [ \"$prev\" = \"--project\" ]; then project=\"$arg\"; fi\n\
+                     if [ \"$prev\" = \"--configuration-files\" ]; then target=\"$arg\"; fi\n\
+                     prev=\"$arg\"\n\
+                   done\n\
+                   if [ -n \"$target\" ]; then mkdir -p \"$target\"; printf 'exported from %s\\n' \"$project\" > \"$target/exported.txt\"; fi\n\
+                   prompt\n\
+                   ;;\n\
+                 *)\n\
+                   printf 'unknown:%s\\n' \"$line\"\n\
+                   prompt\n\
+                   ;;\n\
+               esac\n\
+             done\n",
+            calls_log.display(),
+            calls_log.display(),
+            calls_log.display()
         );
 
         if let Some(parent) = path.parent() {
@@ -1647,6 +1739,51 @@ mod tests {
                 .as_str()
         ));
         assert_eq!(edt_storage_generation(&config, "main"), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn edt_build_reuses_single_interactive_session_for_multiple_source_sets() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let platform_script = dir.path().join("platform").join("bin").join("1cv8");
+        let edt_script = dir.path().join("edt").join("1cedtcli");
+        let designer_calls = dir.path().join("designer-calls.log");
+        let edt_calls = dir.path().join("edt-calls.log");
+        create_source_tree(&base);
+        write_designer_script(&platform_script, &designer_calls, None);
+        write_interactive_edt_script(&edt_script, &edt_calls);
+        let mut config = build_edt_config(&base, &work, &dir.path().join("platform"), &edt_script);
+        config.tools.edt_cli.interactive_mode = true;
+        prime_edt_snapshots(&config);
+
+        fs::write(
+            base.join("main")
+                .join("Catalogs.Items")
+                .join("ObjectModule.bsl"),
+            "procedure Test()\n  // changed main\nendprocedure",
+        )
+        .expect("modify edt main");
+        fs::write(
+            base.join("ext").join("CommonModules").join("Module.bsl"),
+            "procedure Test()\n  // changed ext\nendprocedure",
+        )
+        .expect("modify edt ext");
+
+        let result = run_build(
+            &config,
+            &BuildArgs {
+                full_rebuild: false,
+            },
+        )
+        .expect("build");
+        let edt_calls_text = fs::read_to_string(&edt_calls).expect("edt calls");
+
+        assert!(result.ok);
+        assert_eq!(edt_calls_text.matches("START").count(), 1);
+        assert_eq!(edt_calls_text.matches("EXIT").count(), 1);
+        assert_eq!(edt_calls_text.matches("export --project").count(), 2);
     }
 
     #[cfg(unix)]
