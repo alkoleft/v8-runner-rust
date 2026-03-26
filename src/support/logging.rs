@@ -107,7 +107,7 @@ impl FormatTime for UtcTimer {
         &self,
         writer: &mut tracing_subscriber::fmt::format::Writer<'_>,
     ) -> std::fmt::Result {
-        write!(writer, "{}", Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ"))
+        write!(writer, "{}", Utc::now().format("%H:%M:%S%.3f"))
     }
 }
 
