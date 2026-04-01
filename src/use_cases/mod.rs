@@ -18,3 +18,5 @@ pub mod request;
 pub mod result;
 /// Test orchestration use case.
 pub mod run_tests;
+/// Shared locking for commands that mutate the same workspace.
+pub mod workspace_lock;

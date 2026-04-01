@@ -43,7 +43,7 @@ pub fn execute(
         transport = ?context.transport(),
         "executing build use case"
     );
-    run_build(config, args)
+    run_build_unlocked(config, args)
 }
 
 pub(crate) type BuildExecutionFailure = UseCaseFailure<BuildResult>;
@@ -66,7 +66,16 @@ enum StepPlan {
     },
 }
 
+#[cfg(test)]
 pub(crate) fn run_build(config: &AppConfig, args: &BuildArgs) -> UseCaseResult<BuildResult> {
+    run_build_unlocked(config, args)
+}
+
+/// Caller must ensure exclusive ownership of `config.work_path`.
+pub(crate) fn run_build_unlocked(
+    config: &AppConfig,
+    args: &BuildArgs,
+) -> UseCaseResult<BuildResult> {
     if config.format == SourceFormat::Edt {
         return run_build_edt(config, args);
     }

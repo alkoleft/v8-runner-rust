@@ -23,7 +23,6 @@ pub fn execute(
         transport = ?context.transport(),
         "executing configure extensions use case"
     );
-
     let started = Instant::now();
     let targets = match resolve_targets(config, args) {
         Ok(targets) => targets,

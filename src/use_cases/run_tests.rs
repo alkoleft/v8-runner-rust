@@ -121,7 +121,7 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> UseCaseResult<TestRunResult
 
     info!("running build prerequisite for tests");
     let build_started = Instant::now();
-    let build_result = match build_project::run_build(
+    let build_result = match build_project::run_build_unlocked(
         config,
         &BuildArgs {
             full_rebuild: false,

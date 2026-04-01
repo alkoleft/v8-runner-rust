@@ -1,5 +1,7 @@
 use std::time::Instant;
 
+use serde_json::json;
+
 use crate::cli::args::{
     BuildArgs, Command, DesignerConfigSyntaxArgs, DesignerModulesSyntaxArgs, DumpArgs,
     ExtensionsArgs, LaunchArgs, SyntaxArgs, SyntaxTarget, TestArgs, TestScope,
@@ -14,6 +16,9 @@ use crate::domain::syntax::{SyntaxCheckResult, SyntaxCheckStatus};
 use crate::domain::test::{TestRunResult, TestStatus, TestTarget};
 use crate::output::json::Envelope;
 use crate::output::presenter::Presenter;
+use crate::support::error::AppError;
+use crate::support::fs::clean_dir;
+use crate::support::temp::platform_logs_dir;
 use crate::use_cases::build_project;
 use crate::use_cases::check_syntax;
 use crate::use_cases::configure_extensions;
@@ -28,6 +33,7 @@ use crate::use_cases::request::{
 };
 use crate::use_cases::result::{UseCaseError, UseCaseErrorKind};
 use crate::use_cases::run_tests;
+use crate::use_cases::workspace_lock::acquire_workspace_lock;
 
 /// Executes a parsed CLI command by mapping it into transport-neutral requests and
 /// rendering the resulting command output.
@@ -35,15 +41,18 @@ pub fn execute_command(
     config: &AppConfig,
     command: &Command,
     presenter: &Presenter,
+    clean_before_execution: bool,
 ) -> Result<(), UseCaseError> {
     match command {
-        Command::Init => execute_init(config, presenter),
-        Command::Extensions(args) => execute_extensions(config, args, presenter),
-        Command::Build(args) => execute_build(config, args, presenter),
-        Command::Test(args) => execute_test(config, args, presenter),
-        Command::Dump(args) => execute_dump(config, args, presenter),
-        Command::Syntax(args) => execute_syntax(config, args, presenter),
-        Command::Launch(args) => execute_launch(config, args, presenter),
+        Command::Init => execute_init(config, presenter, clean_before_execution),
+        Command::Extensions(args) => {
+            execute_extensions(config, args, presenter, clean_before_execution)
+        }
+        Command::Build(args) => execute_build(config, args, presenter, clean_before_execution),
+        Command::Test(args) => execute_test(config, args, presenter, clean_before_execution),
+        Command::Dump(args) => execute_dump(config, args, presenter, clean_before_execution),
+        Command::Syntax(args) => execute_syntax(config, args, presenter, clean_before_execution),
+        Command::Launch(args) => execute_launch(config, args, presenter, clean_before_execution),
         Command::Mcp(_) => unreachable!("mcp commands are handled outside cli::execute"),
     }
 }
@@ -66,270 +75,371 @@ fn execute_extensions(
     config: &AppConfig,
     args: &ExtensionsArgs,
     presenter: &Presenter,
+    clean_before_execution: bool,
 ) -> Result<(), UseCaseError> {
     let request = map_extensions_request(args);
     let context = ExecutionContext::cli(CommandName::Extensions);
-    match configure_extensions::execute(&context, config, &request) {
-        Ok(result) => {
-            if presenter.is_json() {
-                presenter.print_envelope(&Envelope::ok(
-                    CommandName::Extensions.as_str(),
-                    result.duration_ms,
-                    result,
-                ));
-            } else {
-                render_extensions_text(&result, presenter, true);
-            }
-            Ok(())
-        }
-        Err(failure) => {
-            let error = failure.error;
-            if presenter.is_json() {
-                if let Some(result) = failure.payload {
-                    presenter.print_envelope(&Envelope::err(
+    with_cli_workspace_lock(
+        config,
+        presenter,
+        CommandName::Extensions,
+        clean_before_execution,
+        || match configure_extensions::execute(&context, config, &request) {
+            Ok(result) => {
+                if presenter.is_json() {
+                    presenter.print_envelope(&Envelope::ok(
                         CommandName::Extensions.as_str(),
                         result.duration_ms,
                         result,
                     ));
+                } else {
+                    render_extensions_text(&result, presenter, true);
                 }
-            } else {
-                if let Some(result) = failure.payload.as_ref() {
-                    render_extensions_text(result, presenter, false);
-                }
-                presenter.print_error(&error.to_string());
+                Ok(())
             }
-            Err(error)
-        }
-    }
+            Err(failure) => {
+                let error = failure.error;
+                if presenter.is_json() {
+                    if let Some(result) = failure.payload {
+                        presenter.print_envelope(&Envelope::err(
+                            CommandName::Extensions.as_str(),
+                            result.duration_ms,
+                            result,
+                        ));
+                    }
+                } else {
+                    if let Some(result) = failure.payload.as_ref() {
+                        render_extensions_text(result, presenter, false);
+                    }
+                    presenter.print_error(&error.to_string());
+                }
+                Err(error)
+            }
+        },
+    )
 }
 
-fn execute_init(config: &AppConfig, presenter: &Presenter) -> Result<(), UseCaseError> {
+fn execute_init(
+    config: &AppConfig,
+    presenter: &Presenter,
+    clean_before_execution: bool,
+) -> Result<(), UseCaseError> {
     let request = InitRequest;
     let context = ExecutionContext::cli(CommandName::Init);
-    match init_project::execute(&context, config, &request) {
-        Ok(result) => {
-            if presenter.is_json() {
-                presenter.print_envelope(&Envelope::ok(
-                    CommandName::Init.as_str(),
-                    result.duration_ms,
-                    result,
-                ));
-            } else {
-                render_init_text(&result, presenter);
-            }
-            Ok(())
-        }
-        Err(failure) => {
-            let error = failure.error;
-            if presenter.is_json() {
-                if let Some(result) = failure.payload {
-                    presenter.print_envelope(&Envelope::err(
+    with_cli_workspace_lock(
+        config,
+        presenter,
+        CommandName::Init,
+        clean_before_execution,
+        || match init_project::execute(&context, config, &request) {
+            Ok(result) => {
+                if presenter.is_json() {
+                    presenter.print_envelope(&Envelope::ok(
                         CommandName::Init.as_str(),
                         result.duration_ms,
                         result,
                     ));
+                } else {
+                    render_init_text(&result, presenter);
                 }
-            } else {
-                if let Some(result) = failure.payload.as_ref() {
-                    render_init_text(result, presenter);
-                }
-                presenter.print_error(&error.to_string());
+                Ok(())
             }
-            Err(error)
-        }
-    }
+            Err(failure) => {
+                let error = failure.error;
+                if presenter.is_json() {
+                    if let Some(result) = failure.payload {
+                        presenter.print_envelope(&Envelope::err(
+                            CommandName::Init.as_str(),
+                            result.duration_ms,
+                            result,
+                        ));
+                    }
+                } else {
+                    if let Some(result) = failure.payload.as_ref() {
+                        render_init_text(result, presenter);
+                    }
+                    presenter.print_error(&error.to_string());
+                }
+                Err(error)
+            }
+        },
+    )
 }
 
 fn execute_build(
     config: &AppConfig,
     args: &BuildArgs,
     presenter: &Presenter,
+    clean_before_execution: bool,
 ) -> Result<(), UseCaseError> {
     let request = map_build_request(args);
     let context = ExecutionContext::cli(CommandName::Build);
-    match build_project::execute(&context, config, &request) {
-        Ok(result) => {
-            if presenter.is_json() {
-                presenter.print_envelope(&Envelope::ok(
-                    CommandName::Build.as_str(),
-                    result.duration_ms,
-                    result,
-                ));
-            } else {
-                render_build_text(&result, presenter, true);
-            }
-            Ok(())
-        }
-        Err(failure) => {
-            let error = failure.error;
-            if presenter.is_json() {
-                if let Some(result) = failure.payload {
-                    presenter.print_envelope(&Envelope::err(
+    with_cli_workspace_lock(
+        config,
+        presenter,
+        CommandName::Build,
+        clean_before_execution,
+        || match build_project::execute(&context, config, &request) {
+            Ok(result) => {
+                if presenter.is_json() {
+                    presenter.print_envelope(&Envelope::ok(
                         CommandName::Build.as_str(),
                         result.duration_ms,
                         result,
                     ));
+                } else {
+                    render_build_text(&result, presenter, true);
                 }
-            } else {
-                if let Some(result) = failure.payload.as_ref() {
-                    render_build_text(result, presenter, false);
-                }
-                presenter.print_error(&error.to_string());
+                Ok(())
             }
-            Err(error)
-        }
-    }
+            Err(failure) => {
+                let error = failure.error;
+                if presenter.is_json() {
+                    if let Some(result) = failure.payload {
+                        presenter.print_envelope(&Envelope::err(
+                            CommandName::Build.as_str(),
+                            result.duration_ms,
+                            result,
+                        ));
+                    }
+                } else {
+                    if let Some(result) = failure.payload.as_ref() {
+                        render_build_text(result, presenter, false);
+                    }
+                    presenter.print_error(&error.to_string());
+                }
+                Err(error)
+            }
+        },
+    )
 }
 
 fn execute_test(
     config: &AppConfig,
     args: &TestArgs,
     presenter: &Presenter,
+    clean_before_execution: bool,
 ) -> Result<(), UseCaseError> {
-    let request = map_test_request(args);
+    let request = map_test_request(args)?;
     let context = ExecutionContext::cli(CommandName::Test);
-    match run_tests::execute(&context, config, &request) {
-        Ok(result) => {
-            if presenter.is_json() {
-                presenter.print_envelope(&build_test_envelope(result, true));
-            } else {
-                render_test_text(&result, presenter);
-            }
-            Ok(())
-        }
-        Err(failure) => {
-            let error = failure.error;
-            if presenter.is_json() {
-                if let Some(result) = failure.payload {
-                    presenter.print_envelope(&build_test_envelope(result, false));
+    with_cli_workspace_lock(
+        config,
+        presenter,
+        CommandName::Test,
+        clean_before_execution,
+        || match run_tests::execute(&context, config, &request) {
+            Ok(result) => {
+                if presenter.is_json() {
+                    presenter.print_envelope(&build_test_envelope(result, true));
+                } else {
+                    render_test_text(&result, presenter);
                 }
-            } else {
-                if let Some(result) = failure.payload.as_ref() {
-                    render_test_text(result, presenter);
-                }
-                presenter.print_error(&error.to_string());
+                Ok(())
             }
-            Err(error)
-        }
-    }
+            Err(failure) => {
+                let error = failure.error;
+                if presenter.is_json() {
+                    if let Some(result) = failure.payload {
+                        presenter.print_envelope(&build_test_envelope(result, false));
+                    }
+                } else {
+                    if let Some(result) = failure.payload.as_ref() {
+                        render_test_text(result, presenter);
+                    }
+                    presenter.print_error(&error.to_string());
+                }
+                Err(error)
+            }
+        },
+    )
 }
 
 fn execute_dump(
     config: &AppConfig,
     args: &DumpArgs,
     presenter: &Presenter,
+    clean_before_execution: bool,
 ) -> Result<(), UseCaseError> {
     let request = map_dump_request(args)?;
     let context = ExecutionContext::cli(CommandName::Dump);
-    match dump_config::execute(&context, config, &request) {
-        Ok(result) => {
-            if presenter.is_json() {
-                presenter.print_envelope(&Envelope::ok(
-                    CommandName::Dump.as_str(),
-                    result.duration_ms,
-                    result,
-                ));
-            } else {
-                render_dump_text(&result, presenter, true);
-            }
-            Ok(())
-        }
-        Err(failure) => {
-            let error = failure.error;
-            if presenter.is_json() {
-                if let Some(result) = failure.payload {
-                    presenter.print_envelope(&Envelope::err(
+    with_cli_workspace_lock(
+        config,
+        presenter,
+        CommandName::Dump,
+        clean_before_execution,
+        || match dump_config::execute(&context, config, &request) {
+            Ok(result) => {
+                if presenter.is_json() {
+                    presenter.print_envelope(&Envelope::ok(
                         CommandName::Dump.as_str(),
                         result.duration_ms,
                         result,
                     ));
+                } else {
+                    render_dump_text(&result, presenter, true);
                 }
-            } else {
-                if let Some(result) = failure.payload.as_ref() {
-                    render_dump_text(result, presenter, false);
-                }
-                presenter.print_error(&error.to_string());
+                Ok(())
             }
-            Err(error)
-        }
-    }
+            Err(failure) => {
+                let error = failure.error;
+                if presenter.is_json() {
+                    if let Some(result) = failure.payload {
+                        presenter.print_envelope(&Envelope::err(
+                            CommandName::Dump.as_str(),
+                            result.duration_ms,
+                            result,
+                        ));
+                    }
+                } else {
+                    if let Some(result) = failure.payload.as_ref() {
+                        render_dump_text(result, presenter, false);
+                    }
+                    presenter.print_error(&error.to_string());
+                }
+                Err(error)
+            }
+        },
+    )
 }
 
 fn execute_syntax(
     config: &AppConfig,
     args: &SyntaxArgs,
     presenter: &Presenter,
+    clean_before_execution: bool,
 ) -> Result<(), UseCaseError> {
     let request = map_syntax_request(args);
     let context = ExecutionContext::cli(CommandName::Syntax);
-    match check_syntax::execute(&context, config, &request) {
-        Ok(result) => {
-            if presenter.is_json() {
-                presenter.print_envelope(&Envelope::ok(
-                    CommandName::Syntax.as_str(),
-                    result.duration_ms,
-                    result,
-                ));
-            } else {
-                render_syntax_text(&result, presenter);
-            }
-            Ok(())
-        }
-        Err(failure) => {
-            let error = failure.error;
-            if presenter.is_json() {
-                if let Some(result) = failure.payload {
-                    presenter.print_envelope(&Envelope::err(
+    with_cli_workspace_lock(
+        config,
+        presenter,
+        CommandName::Syntax,
+        clean_before_execution,
+        || match check_syntax::execute(&context, config, &request) {
+            Ok(result) => {
+                if presenter.is_json() {
+                    presenter.print_envelope(&Envelope::ok(
                         CommandName::Syntax.as_str(),
                         result.duration_ms,
                         result,
                     ));
+                } else {
+                    render_syntax_text(&result, presenter);
                 }
-            } else {
-                if let Some(result) = failure.payload.as_ref() {
-                    render_syntax_text(result, presenter);
-                }
-                presenter.print_error(&error.to_string());
+                Ok(())
             }
-            Err(error)
-        }
-    }
+            Err(failure) => {
+                let error = failure.error;
+                if presenter.is_json() {
+                    if let Some(result) = failure.payload {
+                        presenter.print_envelope(&Envelope::err(
+                            CommandName::Syntax.as_str(),
+                            result.duration_ms,
+                            result,
+                        ));
+                    }
+                } else {
+                    if let Some(result) = failure.payload.as_ref() {
+                        render_syntax_text(result, presenter);
+                    }
+                    presenter.print_error(&error.to_string());
+                }
+                Err(error)
+            }
+        },
+    )
 }
 
 fn execute_launch(
     config: &AppConfig,
     args: &LaunchArgs,
     presenter: &Presenter,
+    clean_before_execution: bool,
 ) -> Result<(), UseCaseError> {
     let request = map_launch_request(args)?;
     let context = ExecutionContext::cli(CommandName::Launch);
     let started = Instant::now();
-    match launch_app::execute(&context, config, &request) {
-        Ok(result) => {
-            if presenter.is_json() {
-                presenter.print_envelope(&Envelope::ok(
-                    CommandName::Launch.as_str(),
-                    started.elapsed().as_millis() as u64,
-                    result,
-                ));
-            } else {
-                presenter.print_success_item(
-                    result
-                        .message
-                        .as_deref()
-                        .unwrap_or("Launched application successfully"),
-                );
+    with_cli_workspace_lock(
+        config,
+        presenter,
+        CommandName::Launch,
+        clean_before_execution,
+        || match launch_app::execute(&context, config, &request) {
+            Ok(result) => {
+                if presenter.is_json() {
+                    presenter.print_envelope(&Envelope::ok(
+                        CommandName::Launch.as_str(),
+                        started.elapsed().as_millis() as u64,
+                        result,
+                    ));
+                } else {
+                    presenter.print_success_item(
+                        result
+                            .message
+                            .as_deref()
+                            .unwrap_or("Launched application successfully"),
+                    );
+                }
+                Ok(())
             }
-            Ok(())
-        }
-        Err(failure) => {
-            let error = failure.error;
-            if !presenter.is_json() {
-                presenter.print_error(&error.to_string());
+            Err(failure) => {
+                let error = failure.error;
+                if !presenter.is_json() {
+                    presenter.print_error(&error.to_string());
+                }
+                Err(error)
             }
-            Err(error)
-        }
+        },
+    )
+}
+
+fn with_cli_workspace_lock<T>(
+    config: &AppConfig,
+    presenter: &Presenter,
+    command: CommandName,
+    clean_before_execution: bool,
+    run: impl FnOnce() -> Result<T, UseCaseError>,
+) -> Result<T, UseCaseError> {
+    let _workspace_lock = acquire_workspace_lock(config, command.as_str())
+        .map_err(|error| render_pre_dispatch_error(presenter, command, error))?;
+    if clean_before_execution {
+        clean_platform_logs_under_lock(config, presenter, command)?;
     }
+    run()
+}
+
+fn clean_platform_logs_under_lock(
+    config: &AppConfig,
+    presenter: &Presenter,
+    command: CommandName,
+) -> Result<(), UseCaseError> {
+    platform_logs_dir(&config.work_path)
+        .and_then(|dir| clean_dir(&dir))
+        .map_err(|error| {
+            render_pre_dispatch_error(
+                presenter,
+                command,
+                AppError::Runtime(format!("failed to clean platform logs: {error}")),
+            )
+        })
+}
+
+fn render_pre_dispatch_error(
+    presenter: &Presenter,
+    command: CommandName,
+    error: impl Into<UseCaseError>,
+) -> UseCaseError {
+    let error = error.into();
+    if presenter.is_json() {
+        presenter.print_envelope(&pre_dispatch_error_envelope(command, error.message()));
+    } else {
+        presenter.print_error(&error.to_string());
+    }
+    error
+}
+
+fn pre_dispatch_error_envelope(command: CommandName, message: &str) -> Envelope<serde_json::Value> {
+    Envelope::err(command.as_str(), 0, json!({ "message": message }))
 }
 
 fn map_build_request(args: &BuildArgs) -> BuildRequest {
@@ -344,14 +454,26 @@ fn map_extensions_request(args: &ExtensionsArgs) -> ConfigureExtensionsRequest {
     }
 }
 
-fn map_test_request(args: &TestArgs) -> TestRequest {
-    TestRequest {
+fn map_test_request(args: &TestArgs) -> Result<TestRequest, UseCaseError> {
+    let scope = match &args.scope {
+        TestScope::All => TestScopeRequest::All,
+        TestScope::Module { name } => {
+            let trimmed = name.trim();
+            if trimmed.is_empty() || trimmed.chars().any(char::is_control) {
+                return Err(UseCaseError::new(
+                    UseCaseErrorKind::Validation,
+                    "test module requires a non-empty module name",
+                ));
+            }
+            TestScopeRequest::Module {
+                name: trimmed.to_owned(),
+            }
+        }
+    };
+    Ok(TestRequest {
         full: args.full,
-        scope: match &args.scope {
-            TestScope::All => TestScopeRequest::All,
-            TestScope::Module { name } => TestScopeRequest::Module { name: name.clone() },
-        },
-    }
+        scope,
+    })
 }
 
 fn map_dump_request(args: &DumpArgs) -> Result<DumpRequest, UseCaseError> {
@@ -714,18 +836,30 @@ fn status_label(status: &TestStatus) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        command_name, map_build_request, map_designer_config_request, map_dump_request,
-        map_extensions_request, map_launch_request, map_syntax_request, map_test_request,
+        command_name, execute_command, map_build_request, map_designer_config_request,
+        map_dump_request, map_extensions_request, map_launch_request, map_syntax_request,
+        map_test_request, pre_dispatch_error_envelope,
     };
     use crate::cli::args::{
         BuildArgs, Command, DesignerConfigSyntaxArgs, DesignerModulesSyntaxArgs, DumpArgs,
         ExtensionsArgs, LaunchArgs, SyntaxArgs, SyntaxTarget, TestArgs, TestScope,
     };
+    use crate::config::model::{
+        AppConfig, BuildConfig, BuilderBackend, SourceFormat, SourceSetConfig, SourceSetPurpose,
+        TestsConfig, ToolsConfig,
+    };
+    use crate::output::presenter::{ColorMode, Presenter};
+    use crate::support::fs::acquire_advisory_lock;
+    use crate::support::temp::platform_logs_dir;
     use crate::use_cases::context::CommandName;
     use crate::use_cases::request::{
         DumpModeRequest, LaunchModeRequest, SyntaxTargetRequest, TestScopeRequest,
     };
     use crate::use_cases::result::UseCaseErrorKind;
+    use crate::use_cases::workspace_lock::workspace_lock_path;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use tempfile::tempdir;
 
     #[test]
     fn maps_test_module_request() {
@@ -734,7 +868,8 @@ mod tests {
             scope: TestScope::Module {
                 name: "ModuleA".to_owned(),
             },
-        });
+        })
+        .expect("request");
 
         assert!(request.full);
         assert_eq!(
@@ -742,6 +877,23 @@ mod tests {
             TestScopeRequest::Module {
                 name: "ModuleA".to_owned()
             }
+        );
+    }
+
+    #[test]
+    fn rejects_blank_test_module_request() {
+        let error = map_test_request(&TestArgs {
+            full: false,
+            scope: TestScope::Module {
+                name: "   ".to_owned(),
+            },
+        })
+        .expect_err("blank module should be rejected");
+
+        assert_eq!(error.kind(), UseCaseErrorKind::Validation);
+        assert_eq!(
+            error.message(),
+            "test module requires a non-empty module name"
         );
     }
 
@@ -881,5 +1033,169 @@ mod tests {
             })),
             CommandName::Build
         );
+    }
+
+    fn sample_config(work_path: &Path) -> AppConfig {
+        AppConfig {
+            base_path: work_path.join("base"),
+            work_path: work_path.to_path_buf(),
+            format: SourceFormat::Designer,
+            builder: BuilderBackend::Designer,
+            connection: "File=/tmp/ib".to_owned(),
+            credentials: Default::default(),
+            source_sets: vec![SourceSetConfig {
+                name: "main".to_owned(),
+                purpose: SourceSetPurpose::Configuration,
+                path: PathBuf::from("main"),
+            }],
+            build: BuildConfig::default(),
+            tools: ToolsConfig::default(),
+            mcp: Default::default(),
+            tests: TestsConfig::default(),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn execute_command_reports_workspace_lock_conflict_before_dispatch() {
+        let dir = tempdir().expect("tempdir");
+        let work = dir.path().join("work");
+        fs::create_dir_all(&work).expect("work dir");
+        let config = sample_config(&work);
+        let canonical_work = fs::canonicalize(&config.work_path).expect("canonical work");
+        let lock_path = workspace_lock_path(&canonical_work);
+        let _guard = acquire_advisory_lock(&lock_path).expect("workspace lock");
+        let presenter = Presenter::new("text".to_owned(), ColorMode::Disabled);
+
+        let error = execute_command(
+            &config,
+            &Command::Build(BuildArgs { full_rebuild: true }),
+            &presenter,
+            false,
+        )
+        .expect_err("busy workspace");
+
+        assert_eq!(error.kind(), UseCaseErrorKind::Runtime);
+        assert!(error.to_string().contains("workspace"));
+        assert!(error.to_string().contains("already"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn execute_command_reports_workspace_lock_conflict_for_test_command() {
+        let dir = tempdir().expect("tempdir");
+        let work = dir.path().join("work");
+        fs::create_dir_all(&work).expect("work dir");
+        let config = sample_config(&work);
+        let canonical_work = fs::canonicalize(&config.work_path).expect("canonical work");
+        let lock_path = workspace_lock_path(&canonical_work);
+        let _guard = acquire_advisory_lock(&lock_path).expect("workspace lock");
+        let presenter = Presenter::new("text".to_owned(), ColorMode::Disabled);
+
+        let error = execute_command(
+            &config,
+            &Command::Test(TestArgs {
+                full: false,
+                scope: TestScope::All,
+            }),
+            &presenter,
+            false,
+        )
+        .expect_err("busy workspace");
+
+        assert_eq!(error.kind(), UseCaseErrorKind::Runtime);
+        assert!(error.to_string().contains("workspace"));
+        assert!(error.to_string().contains("already"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn execute_command_validates_before_trying_workspace_lock() {
+        let dir = tempdir().expect("tempdir");
+        let work = dir.path().join("work");
+        fs::create_dir_all(&work).expect("work dir");
+        let config = sample_config(&work);
+        let canonical_work = fs::canonicalize(&config.work_path).expect("canonical work");
+        let lock_path = workspace_lock_path(&canonical_work);
+        let _guard = acquire_advisory_lock(&lock_path).expect("workspace lock");
+        let presenter = Presenter::new("text".to_owned(), ColorMode::Disabled);
+
+        let error = execute_command(
+            &config,
+            &Command::Launch(LaunchArgs {
+                mode: "garbage".to_owned(),
+            }),
+            &presenter,
+            false,
+        )
+        .expect_err("invalid mode");
+
+        assert_eq!(error.kind(), UseCaseErrorKind::Validation);
+        assert!(!error.to_string().contains("workspace"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn execute_command_validates_test_module_before_trying_workspace_lock() {
+        let dir = tempdir().expect("tempdir");
+        let work = dir.path().join("work");
+        fs::create_dir_all(&work).expect("work dir");
+        let config = sample_config(&work);
+        let canonical_work = fs::canonicalize(&config.work_path).expect("canonical work");
+        let lock_path = workspace_lock_path(&canonical_work);
+        let _guard = acquire_advisory_lock(&lock_path).expect("workspace lock");
+        let presenter = Presenter::new("text".to_owned(), ColorMode::Disabled);
+
+        let error = execute_command(
+            &config,
+            &Command::Test(TestArgs {
+                full: false,
+                scope: TestScope::Module {
+                    name: "   ".to_owned(),
+                },
+            }),
+            &presenter,
+            false,
+        )
+        .expect_err("invalid module");
+
+        assert_eq!(error.kind(), UseCaseErrorKind::Validation);
+        assert!(!error.to_string().contains("workspace"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn execute_command_does_not_clean_logs_when_workspace_is_busy() {
+        let dir = tempdir().expect("tempdir");
+        let work = dir.path().join("work");
+        fs::create_dir_all(&work).expect("work dir");
+        let config = sample_config(&work);
+        let logs_dir = platform_logs_dir(&config.work_path).expect("logs dir");
+        fs::create_dir_all(&logs_dir).expect("create logs dir");
+        let stale_log = logs_dir.join("stale.log");
+        fs::write(&stale_log, "old").expect("stale log");
+        let canonical_work = fs::canonicalize(&config.work_path).expect("canonical work");
+        let lock_path = workspace_lock_path(&canonical_work);
+        let _guard = acquire_advisory_lock(&lock_path).expect("workspace lock");
+        let presenter = Presenter::new("text".to_owned(), ColorMode::Disabled);
+
+        let _ = execute_command(
+            &config,
+            &Command::Build(BuildArgs { full_rebuild: true }),
+            &presenter,
+            true,
+        )
+        .expect_err("busy workspace");
+
+        assert!(stale_log.exists());
+    }
+
+    #[test]
+    fn pre_dispatch_json_error_keeps_command_identity() {
+        let envelope = pre_dispatch_error_envelope(CommandName::Build, "workspace is busy");
+        let json = serde_json::to_value(envelope).expect("json");
+
+        assert_eq!(json["command"], "build");
+        assert_eq!(json["data"]["message"], "workspace is busy");
     }
 }

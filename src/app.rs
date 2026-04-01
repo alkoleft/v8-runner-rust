@@ -52,19 +52,6 @@ pub fn run() -> i32 {
         debug!(path = %path.display(), "action log file enabled");
     }
 
-    if cli.clean_before_execution {
-        debug!("cleaning platform logs directory before execution");
-        match crate::support::temp::platform_logs_dir(&config.work_path)
-            .and_then(|dir| crate::support::fs::clean_dir(&dir))
-        {
-            Ok(()) => debug!("platform logs directory cleaned"),
-            Err(e) => {
-                presenter.print_error(&format!("failed to clean platform logs: {e}"));
-                return crate::output::exit_codes::RUNTIME_ERROR;
-            }
-        }
-    }
-
     let result = match &cli.command {
         Command::Init
         | Command::Extensions(_)
@@ -72,7 +59,12 @@ pub fn run() -> i32 {
         | Command::Test(_)
         | Command::Dump(_)
         | Command::Syntax(_)
-        | Command::Launch(_) => execute::execute_command(&config, &cli.command, &presenter),
+        | Command::Launch(_) => execute::execute_command(
+            &config,
+            &cli.command,
+            &presenter,
+            cli.clean_before_execution,
+        ),
         Command::Mcp(_) => unreachable!("mcp commands are handled before CLI presenter setup"),
     };
 
@@ -150,6 +142,11 @@ fn prepare_mcp_runtime(
         }
     };
 
+    if cli.clean_before_execution {
+        eprintln!("--clean-before-execution is not supported for MCP transports");
+        return Err(crate::output::exit_codes::VALIDATION_ERROR);
+    }
+
     let level = cli.log_level.as_deref().unwrap_or("info");
     if let Err(error) =
         crate::support::logging::init_action_logging(level, "json", false, &config.work_path)
@@ -163,21 +160,6 @@ fn prepare_mcp_runtime(
         work_path = %config.work_path.display(),
         "starting mcp server"
     );
-
-    if cli.clean_before_execution {
-        match crate::support::temp::platform_logs_dir(&config.work_path)
-            .and_then(|dir| crate::support::fs::clean_dir(&dir))
-        {
-            Ok(()) => debug!(
-                transport,
-                "platform logs directory cleaned for mcp transport"
-            ),
-            Err(error) => {
-                eprintln!("failed to clean platform logs: {error}");
-                return Err(crate::output::exit_codes::RUNTIME_ERROR);
-            }
-        }
-    }
 
     Ok(config)
 }

@@ -47,6 +47,7 @@ pub struct TempDirMetadata {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug)]
 pub struct AdvisoryLockGuard {
     file: File,
 }
@@ -67,6 +68,26 @@ pub struct ReplaceDirOutcome {
 }
 
 pub fn acquire_advisory_lock(path: &Path) -> std::io::Result<AdvisoryLockGuard> {
+    acquire_advisory_lock_with_mode(path, false)
+}
+
+pub fn try_acquire_advisory_lock(path: &Path) -> std::io::Result<AdvisoryLockGuard> {
+    acquire_advisory_lock_with_mode(path, true)
+}
+
+fn acquire_advisory_lock_with_mode(
+    path: &Path,
+    nonblocking: bool,
+) -> std::io::Result<AdvisoryLockGuard> {
+    #[cfg(not(unix))]
+    {
+        let _ = (path, nonblocking);
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "advisory locks are supported only on unix-like platforms",
+        ));
+    }
+
     if let Some(parent) = path.parent() {
         ensure_dir(parent)?;
     }
@@ -79,17 +100,14 @@ pub fn acquire_advisory_lock(path: &Path) -> std::io::Result<AdvisoryLockGuard> 
 
     #[cfg(unix)]
     unsafe {
-        if libc::flock(std::os::fd::AsRawFd::as_raw_fd(&file), libc::LOCK_EX) != 0 {
+        let mode = if nonblocking {
+            libc::LOCK_EX | libc::LOCK_NB
+        } else {
+            libc::LOCK_EX
+        };
+        if libc::flock(std::os::fd::AsRawFd::as_raw_fd(&file), mode) != 0 {
             return Err(std::io::Error::last_os_error());
         }
-    }
-
-    #[cfg(not(unix))]
-    {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "advisory locks are supported only on unix-like platforms",
-        ));
     }
 
     Ok(AdvisoryLockGuard { file })
