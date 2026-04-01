@@ -122,38 +122,6 @@ fn setup_edt_init_project(
     )
 }
 
-fn setup_edt_init_project_without_edt_cli() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
-    let dir = tempdir().expect("tempdir");
-    let base_path = dir.path().join("project");
-    let work_path = dir.path().join("work");
-    let config_path = dir.path().join("application.yaml");
-    let platform_path = dir.path().join("1cv8");
-    let infobase_path = dir.path().join("ib");
-
-    fs::create_dir_all(base_path.join("main")).expect("main");
-    fs::create_dir_all(base_path.join("ext")).expect("ext");
-    fs::create_dir_all(&work_path).expect("work");
-    write_script(
-        &platform_path,
-        &format!(
-            "if [ \"$1\" = \"CREATEINFOBASE\" ]; then mkdir -p \"{}\" && : > \"{}/1Cv8.1CD\"; fi\nexit 0",
-            infobase_path.display(),
-            infobase_path.display()
-        ),
-    );
-
-    let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: EDT\nbuilder: DESIGNER\nconnection: 'File={}'\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: main\n  - name: ext\n    purpose: EXTENSION\n    path: ext\ntools:\n  platform:\n    path: '{}'\n",
-        base_path.display(),
-        work_path.display(),
-        infobase_path.display(),
-        platform_path.display(),
-    );
-    fs::write(&config_path, config).expect("config");
-
-    (dir, config_path, work_path, base_path)
-}
-
 #[test]
 fn init_designer_creates_infobase_and_skips_edt_workspace() {
     let (_dir, config_path, work_path, infobase_path) = setup_designer_init_project();
@@ -290,7 +258,16 @@ fn init_skips_existing_workspace() {
 
 #[test]
 fn init_retries_edt_import_when_previous_run_left_incomplete_workspace() {
-    let (_dir, config_path, work_path, base_path) = setup_edt_init_project_without_edt_cli();
+    let (_dir, config_path, work_path, base_path, _platform_path, edt_calls_log) =
+        setup_edt_init_project("EDT", "DESIGNER", "__AUTO_FILE__");
+    let edt_path = work_path.parent().expect("parent").join("1cedtcli");
+    write_script(
+        &edt_path,
+        &format!(
+            "printf '%s\\n' \"$*\" >> \"{}\"\nexit 1",
+            edt_calls_log.display()
+        ),
+    );
 
     let first = std::process::Command::cargo_bin("v8-test-runner")
         .expect("binary")
@@ -305,14 +282,20 @@ fn init_retries_edt_import_when_previous_run_left_incomplete_workspace() {
         .expect("first run");
 
     assert!(!first.status.success());
+    let first_payload: Value = serde_json::from_slice(&first.stdout).expect("json");
+    assert_eq!(first_payload["command"], "init");
+    assert_eq!(first_payload["data"]["steps"][0]["status"], "ok");
+    assert_eq!(first_payload["data"]["steps"][1]["status"], "failed");
     assert!(work_path.join("edt-workspace").exists());
     assert!(!work_path
         .join("edt-workspace")
         .join(".v8tr-initialized")
         .exists());
+    let first_calls = fs::read_to_string(&edt_calls_log).expect("calls");
+    let first_lines: Vec<_> = first_calls.lines().collect();
+    assert_eq!(first_lines.len(), 1);
+    assert!(first_lines[0].contains(&base_path.join("main").display().to_string()));
 
-    let edt_path = work_path.parent().expect("parent").join("1cedtcli");
-    let edt_calls_log = work_path.parent().expect("parent").join("edt.calls.log");
     write_script(
         &edt_path,
         &format!(
@@ -320,12 +303,6 @@ fn init_retries_edt_import_when_previous_run_left_incomplete_workspace() {
             edt_calls_log.display()
         ),
     );
-    let mut config = fs::read_to_string(&config_path).expect("config");
-    config.push_str(&format!(
-        "\n  edt_cli:\n    path: '{}'\n",
-        edt_path.display()
-    ));
-    fs::write(&config_path, config).expect("updated config");
 
     let second = std::process::Command::cargo_bin("v8-test-runner")
         .expect("binary")
@@ -347,8 +324,10 @@ fn init_retries_edt_import_when_previous_run_left_incomplete_workspace() {
         .join(".v8tr-initialized")
         .exists());
     let calls = fs::read_to_string(edt_calls_log).expect("calls");
-    assert!(calls.contains(&base_path.join("main").display().to_string()));
-    assert!(calls.contains(&base_path.join("ext").display().to_string()));
+    let lines: Vec<_> = calls.lines().collect();
+    assert_eq!(lines.len(), 3);
+    assert!(lines[1].contains(&base_path.join("main").display().to_string()));
+    assert!(lines[2].contains(&base_path.join("ext").display().to_string()));
 }
 
 #[test]
