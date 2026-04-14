@@ -471,6 +471,7 @@ fn map_test_request(args: &TestArgs) -> Result<TestRequest, UseCaseError> {
         }
     };
     Ok(TestRequest {
+        execution: TestRequest::default_execution(),
         full: args.full,
         scope,
     })

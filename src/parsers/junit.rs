@@ -5,7 +5,9 @@ use quick_xml::name::QName;
 use quick_xml::Reader;
 use thiserror::Error;
 
+use crate::domain::execution::{ExecutionError, ExecutionMetrics};
 use crate::domain::test::{TestCase, TestReport, TestStatus, TestSuite, TestSummary};
+use crate::parsers::NormalizedParse;
 
 #[derive(Debug, Error)]
 pub enum JunitError {
@@ -30,12 +32,6 @@ struct CaseBuilder {
     status: TestStatus,
     failure_message: Option<String>,
     stack_trace: Option<String>,
-}
-
-impl Default for TestStatus {
-    fn default() -> Self {
-        Self::Passed
-    }
 }
 
 pub fn parse<R: BufRead>(reader: R) -> Result<TestReport, JunitError> {
@@ -196,6 +192,21 @@ pub fn parse<R: BufRead>(reader: R) -> Result<TestReport, JunitError> {
     })
 }
 
+pub fn parse_normalized<R: BufRead>(reader: R) -> NormalizedParse<TestReport> {
+    match parse(reader) {
+        Ok(report) => NormalizedParse::default()
+            .with_metrics(ExecutionMetrics::from(&report.summary))
+            .with_payload(report),
+        Err(error) => NormalizedParse::default().with_errors(vec![match error {
+            JunitError::Empty => ExecutionError::new("junit_empty", "junit file is empty"),
+            JunitError::Malformed(message) => {
+                ExecutionError::new("junit_malformed", "failed to parse junit xml")
+                    .with_details(vec![message])
+            }
+        }]),
+    }
+}
+
 fn attr_value(event: &quick_xml::events::BytesStart<'_>, key: &[u8]) -> String {
     option_attr_value(event, key).unwrap_or_default()
 }
@@ -246,7 +257,7 @@ fn non_empty(value: String) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse, JunitError};
+    use super::{parse, parse_normalized, JunitError};
 
     const JUNIT_REPORT_FIXTURE: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -297,5 +308,19 @@ mod tests {
         let report = parse(std::io::Cursor::new(xml)).expect("report");
         assert_eq!(report.summary.failed, 1);
         assert_eq!(report.summary.errors, 1);
+    }
+
+    #[test]
+    fn normalizes_metrics_from_report() {
+        let normalized = parse_normalized(std::io::Cursor::new(JUNIT_REPORT_FIXTURE));
+        assert_eq!(normalized.metrics.expect("metrics").total, 2);
+        assert!(normalized.errors.is_empty());
+    }
+
+    #[test]
+    fn normalizes_empty_report_into_structured_error() {
+        let normalized = parse_normalized(std::io::Cursor::new(""));
+        assert_eq!(normalized.errors[0].code, "junit_empty");
+        assert!(normalized.payload.is_none());
     }
 }

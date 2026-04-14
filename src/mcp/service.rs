@@ -82,6 +82,7 @@ where
         let context = execution_context(call_context, CommandName::Test)
             .map_err(McpServiceError::Internal)?;
         let use_case_request = TestRequest {
+            execution: TestRequest::default_execution(),
             full: request.full.unwrap_or(false),
             scope: TestScopeRequest::All,
         };
@@ -137,6 +138,7 @@ where
                 ))
             })?;
         let use_case_request = TestRequest {
+            execution: TestRequest::default_execution(),
             full: request.full.unwrap_or(false),
             scope: TestScopeRequest::Module { name: module_name },
         };
@@ -2114,56 +2116,69 @@ mod tests {
     }
 
     fn sample_test_result(ok: bool) -> TestRunResult {
-        TestRunResult {
-            ok,
-            target: TestTarget::All,
-            mode: TestOutputMode::Full,
-            error_kind: (!ok).then_some(crate::domain::test::TestErrorKind::TestFailures),
-            diagnostics: vec![],
-            retained_paths: Some(RetainedPaths {
-                run_dir: PathBuf::from("/tmp/run"),
-                config_json: PathBuf::from("/tmp/config.json"),
-                junit_xml: PathBuf::from("/tmp/junit.xml"),
-                yaxunit_log: PathBuf::from("/tmp/yaxunit.log"),
-                platform_log: PathBuf::from("/tmp/platform.log"),
-                sentinel: PathBuf::from("/tmp/sentinel"),
-            }),
-            report: Some(TestReport {
-                summary: TestSummary {
-                    total: 3,
-                    passed: 2,
-                    failed: 1,
-                    skipped: 0,
-                    errors: 0,
-                },
-                suites: vec![TestSuite {
-                    name: "Smoke".to_owned(),
-                    cases: vec![
-                        TestCase {
-                            name: "ok".to_owned(),
-                            class_name: None,
-                            status: TestStatus::Passed,
-                            duration_ms: 10,
-                            failure_message: None,
-                            stack_trace: None,
-                        },
-                        TestCase {
-                            name: "fail".to_owned(),
-                            class_name: Some("Smoke".to_owned()),
-                            status: TestStatus::Failed,
-                            duration_ms: 11,
-                            failure_message: Some("assert".to_owned()),
-                            stack_trace: Some("trace".to_owned()),
-                        },
-                    ],
-                    duration_ms: 21,
-                }],
-                extracted_errors: (!ok)
-                    .then_some(vec!["assert".to_owned()])
-                    .unwrap_or_default(),
-            }),
-            warnings: vec![],
-            steps: if ok {
+        let retained = RetainedPaths {
+            run_dir: PathBuf::from("/tmp/run"),
+            config_json: PathBuf::from("/tmp/config.json"),
+            junit_xml: PathBuf::from("/tmp/junit.xml"),
+            yaxunit_log: PathBuf::from("/tmp/yaxunit.log"),
+            platform_log: PathBuf::from("/tmp/platform.log"),
+            sentinel: PathBuf::from("/tmp/sentinel"),
+        };
+        let report = TestReport {
+            summary: TestSummary {
+                total: 3,
+                passed: 2,
+                failed: 1,
+                skipped: 0,
+                errors: 0,
+            },
+            suites: vec![TestSuite {
+                name: "Smoke".to_owned(),
+                cases: vec![
+                    TestCase {
+                        name: "ok".to_owned(),
+                        class_name: None,
+                        status: TestStatus::Passed,
+                        duration_ms: 10,
+                        failure_message: None,
+                        stack_trace: None,
+                    },
+                    TestCase {
+                        name: "fail".to_owned(),
+                        class_name: Some("Smoke".to_owned()),
+                        status: TestStatus::Failed,
+                        duration_ms: 11,
+                        failure_message: Some("assert".to_owned()),
+                        stack_trace: Some("trace".to_owned()),
+                    },
+                ],
+                duration_ms: 21,
+            }],
+            extracted_errors: (!ok)
+                .then_some(vec!["assert".to_owned()])
+                .unwrap_or_default(),
+        };
+        let mut outcome = crate::domain::execution::ExecutionOutcome::new(if ok {
+            crate::domain::execution::ExecutionStatus::Succeeded
+        } else {
+            crate::domain::execution::ExecutionStatus::Failed
+        })
+        .with_metrics(crate::domain::execution::ExecutionMetrics::from(&report.summary))
+        .with_payload(report);
+        if !ok {
+            outcome = outcome.with_errors(vec![crate::domain::test::test_execution_error(
+                crate::domain::test::TestErrorKind::TestFailures,
+                "Tests failed",
+            )]);
+        }
+        outcome = outcome.with_artifacts(retained.into_artifact_set());
+
+        TestRunResult::from_outcome(
+            outcome,
+            TestTarget::All,
+            TestOutputMode::Full,
+            vec![],
+            if ok {
                 vec![]
             } else {
                 vec![StepResult {
@@ -2173,8 +2188,8 @@ mod tests {
                     message: Some("boom".to_owned()),
                 }]
             },
-            duration_ms: 120,
-        }
+            120,
+        )
     }
 
     fn sample_syntax_result(status: SyntaxCheckStatus) -> SyntaxCheckResult {

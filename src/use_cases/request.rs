@@ -1,3 +1,9 @@
+use crate::domain::execution::ExecutionTimeouts;
+use crate::domain::runner::{
+    ExecutionPolicy, RunnerKind, RunnerOutputFormat, RunnerProfile, ScenarioExecutionRequest,
+};
+use crate::domain::test::TEST_RUNNER_ID;
+
 /// Transport-neutral request for the `build` use case.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildRequest {
@@ -8,10 +14,36 @@ pub struct BuildRequest {
 /// Transport-neutral request for the `test` use case.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TestRequest {
+    /// Shared runner execution block reused by future test/package scenarios.
+    pub execution: ScenarioExecutionRequest,
     /// When `true`, the use case may request a full build before test execution.
     pub full: bool,
     /// Selected test scope. Module targets require a non-empty module name.
     pub scope: TestScopeRequest,
+}
+
+impl TestRequest {
+    /// Default YaXUnit execution contract for the current test flow.
+    /// Note: only `timeouts.total_ms` is wired into runtime today; the policy
+    /// flags are retained as part of the shared OCP-friendly contract.
+    pub fn default_execution() -> ScenarioExecutionRequest {
+        ScenarioExecutionRequest {
+            profile: RunnerProfile {
+                id: TEST_RUNNER_ID.to_owned(),
+                kind: RunnerKind::YaXUnit,
+                output_formats: vec![
+                    RunnerOutputFormat::JunitXml,
+                    RunnerOutputFormat::PlainTextLog,
+                ],
+                backend_hint: Some("enterprise".to_owned()),
+            },
+            timeouts: ExecutionTimeouts::default(),
+            policy: ExecutionPolicy {
+                retain_artifacts_on_failure: true,
+                retain_artifacts_on_success: false,
+            },
+        }
+    }
 }
 
 /// Transport-neutral test scope.
