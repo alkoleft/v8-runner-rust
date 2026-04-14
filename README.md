@@ -67,7 +67,7 @@ source-set:
 | Сценарий | Текущая поддержка |
 | --- | --- |
 | `init` | `format=DESIGNER` с `builder=DESIGNER` или `IBCMD`; `format=EDT` с `builder=DESIGNER` |
-| `extensions` | Обновление свойств расширений для EDT и Designer-проектов по настроенным extension `source-set` |
+| `extensions` | Обновление свойств расширений для EDT и Designer-проектов по настроенным extension `source-set`; только файловая ИБ |
 | `build` | `format=DESIGNER` с `builder=DESIGNER` или `IBCMD`; `format=EDT` с `builder=DESIGNER` |
 | `test` | Следует матрице `build` и всегда сначала запускает `build` |
 | `dump` | `format=DESIGNER` с `builder=DESIGNER` или `IBCMD` |
@@ -97,14 +97,17 @@ source-set:
 - [docs/DEEP_DIVE.md](docs/DEEP_DIVE.md): объяснение внутренних эксплуатационных потоков без дублирования полного справочника команд.
 - [examples/application.yaml](examples/application.yaml): полный пример конфига с опциональными секциями и значениями по умолчанию.
 - [ARCHITECTURE.md](ARCHITECTURE.md): карта модулей и внутренних границ для контрибьюторов.
+- [docs/decisions/0001-granitsy-podderzhki-ibcmd-kak-ogranichennogo-backend.md](docs/decisions/0001-granitsy-podderzhki-ibcmd-kak-ogranichennogo-backend.md): принятая граница поддержки `IBCMD` как ограниченного backend.
 
 <details>
 <summary>Текущие ограничения и оговорки</summary>
 
 - `IBCMD` требует файловое подключение к информационной базе.
+- `IBCMD` поддерживается как ограниченный backend для сценариев `init`, `build`, `dump`, `extensions`.
 - `init` считает файловую ИБ существующей только по наличию файла `1Cv8.1CD` в каталоге базы и не валидирует содержимое глубже.
 - `init` для EDT считает workspace завершённым только после успешного полного импорта; незавершённый каталог без внутреннего marker-файла будет импортирован повторно.
 - Точечная частичная выгрузка по объектам нативно не реализована для `IBCMD`; запрос `partial` деградирует в инкрементальную выгрузку с предупреждением.
+- При деградации `partial` для `IBCMD` запрошенный режим `PARTIAL` сохраняется в результирующем payload.
 - `syntax designer-modules` требует как минимум один флаг режима.
 - Интерактивный EDT теперь включается явно через `tools.edt_cli.interactive-mode`; без него EDT работает в one-shot режиме.
 - Внутренние документы в `spec/*` по-прежнему полезны как источник фактов, но публичный справочник теперь живёт в `README.md`, `docs/CAPABILITIES.md` и `docs/DEEP_DIVE.md`.

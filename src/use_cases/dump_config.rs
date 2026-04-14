@@ -25,6 +25,7 @@ use crate::support::fs::{
 };
 use crate::support::temp::{dump_object_list_file, platform_logs_dir};
 use crate::use_cases::context::ExecutionContext;
+use crate::use_cases::ibcmd_diagnostics::format_ibcmd_failure_details;
 use crate::use_cases::request::{DumpModeRequest, DumpRequest as DumpArgs};
 use crate::use_cases::result::{UseCaseFailure, UseCaseResult};
 use tracing::info;
@@ -942,28 +943,16 @@ fn ensure_platform_success(
         return Ok(());
     }
 
-    let mut details = vec![format!(
-        "{action} failed for source-set '{}' with exit code {}",
-        resolved.source_set_name, result.process.exit_code
-    )];
-    if !result.process.stdout.trim().is_empty() {
-        details.push(format!("stdout: {}", result.process.stdout.trim()));
-    }
-    if !result.process.stderr.trim().is_empty() {
-        details.push(format!("stderr: {}", result.process.stderr.trim()));
-    }
-    if let Some(log) = result
-        .platform_log
-        .as_deref()
-        .filter(|log| !log.trim().is_empty())
-    {
-        details.push(format!("platform log: {}", log.trim()));
-    }
-    if let Some(path) = &result.platform_log_path {
-        details.push(format!("platform log path: {}", path.display()));
-    }
-
-    Err(AppError::Platform(details.join("; ")))
+    Err(AppError::Platform(format_ibcmd_failure_details(
+        action,
+        "source-set",
+        &resolved.source_set_name,
+        result.process.exit_code,
+        &result.process.stdout,
+        &result.process.stderr,
+        result.platform_log.as_deref(),
+        result.platform_log_path.as_deref(),
+    )))
 }
 
 fn empty_result(

@@ -207,4 +207,8 @@ fn dump_ibcmd_partial_failure_keeps_partial_mode_and_warning() {
         .as_str()
         .expect("message")
         .contains("IBCMD does not support object-scoped partial dump"));
+    assert!(data["message"]
+        .as_str()
+        .expect("message")
+        .contains("dump failed for source-set 'main' with exit code 17"));
 }

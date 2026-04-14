@@ -139,6 +139,13 @@
 - [x] Валидировать ограничения IBCMD для connection type (только файловая ИБ)
 - [x] Задокументировать ограничения IBCMD backend
 
+## План поддержки IBCMD (пункты 1-4)
+
+- [x] Step 1: Зафиксировать продуктовую границу `IBCMD` и синхронизировать документацию + ADR (`README.md`, `docs/CAPABILITIES.md`, `docs/DEEP_DIVE.md`, `docs/GIT_WORKFLOW.md`, `ARCHITECTURE.md`, `docs/decisions/*`).
+- [x] Step 2: Закрыть минимальный regression gap для `IBCMD` в MCP HTTP и подтвердить неизменность stdio/CLI поведения.
+- [x] Step 3: Добавить live smoke path для `IBCMD` с явной skip policy при недоступном стенде.
+- [x] Step 4: Унифицировать диагностические сообщения `IBCMD` в use-case слоях и в payload CLI/MCP.
+
 ## Подготовка к следующему этапу
 
 - [x] Расширить config-модель новыми `mcp.*` и `tools.edt_cli.*` настройками для MCP stage

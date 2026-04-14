@@ -21,7 +21,7 @@ fn write_script(path: &Path, body: &str) {
     make_executable(path);
 }
 
-fn setup_extensions_project() -> (tempfile::TempDir, PathBuf, PathBuf) {
+fn setup_extensions_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
     let dir = tempdir().expect("tempdir");
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
@@ -57,12 +57,12 @@ fn setup_extensions_project() -> (tempfile::TempDir, PathBuf, PathBuf) {
     );
     fs::write(&config_path, config).expect("config");
 
-    (dir, config_path, calls_log)
+    (dir, config_path, calls_log, ibcmd_path)
 }
 
 #[test]
 fn extensions_command_updates_all_extension_properties() {
-    let (_dir, config_path, calls_log) = setup_extensions_project();
+    let (_dir, config_path, calls_log, _ibcmd_path) = setup_extensions_project();
 
     let output = std::process::Command::cargo_bin("v8-test-runner")
         .expect("binary")
@@ -91,7 +91,7 @@ fn extensions_command_updates_all_extension_properties() {
 
 #[test]
 fn extensions_command_filters_by_requested_source_set_names() {
-    let (_dir, config_path, calls_log) = setup_extensions_project();
+    let (_dir, config_path, calls_log, _ibcmd_path) = setup_extensions_project();
 
     let output = std::process::Command::cargo_bin("v8-test-runner")
         .expect("binary")
@@ -110,4 +110,39 @@ fn extensions_command_filters_by_requested_source_set_names() {
     let calls = fs::read_to_string(calls_log).expect("calls");
     assert!(calls.contains("--name=client_mcp"));
     assert!(!calls.contains("--name=tests"));
+}
+
+#[test]
+fn extensions_command_json_failure_reports_operation_target_and_exit_code() {
+    let (_dir, config_path, _calls_log, ibcmd_path) = setup_extensions_project();
+    write_script(
+        &ibcmd_path,
+        "echo 'cannot update extension' >&2\nexit 17",
+    );
+
+    let output = std::process::Command::cargo_bin("v8-test-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--output",
+            "json",
+            "extensions",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(4));
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(payload["ok"], false);
+    assert_eq!(payload["data"]["steps"][0]["ok"], false);
+    assert!(payload["data"]["steps"][0]["message"]
+        .as_str()
+        .expect("message")
+        .contains("infobase extensions update failed for extension 'client_mcp' with exit code 17"));
+    assert!(payload["data"]["steps"][0]["message"]
+        .as_str()
+        .expect("message")
+        .contains("stderr: cannot update extension"));
 }

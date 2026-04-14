@@ -4,6 +4,8 @@
 
 Это пользовательский документ по эксплуатационным деталям. Карта модулей для контрибьюторов находится в [../ARCHITECTURE.md](../ARCHITECTURE.md). Матрица команд и конфигурации находится в [CAPABILITIES.md](CAPABILITIES.md).
 
+Формальная граница поддержки `IBCMD` описана в [ADR-0001](decisions/0001-granitsy-podderzhki-ibcmd-kak-ogranichennogo-backend.md): это ограниченный backend для `init`, `build`, `dump`, `extensions` с файловой ИБ и degraded `partial` для `dump`.
+
 ## 1. Модель выполнения
 
 У проекта есть две публичные формы:

@@ -87,6 +87,7 @@ Important staging note:
 
 Constraints to keep in mind:
 
+- Граница поддержки `IBCMD` как ограниченного backend формально закреплена в [ADR-0001](docs/decisions/0001-granitsy-podderzhki-ibcmd-kak-ogranichennogo-backend.md).
 - IBCMD requires file-based infobase connections.
 - `builder=DESIGNER` supports object-level partial dump via `/DumpConfigToFiles -partial -listFile`.
 - `builder=IBCMD` does not support object-scoped partial dump directly; `PARTIAL` degrades to

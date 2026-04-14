@@ -8,6 +8,8 @@ pub mod configure_extensions;
 pub mod context;
 /// Dump orchestration use case.
 pub mod dump_config;
+/// Shared formatting helpers for IBCMD diagnostics.
+pub mod ibcmd_diagnostics;
 /// Init orchestration use case.
 pub mod init_project;
 /// Launch orchestration use case.

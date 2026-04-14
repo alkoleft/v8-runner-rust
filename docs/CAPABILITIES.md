@@ -6,6 +6,8 @@
 
 Если этот документ расходится со старыми внутренними заметками в `spec/*`, доверяйте текущему коду и CLI-интерфейсу.
 
+Граница поддержки `IBCMD` зафиксирована в [ADR-0001](decisions/0001-granitsy-podderzhki-ibcmd-kak-ogranichennogo-backend.md): это ограниченный backend для `init`, `build`, `dump`, `extensions`, только с файловой ИБ.
+
 ## Матрица сценариев
 
 | Сценарий | Поддерживаемые комбинации | Примечания |
@@ -13,7 +15,7 @@
 | `init` | `format=DESIGNER` + `builder=DESIGNER` | Создаёт файловую ИБ через `1cv8 CREATEINFOBASE`, если отсутствует |
 | `init` | `format=DESIGNER` + `builder=IBCMD` | Создаёт файловую ИБ через `ibcmd infobase create`, если отсутствует |
 | `init` | `format=EDT` + `builder=DESIGNER` | Создаёт файловую ИБ и, если workspace отсутствует, импортирует все EDT `source-set` в `workPath/edt-workspace` |
-| `extensions` | `format=DESIGNER` или `format=EDT` | Обновляет свойства расширений для extension `source-set`, указанных в конфиге |
+| `extensions` | `format=DESIGNER` или `format=EDT` | Обновляет свойства расширений для extension `source-set`, указанных в конфиге; только файловая ИБ |
 | `build` | `format=DESIGNER` + `builder=DESIGNER` | Инкрементальная или полная загрузка через Designer |
 | `build` | `format=DESIGNER` + `builder=IBCMD` | Использует `ibcmd config import` + `config apply`; только файловая ИБ |
 | `build` | `format=EDT` + `builder=DESIGNER` | Определяет EDT-изменения, экспортирует затронутые `source-set`, затем загружает Designer-вывод |

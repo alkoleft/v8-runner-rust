@@ -7,6 +7,7 @@ use crate::platform::locator::UtilityType;
 use crate::platform::utilities::PlatformUtilities;
 use crate::support::error::AppError;
 use crate::use_cases::context::ExecutionContext;
+use crate::use_cases::ibcmd_diagnostics::format_ibcmd_failure_details;
 use crate::use_cases::request::ConfigureExtensionsRequest;
 use crate::use_cases::result::{UseCaseFailure, UseCaseResult};
 use tracing::{debug, info};
@@ -64,8 +65,16 @@ pub fn execute(
                 duration_ms: step_started.elapsed().as_millis() as u64,
             }),
             Ok(result) => {
-                let message =
-                    summarize_process_output(&result.process.stdout, &result.process.stderr);
+                let message = format_ibcmd_failure_details(
+                    "infobase extensions update",
+                    "extension",
+                    &target,
+                    result.process.exit_code,
+                    &result.process.stdout,
+                    &result.process.stderr,
+                    None,
+                    None,
+                );
                 steps.push(ExtensionsStep {
                     target: target.clone(),
                     action: DISABLE_SAFETY_ACTION.to_owned(),
@@ -79,19 +88,19 @@ pub fn execute(
                     duration_ms: started.elapsed().as_millis() as u64,
                 };
                 return Err(UseCaseFailure::with_payload(
-                    AppError::Platform(format!(
-                        "failed to update extension '{target}' properties with exit code {}; {message}",
-                        result.process.exit_code,
-                    )),
+                    AppError::Platform(message),
                     payload,
                 ));
             }
             Err(error) => {
+                let message = format!(
+                    "ibcmd infobase extensions update failed for extension '{target}': {error}"
+                );
                 steps.push(ExtensionsStep {
                     target: target.clone(),
                     action: DISABLE_SAFETY_ACTION.to_owned(),
                     ok: false,
-                    message: Some(error.to_string()),
+                    message: Some(message.clone()),
                     duration_ms: step_started.elapsed().as_millis() as u64,
                 });
                 let payload = ExtensionsResult {
@@ -100,7 +109,7 @@ pub fn execute(
                     duration_ms: started.elapsed().as_millis() as u64,
                 };
                 return Err(UseCaseFailure::with_payload(
-                    AppError::Platform(error.to_string()),
+                    AppError::Platform(message),
                     payload,
                 ));
             }
@@ -171,18 +180,6 @@ fn extract_xml_tag_text(contents: &str, tag_name: &str) -> Option<String> {
     Some(rest[..end].trim().to_owned())
 }
 
-fn summarize_process_output(stdout: &str, stderr: &str) -> String {
-    let stdout = stdout.trim();
-    let stderr = stderr.trim();
-    if !stderr.is_empty() {
-        return format!("stderr: {stderr}");
-    }
-    if !stdout.is_empty() {
-        return format!("stdout: {stdout}");
-    }
-    "ibcmd returned a non-zero exit code".to_owned()
-}
-
 #[cfg(test)]
 mod tests {
     use super::{execute, resolve_targets};
@@ -192,6 +189,7 @@ mod tests {
     };
     use crate::use_cases::context::{CommandName, ExecutionContext};
     use crate::use_cases::request::ConfigureExtensionsRequest;
+    use crate::use_cases::result::UseCaseErrorKind;
     use std::fs;
     use std::path::{Path, PathBuf};
     use tempfile::tempdir;
@@ -295,4 +293,34 @@ mod tests {
         assert!(calls_text.contains("--safe-mode=no"));
         assert!(calls_text.contains("--unsafe-action-protection=no"));
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn execute_extension_non_zero_exit_reports_operation_target_and_exit_code() {
+        let dir = tempdir().expect("tempdir");
+        let ibcmd = dir.path().join("ibcmd");
+        fs::create_dir_all(dir.path().join("exts").join("client-mcp")).expect("ext dir");
+        fs::write(
+            dir.path().join("exts").join("client-mcp").join(".project"),
+            "<projectDescription><name>client_mcp</name></projectDescription>",
+        )
+        .expect("project file");
+        write_script(&ibcmd, "echo 'bad extension state' >&2\nexit 17");
+        let config = sample_config(dir.path(), dir.path(), &ibcmd);
+
+        let failure = execute(
+            &ExecutionContext::cli(CommandName::Extensions),
+            &config,
+            &ConfigureExtensionsRequest { names: vec![] },
+        )
+        .expect_err("failure");
+
+        assert_eq!(failure.error.kind(), UseCaseErrorKind::Platform);
+        assert!(failure
+            .error
+            .message()
+            .contains("infobase extensions update failed for extension 'client_mcp' with exit code 17"));
+        assert!(failure.error.message().contains("stderr: bad extension state"));
+    }
+
 }

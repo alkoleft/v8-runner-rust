@@ -116,6 +116,44 @@ fn write_http_designer_config(
     fs::write(path, config).expect("designer config");
 }
 
+fn write_http_ibcmd_config(
+    path: &Path,
+    base_path: &Path,
+    work_path: &Path,
+    ibcmd_path: &Path,
+    bind_address: &str,
+    max_sessions: usize,
+    idle_ttl_secs: u64,
+) {
+    let config = format!(
+        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: IBCMD\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: main\nmcp:\n  http:\n    bind_address: {}\n    path: /mcp\n    stateful_sessions: true\n    max_sessions: {}\n    idle_ttl_secs: {}\ntools:\n  platform:\n    path: '{}'\n",
+        base_path.display(),
+        work_path.display(),
+        bind_address,
+        max_sessions,
+        idle_ttl_secs,
+        ibcmd_path.display(),
+    );
+    fs::write(path, config).expect("ibcmd config");
+}
+
+fn write_ibcmd_script(path: &Path, calls_log: &Path, fail_pattern: Option<&str>) {
+    let fail_branch = fail_pattern
+        .map(|pattern| {
+            format!(
+                "if printf '%s' \"$args\" | grep -F -q -- '{}'; then exit 17; fi",
+                pattern
+            )
+        })
+        .unwrap_or_default();
+    let body = format!(
+        "args=\"$*\"\nprintf '%s\\n' \"$args\" >> '{}'\n{}\nmkdir -p \"$(printf '%s' \"$args\" | awk '{{print $NF}}')\"\nexit 0",
+        calls_log.display(),
+        fail_branch
+    );
+    write_script(path, &body);
+}
+
 fn write_http_edt_config(
     path: &Path,
     base_path: &Path,
@@ -182,6 +220,41 @@ fn setup_http_designer_project_with_script(
     );
 
     (dir, config_path, format!("http://{bind_address}/mcp"))
+}
+
+fn setup_http_ibcmd_dump_project(
+    fail_pattern: Option<&str>,
+    max_sessions: usize,
+    idle_ttl_secs: u64,
+) -> (tempfile::TempDir, PathBuf, String, PathBuf) {
+    let dir = tempdir().expect("tempdir");
+    let base_path = dir.path().join("project");
+    let work_path = dir.path().join("work");
+    let ibcmd_path = dir.path().join("ibcmd");
+    let calls_log = dir.path().join("ibcmd.calls.log");
+    let config_path = dir.path().join("application.yaml");
+    let bind_address = reserve_local_address();
+
+    fs::create_dir_all(base_path.join("main")).expect("main");
+    fs::create_dir_all(&work_path).expect("work");
+    fs::write(base_path.join("main").join("old.txt"), "old").expect("old");
+    write_ibcmd_script(&ibcmd_path, &calls_log, fail_pattern);
+    write_http_ibcmd_config(
+        &config_path,
+        &base_path,
+        &work_path,
+        &ibcmd_path,
+        &bind_address,
+        max_sessions,
+        idle_ttl_secs,
+    );
+
+    (
+        dir,
+        config_path,
+        format!("http://{bind_address}/mcp"),
+        calls_log,
+    )
 }
 
 fn setup_http_edt_project(
@@ -526,6 +599,102 @@ async fn mcp_http_launch_app_returns_success_payload_over_live_session() {
         payload["result"]["structuredContent"]["result"]["success"],
         true
     );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_http_dump_config_partial_ibcmd_returns_degraded_success() {
+    let (_dir, config_path, url, calls_log) = setup_http_ibcmd_dump_project(None, 4, 900);
+    let mut server = HttpServerProcess::spawn(&config_path, &url).await;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .expect("http client");
+
+    let (session_id, _) = initialize_session(&client, &url).await;
+    send_initialized(&client, &url, &session_id).await;
+
+    let response = call_tool(
+        &client,
+        &url,
+        &session_id,
+        "dump_config",
+        json!({
+            "mode": "PARTIAL",
+            "objects": ["Catalog.Items"]
+        }),
+        30,
+    )
+    .await;
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let payload = extract_sse_json(&response.text().await.expect("dump body"));
+    assert_eq!(payload["result"]["structuredContent"]["status"], "success");
+    assert_eq!(
+        payload["result"]["structuredContent"]["result"]["success"],
+        true
+    );
+    assert_eq!(
+        payload["result"]["structuredContent"]["result"]["mode"],
+        "PARTIAL"
+    );
+    assert!(payload["result"]["structuredContent"]["result"]["message"]
+        .as_str()
+        .expect("message")
+        .contains("IBCMD does not support object-scoped partial dump"));
+    assert!(fs::read_to_string(calls_log)
+        .expect("ibcmd calls")
+        .contains("--sync"));
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_http_dump_config_partial_ibcmd_preserves_partial_mode_on_failure() {
+    let (_dir, config_path, url, calls_log) =
+        setup_http_ibcmd_dump_project(Some("--sync"), 4, 900);
+    let mut server = HttpServerProcess::spawn(&config_path, &url).await;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .expect("http client");
+
+    let (session_id, _) = initialize_session(&client, &url).await;
+    send_initialized(&client, &url, &session_id).await;
+
+    let response = call_tool(
+        &client,
+        &url,
+        &session_id,
+        "dump_config",
+        json!({
+            "mode": "PARTIAL",
+            "objects": ["Catalog.Items"]
+        }),
+        31,
+    )
+    .await;
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let payload = extract_sse_json(&response.text().await.expect("dump failure body"));
+    assert_eq!(
+        payload["result"]["structuredContent"]["status"],
+        "business_failure"
+    );
+    assert_eq!(
+        payload["result"]["structuredContent"]["response"]["mode"],
+        "PARTIAL"
+    );
+    assert!(payload["result"]["structuredContent"]["response"]["message"]
+        .as_str()
+        .expect("message")
+        .contains("IBCMD does not support object-scoped partial dump"));
+    assert!(payload["result"]["structuredContent"]["response"]["message"]
+        .as_str()
+        .expect("message")
+        .contains("dump failed for source-set 'main' with exit code 17"));
+    assert!(fs::read_to_string(calls_log)
+        .expect("ibcmd calls")
+        .contains("--sync"));
 
     server.shutdown().await;
 }

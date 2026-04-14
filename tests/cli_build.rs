@@ -226,6 +226,34 @@ fn build_json_failure_returns_step_payload() {
 }
 
 #[test]
+fn build_ibcmd_json_failure_reports_operation_target_and_exit_code() {
+    let (_dir, config_path, binary_path, _work_path, _base_path, calls_log) = setup_ibcmd_project();
+    write_ibcmd_script(&binary_path, &calls_log, Some("config apply"));
+
+    let output = std::process::Command::cargo_bin("v8-test-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--output",
+            "json",
+            "build",
+            "--full-rebuild",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(4));
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(payload["ok"], false);
+    assert!(payload["data"]["steps"][0]["message"]
+        .as_str()
+        .expect("message")
+        .contains("apply failed for source-set 'main' with exit code 17"));
+}
+
+#[test]
 fn build_text_failure_does_not_print_success_footer() {
     let (_dir, config_path, binary_path, _work_path) = setup_project();
     write_build_script(&binary_path, Some("/UpdateDBCfg -Extension ext"));

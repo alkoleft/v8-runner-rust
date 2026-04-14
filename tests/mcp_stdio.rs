@@ -943,6 +943,10 @@ async fn mcp_stdio_dump_config_partial_ibcmd_preserves_partial_mode_on_failure()
         .as_str()
         .expect("message")
         .contains("IBCMD does not support object-scoped partial dump"));
+    assert!(payload["response"]["message"]
+        .as_str()
+        .expect("message")
+        .contains("dump failed for source-set 'main' with exit code 17"));
     assert!(fs::read_to_string(calls_log)
         .expect("ibcmd calls")
         .contains("--sync"));

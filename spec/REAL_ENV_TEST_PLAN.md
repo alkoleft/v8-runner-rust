@@ -5,7 +5,7 @@
 Закрыть два разных контура проверки:
 
 1. `contract/regression` для локального запуска и обычного CI без реальной 1С-инфраструктуры.
-2. `live smoke` для реального окружения с установленными `1cv8`, `1cv8c`, `1cedtcli`, рабочей файловой ИБ и EDT-проектом.
+2. `live smoke` для реального окружения с установленными `1cv8`, `1cv8c`, `1cedtcli`, рабочей файловой ИБ и выделенными конфигами для EDT и IBCMD сценариев.
 
 На `2026-03-21` базовый автоматизированный прогон `cargo test` в этом репозитории проходит полностью: `342` теста.
 
@@ -158,6 +158,52 @@ python3 scripts/test/live-mcp-http.py
 - `workPath/temp/**`
 - JSON-RPC/SSE payload текущего упавшего шага
 
+### 4. Live CLI IBCMD smoke
+
+Назначение: проверить реальный CLI path для `format=DESIGNER + builder=IBCMD` на файловой ИБ.
+
+Команда:
+
+```bash
+bash scripts/test/live-cli-ibcmd.sh
+```
+
+Что выполняется:
+
+1. `init`
+2. `build`
+3. `dump --mode full`
+4. `dump --mode incremental`
+5. `dump --mode partial --object Catalog.Items`
+6. `extensions`
+
+Что не выполняется намеренно:
+
+- реальный `partial-fail` сценарий в live-контуре, чтобы не добавлять недетерминированные или потенциально опасные для рабочей ИБ условия;
+- `syntax edt` и `test module`, так как этот smoke предназначен для IBCMD-конфига `DESIGNER`-формата и проверяет только целевой IBCMD path.
+
+Skip policy:
+
+- если `V8TR_IBCMD_REAL_CONFIG` не задан, скрипт завершает прогон со статусом `SKIPPED` и `exit code 0`;
+- это считается корректным поведением для окружений без выделенного IBCMD live-стенда;
+- если `V8TR_IBCMD_REAL_CONFIG` задан, но файл отсутствует, не соответствует `format: DESIGNER` + `builder: IBCMD` или использует не файловую строку подключения (`File=...` / raw `/F ...`), скрипт завершает прогон с ранней понятной ошибкой.
+
+Переменные окружения:
+
+- `V8TR_IBCMD_REAL_CONFIG` - путь к отдельному live YAML-конфигу для IBCMD smoke (`format: DESIGNER`, `builder: IBCMD`, файловая ИБ)
+- `V8TR_BIN` - путь к бинарю `v8-test-runner`
+
+Критерий успеха:
+
+- при заданном валидном `V8TR_IBCMD_REAL_CONFIG` все команды smoke завершаются с `exit code 0`;
+- при незаданном `V8TR_IBCMD_REAL_CONFIG` сценарий завершается как `SKIPPED` (`exit code 0`).
+
+Артефакты для анализа при падении:
+
+- `workPath/logs/**`
+- `workPath/temp/**`
+- stdout/stderr конкретной команды
+
 ## Рекомендуемый порядок запуска
 
 ### Локально
@@ -165,6 +211,7 @@ python3 scripts/test/live-mcp-http.py
 1. `bash scripts/test/ci-rust.sh`
 2. `bash scripts/test/live-cli.sh`
 3. `python3 scripts/test/live-mcp-http.py`
+4. `bash scripts/test/live-cli-ibcmd.sh`
 
 ### CI
 
@@ -183,6 +230,7 @@ bash scripts/test/ci-rust.sh
 ```bash
 bash scripts/test/live-cli.sh
 python3 scripts/test/live-mcp-http.py
+bash scripts/test/live-cli-ibcmd.sh
 ```
 
 Рекомендация:
@@ -197,6 +245,7 @@ python3 scripts/test/live-mcp-http.py
 | `ci-rust` | mock | mock | mock | mock | mock | mock |
 | `live-cli` | real | real | requires separate DESIGNER config | real | optional real | n/a |
 | `live-mcp-http` | real via MCP | real via MCP | n/a | real via MCP | n/a | real |
+| `live-cli-ibcmd` | real (`IBCMD`) | n/a | n/a | n/a | n/a | n/a |
 
 ## Ограничения и риски
 
@@ -204,3 +253,4 @@ python3 scripts/test/live-mcp-http.py
 - `launch` зависит от GUI-окружения и поэтому оставлен opt-in.
 - Smoke-модуль привязан к devkit-проекту; при переименовании нужно обновить `V8TR_SMOKE_MODULE`.
 - В обычный CI нельзя переносить live smoke без self-hosted runner и установленной 1С-инфраструктуры.
+- Для `live-cli-ibcmd` обязательный реальный стенд может отсутствовать; в этом случае сценарий штатно завершает прогон как `SKIPPED`.
