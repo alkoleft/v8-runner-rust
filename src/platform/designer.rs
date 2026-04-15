@@ -135,7 +135,7 @@ impl<'a> DesignerDsl<'a> {
         self.run(&args)
     }
 
-    /// `/DumpExternalDataProcessorOrReportToFiles <binary> <root-xml>`
+    /// `/DumpExternalDataProcessorOrReportToFiles <root-xml> <binary>`
     pub fn dump_external_data_processor_or_report_to_files(
         &self,
         binary_file: &Path,
@@ -143,8 +143,8 @@ impl<'a> DesignerDsl<'a> {
     ) -> Result<PlatformCommandResult, DesignerError> {
         let mut args = self.base_args();
         args.push("/DumpExternalDataProcessorOrReportToFiles".to_owned());
-        args.push(binary_file.display().to_string());
         args.push(root_xml_path.display().to_string());
+        args.push(binary_file.display().to_string());
         self.run(&args)
     }
 
@@ -501,19 +501,33 @@ mod tests {
             &dir.path().join("dump/Artifact.xml"),
         )
         .expect("external dump");
-        let args = fs::read_to_string(&args_log).expect("args log");
-        assert!(args.contains("/DumpExternalDataProcessorOrReportToFiles"));
-        assert!(args.contains("artifact.epf"));
-        assert!(args.contains("Artifact.xml"));
+        let args = fs::read_to_string(&args_log)
+            .expect("args log")
+            .lines()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let dump_pos = args
+            .iter()
+            .position(|line| line == "/DumpExternalDataProcessorOrReportToFiles")
+            .expect("dump arg");
+        assert_eq!(args[dump_pos + 1], dir.path().join("dump/Artifact.xml").display().to_string());
+        assert_eq!(args[dump_pos + 2], dir.path().join("artifact.epf").display().to_string());
 
         dsl.load_external_data_processor_or_report_from_files(
             &dir.path().join("dump/Artifact.xml"),
             &dir.path().join("artifact.epf"),
         )
         .expect("external load");
-        let args = fs::read_to_string(&args_log).expect("args log");
-        assert!(args.contains("/LoadExternalDataProcessorOrReportFromFiles"));
-        assert!(args.contains("artifact.epf"));
-        assert!(args.contains("Artifact.xml"));
+        let args = fs::read_to_string(&args_log)
+            .expect("args log")
+            .lines()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let load_pos = args
+            .iter()
+            .position(|line| line == "/LoadExternalDataProcessorOrReportFromFiles")
+            .expect("load arg");
+        assert_eq!(args[load_pos + 1], dir.path().join("dump/Artifact.xml").display().to_string());
+        assert_eq!(args[load_pos + 2], dir.path().join("artifact.epf").display().to_string());
     }
 }

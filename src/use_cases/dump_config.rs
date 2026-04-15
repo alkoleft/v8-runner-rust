@@ -590,6 +590,7 @@ fn parse_external_dump_descriptor(
     reader.config_mut().trim_text(true);
     let mut buf = Vec::new();
     let mut root_tag = None;
+    let mut artifact_root_tag = None;
     let mut seen_properties = false;
     let mut seen_name = false;
     let mut logical_name = None;
@@ -598,8 +599,21 @@ fn parse_external_dump_descriptor(
             Ok(Event::Start(event)) => {
                 let tag = String::from_utf8_lossy(event.name().as_ref()).into_owned();
                 if root_tag.is_none() {
-                    root_tag = Some(tag);
-                } else if tag == "Properties" {
+                    root_tag = Some(tag.clone());
+                }
+                if artifact_root_tag.is_none() {
+                    match tag.as_str() {
+                        "MetaDataObject" => {}
+                        "ExternalDataProcessor" | "ExternalReport" => {
+                            artifact_root_tag = Some(tag.clone());
+                        }
+                        _ if root_tag.as_deref() != Some("MetaDataObject") => {
+                            artifact_root_tag = Some(tag.clone());
+                        }
+                        _ => {}
+                    }
+                }
+                if tag == "Properties" {
                     seen_properties = true;
                 } else if seen_properties && tag == "Name" {
                     seen_name = true;
@@ -637,7 +651,7 @@ fn parse_external_dump_descriptor(
         buf.clear();
     }
 
-    let root_tag = root_tag.ok_or_else(|| {
+    let root_tag = artifact_root_tag.or(root_tag).ok_or_else(|| {
         AppError::Validation(format!("missing root XML element in '{}'", path.display()))
     })?;
     let logical_name = logical_name
@@ -2223,5 +2237,15 @@ mod tests {
 
         assert_eq!(root, "ExternalDataProcessor");
         assert_eq!(logical_name, "Foo & Bar");
+    }
+
+    #[test]
+    fn parse_external_dump_descriptor_accepts_metadataobject_wrapper() {
+        let xml = "<MetaDataObject><ExternalDataProcessor><Properties><Name>Foo</Name></Properties></ExternalDataProcessor></MetaDataObject>";
+        let (root, logical_name) =
+            parse_external_dump_descriptor(xml, Path::new("/tmp/dump.xml")).expect("parse");
+
+        assert_eq!(root, "ExternalDataProcessor");
+        assert_eq!(logical_name, "Foo");
     }
 }

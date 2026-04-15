@@ -250,6 +250,7 @@ fn parse_external_descriptor(path: &Path) -> Result<ParsedExternalDescriptor, Ap
     reader.config_mut().trim_text(true);
     let mut buf = Vec::new();
     let mut root_tag = None;
+    let mut artifact_root_tag = None;
     let mut seen_properties = false;
     let mut seen_name = false;
     let mut logical_name = None;
@@ -258,8 +259,21 @@ fn parse_external_descriptor(path: &Path) -> Result<ParsedExternalDescriptor, Ap
             Ok(Event::Start(event)) => {
                 let tag = String::from_utf8_lossy(event.name().as_ref()).into_owned();
                 if root_tag.is_none() {
-                    root_tag = Some(tag);
-                } else if tag == "Properties" {
+                    root_tag = Some(tag.clone());
+                }
+                if artifact_root_tag.is_none() {
+                    match tag.as_str() {
+                        "MetaDataObject" => {}
+                        "ExternalDataProcessor" | "ExternalReport" => {
+                            artifact_root_tag = Some(tag.clone());
+                        }
+                        _ if root_tag.as_deref() != Some("MetaDataObject") => {
+                            artifact_root_tag = Some(tag.clone());
+                        }
+                        _ => {}
+                    }
+                }
+                if tag == "Properties" {
                     seen_properties = true;
                 } else if seen_properties && tag == "Name" {
                     seen_name = true;
@@ -297,7 +311,10 @@ fn parse_external_descriptor(path: &Path) -> Result<ParsedExternalDescriptor, Ap
         buf.clear();
     }
 
-    let artifact_type = match root_tag.as_deref() {
+    let artifact_type = match artifact_root_tag
+        .as_deref()
+        .or(root_tag.as_deref())
+    {
         Some("ExternalDataProcessor") => ExternalArtifactKind::DataProcessor,
         Some("ExternalReport") => ExternalArtifactKind::Report,
         Some(other) => {
@@ -441,6 +458,29 @@ mod tests {
 
         assert_eq!(artifacts.len(), 1);
         assert_eq!(artifacts[0].logical_name, "Foo & Bar");
+    }
+
+    #[test]
+    fn discover_designer_external_artifacts_accepts_metadataobject_wrapper() {
+        let dir = tempdir().expect("tempdir");
+        let source = dir.path().join("designer/external");
+        fs::create_dir_all(&source).expect("source");
+        fs::write(
+            source.join("Foo.xml"),
+            r#"<MetaDataObject><ExternalDataProcessor><Properties><Name>Foo</Name></Properties></ExternalDataProcessor></MetaDataObject>"#,
+        )
+        .expect("xml");
+
+        let artifacts = discover_designer_external_artifacts(
+            "external",
+            &source,
+            ExternalArtifactKind::DataProcessor,
+        )
+        .expect("discover");
+
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].logical_name, "Foo");
+        assert_eq!(artifacts[0].artifact_type, ExternalArtifactKind::DataProcessor);
     }
 
     #[cfg(unix)]
