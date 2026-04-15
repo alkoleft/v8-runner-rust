@@ -1,0 +1,10 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo xmlns="http://v8.1c.ru/8.3/xcf/dumpinfo" xmlns:xen="http://v8.1c.ru/8.3/xcf/enums" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" format="Hierarchical" version="2.20">
+	<ConfigVersions>
+		<Metadata name="CommonModule.Расш1_ОбщийМодуль1" id="6a55c2ef-e0ae-4125-8cc9-939260d1ee0a" configVersion="46eeec0b4f39e42ea62dab5dc396c1eee357559e"/>
+		<Metadata name="Configuration.Расширение1" id="c748f91d-6c51-499e-b692-cb2e4df99435" configVersion="8dc184af5cfd2bb7410e7d50465b15f7d4631b83"/>
+		<Metadata name="Language.Русский" id="bc2d69d4-c597-4ec0-bd09-c7e7e526d468" configVersion="a37ef3319779a0a2f5139898302fd0ba57228545"/>
+		<Metadata name="Role.Расш1_ОсновнаяРоль" id="2634b2af-8eb3-4efb-b46f-25ea80f0d75f" configVersion="3efec98a2900c306c3274a46f93278614e4c109b"/>
+		<Metadata name="SessionParameter.Расш1_ПараметрСеанса1" id="221e0a26-aac6-418b-8bdc-cb9eda95ad0d" configVersion="d26140f795790499786f19290d465778c4009262"/>
+	</ConfigVersions>
+</ConfigDumpInfo>

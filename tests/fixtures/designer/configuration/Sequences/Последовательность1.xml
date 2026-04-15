@@ -1,0 +1,29 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses" xmlns:app="http://v8.1c.ru/8.2/managed-application/core" xmlns:cfg="http://v8.1c.ru/8.1/data/enterprise/current-config" xmlns:cmi="http://v8.1c.ru/8.2/managed-application/cmi" xmlns:ent="http://v8.1c.ru/8.1/data/enterprise" xmlns:lf="http://v8.1c.ru/8.2/managed-application/logform" xmlns:style="http://v8.1c.ru/8.1/data/ui/style" xmlns:sys="http://v8.1c.ru/8.1/data/ui/fonts/system" xmlns:v8="http://v8.1c.ru/8.1/data/core" xmlns:v8ui="http://v8.1c.ru/8.1/data/ui" xmlns:web="http://v8.1c.ru/8.1/data/ui/colors/web" xmlns:win="http://v8.1c.ru/8.1/data/ui/colors/windows" xmlns:xen="http://v8.1c.ru/8.3/xcf/enums" xmlns:xpr="http://v8.1c.ru/8.3/xcf/predef" xmlns:xr="http://v8.1c.ru/8.3/xcf/readable" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" version="2.20">
+	<Sequence uuid="dad6d49e-4ee7-4702-96c3-f20e6c5cf164">
+		<InternalInfo>
+			<xr:GeneratedType name="SequenceRecord.Последовательность1" category="Record">
+				<xr:TypeId>f3e743d3-66c5-42a9-a65e-cd127bbccd61</xr:TypeId>
+				<xr:ValueId>e644fb29-59eb-46ac-8c94-772fae09d6c4</xr:ValueId>
+			</xr:GeneratedType>
+			<xr:GeneratedType name="SequenceManager.Последовательность1" category="Manager">
+				<xr:TypeId>beb01c1c-4083-440f-9c3d-690f563030af</xr:TypeId>
+				<xr:ValueId>7869800f-e7d9-4552-b5af-915e0c13ff1c</xr:ValueId>
+			</xr:GeneratedType>
+			<xr:GeneratedType name="SequenceRecordSet.Последовательность1" category="RecordSet">
+				<xr:TypeId>ff405b90-2a16-478a-a910-bc8a86dfacb5</xr:TypeId>
+				<xr:ValueId>381ace4c-838f-4b83-8c8d-2ad1da827a68</xr:ValueId>
+			</xr:GeneratedType>
+		</InternalInfo>
+		<Properties>
+			<Name>Последовательность1</Name>
+			<Synonym/>
+			<Comment/>
+			<MoveBoundaryOnPosting>Move</MoveBoundaryOnPosting>
+			<Documents/>
+			<RegisterRecords/>
+			<DataLockControlMode>Managed</DataLockControlMode>
+		</Properties>
+		<ChildObjects/>
+	</Sequence>
+</MetaDataObject>

@@ -1,0 +1,26 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses" xmlns:app="http://v8.1c.ru/8.2/managed-application/core" xmlns:cfg="http://v8.1c.ru/8.1/data/enterprise/current-config" xmlns:cmi="http://v8.1c.ru/8.2/managed-application/cmi" xmlns:ent="http://v8.1c.ru/8.1/data/enterprise" xmlns:lf="http://v8.1c.ru/8.2/managed-application/logform" xmlns:style="http://v8.1c.ru/8.1/data/ui/style" xmlns:sys="http://v8.1c.ru/8.1/data/ui/fonts/system" xmlns:v8="http://v8.1c.ru/8.1/data/core" xmlns:v8ui="http://v8.1c.ru/8.1/data/ui" xmlns:web="http://v8.1c.ru/8.1/data/ui/colors/web" xmlns:win="http://v8.1c.ru/8.1/data/ui/colors/windows" xmlns:xen="http://v8.1c.ru/8.3/xcf/enums" xmlns:xpr="http://v8.1c.ru/8.3/xcf/predef" xmlns:xr="http://v8.1c.ru/8.3/xcf/readable" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" version="2.20">
+	<ExternalDataSource uuid="ef4958cc-fec6-4709-ace0-91295c36ed4c">
+		<InternalInfo>
+			<xr:GeneratedType name="ExternalDataSourceManager.ВнешнийИсточникДанных1" category="Manager">
+				<xr:TypeId>cd696319-ee91-4e71-b1e0-c07d97acf392</xr:TypeId>
+				<xr:ValueId>085d3a15-5a47-4b0d-9d69-2b9d537e111d</xr:ValueId>
+			</xr:GeneratedType>
+			<xr:GeneratedType name="ExternalDataSourceTablesManager.ВнешнийИсточникДанных1" category="TablesManager">
+				<xr:TypeId>9e05ef30-96e0-4f1c-a394-a150bdaee7f5</xr:TypeId>
+				<xr:ValueId>28b6acb8-dbe8-4ffc-8ac9-bae573cb1933</xr:ValueId>
+			</xr:GeneratedType>
+			<xr:GeneratedType name="ExternalDataSourceCubesManager.ВнешнийИсточникДанных1" category="CubesManager">
+				<xr:TypeId>0b584e96-bc30-499b-8e1e-1302aaeff71b</xr:TypeId>
+				<xr:ValueId>94e61f10-fc90-4abc-950b-a664650dc640</xr:ValueId>
+			</xr:GeneratedType>
+		</InternalInfo>
+		<Properties>
+			<Name>ВнешнийИсточникДанных1</Name>
+			<Synonym/>
+			<Comment/>
+			<DataLockControlMode>Automatic</DataLockControlMode>
+		</Properties>
+		<ChildObjects/>
+	</ExternalDataSource>
+</MetaDataObject>

@@ -1,0 +1,48 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses" xmlns:app="http://v8.1c.ru/8.2/managed-application/core" xmlns:cfg="http://v8.1c.ru/8.1/data/enterprise/current-config" xmlns:cmi="http://v8.1c.ru/8.2/managed-application/cmi" xmlns:ent="http://v8.1c.ru/8.1/data/enterprise" xmlns:lf="http://v8.1c.ru/8.2/managed-application/logform" xmlns:style="http://v8.1c.ru/8.1/data/ui/style" xmlns:sys="http://v8.1c.ru/8.1/data/ui/fonts/system" xmlns:v8="http://v8.1c.ru/8.1/data/core" xmlns:v8ui="http://v8.1c.ru/8.1/data/ui" xmlns:web="http://v8.1c.ru/8.1/data/ui/colors/web" xmlns:win="http://v8.1c.ru/8.1/data/ui/colors/windows" xmlns:xen="http://v8.1c.ru/8.3/xcf/enums" xmlns:xpr="http://v8.1c.ru/8.3/xcf/predef" xmlns:xr="http://v8.1c.ru/8.3/xcf/readable" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" version="2.20">
+	<AccumulationRegister uuid="d2426bbd-213a-4c27-b6be-2e339c9df072">
+		<InternalInfo>
+			<xr:GeneratedType name="AccumulationRegisterRecord.РегистрНакопления1" category="Record">
+				<xr:TypeId>a2bee788-3f3e-4e19-87f1-102546c65929</xr:TypeId>
+				<xr:ValueId>5c47024d-f878-4656-bb2f-2f632796d31b</xr:ValueId>
+			</xr:GeneratedType>
+			<xr:GeneratedType name="AccumulationRegisterManager.РегистрНакопления1" category="Manager">
+				<xr:TypeId>fe43b9eb-53ac-4cae-9038-0c1275c21961</xr:TypeId>
+				<xr:ValueId>949f17fa-bd1a-4aae-9cee-8ddd25dedbf5</xr:ValueId>
+			</xr:GeneratedType>
+			<xr:GeneratedType name="AccumulationRegisterSelection.РегистрНакопления1" category="Selection">
+				<xr:TypeId>41ebaef6-ab82-43f0-82ff-3341e322b0f0</xr:TypeId>
+				<xr:ValueId>d816a2e6-a152-4f5d-8e19-8e59a0e89bb4</xr:ValueId>
+			</xr:GeneratedType>
+			<xr:GeneratedType name="AccumulationRegisterList.РегистрНакопления1" category="List">
+				<xr:TypeId>bca73fcf-9e83-4bb4-8417-d55f031fe40b</xr:TypeId>
+				<xr:ValueId>237869a9-9c81-4b09-bf52-4d8ef131882b</xr:ValueId>
+			</xr:GeneratedType>
+			<xr:GeneratedType name="AccumulationRegisterRecordSet.РегистрНакопления1" category="RecordSet">
+				<xr:TypeId>014bfa14-97e4-4d95-a27b-971dc3a96f9f</xr:TypeId>
+				<xr:ValueId>c8470eab-66ba-49a8-b144-0920bed4e94c</xr:ValueId>
+			</xr:GeneratedType>
+			<xr:GeneratedType name="AccumulationRegisterRecordKey.РегистрНакопления1" category="RecordKey">
+				<xr:TypeId>2b531ca1-4e42-46a3-94e7-76724ce2a9f3</xr:TypeId>
+				<xr:ValueId>7ef58ee8-be38-4e42-bf07-927000cb03b0</xr:ValueId>
+			</xr:GeneratedType>
+		</InternalInfo>
+		<Properties>
+			<Name>РегистрНакопления1</Name>
+			<Synonym/>
+			<Comment/>
+			<UseStandardCommands>true</UseStandardCommands>
+			<DefaultListForm/>
+			<AuxiliaryListForm/>
+			<RegisterType>Balance</RegisterType>
+			<IncludeHelpInContents>false</IncludeHelpInContents>
+			<DataLockControlMode>Managed</DataLockControlMode>
+			<FullTextSearch>DontUse</FullTextSearch>
+			<EnableTotalsSplitting>true</EnableTotalsSplitting>
+			<ListPresentation/>
+			<ExtendedListPresentation/>
+			<Explanation/>
+		</Properties>
+		<ChildObjects/>
+	</AccumulationRegister>
+</MetaDataObject>
