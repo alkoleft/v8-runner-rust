@@ -5,7 +5,7 @@
 			<Name>HTTPСервис1</Name>
 			<Synonym/>
 			<Comment/>
-			<RootURL/>
+			<RootURL>example</RootURL>
 			<ReuseSessions>AutoUse</ReuseSessions>
 			<SessionMaxAge>20</SessionMaxAge>
 		</Properties>

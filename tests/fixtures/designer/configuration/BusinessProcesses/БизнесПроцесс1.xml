@@ -55,7 +55,7 @@
 			<Autonumbering>true</Autonumbering>
 			<BasedOn/>
 			<NumberPeriodicity>Nonperiodical</NumberPeriodicity>
-			<Task/>
+			<Task>Task.Задача1</Task>
 			<CreateTaskInPrivilegedMode>true</CreateTaskInPrivilegedMode>
 			<DataLockFields/>
 			<DataLockControlMode>Managed</DataLockControlMode>

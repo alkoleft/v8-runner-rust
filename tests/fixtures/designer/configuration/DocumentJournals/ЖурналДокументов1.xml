@@ -22,7 +22,9 @@
 			<DefaultForm/>
 			<AuxiliaryForm/>
 			<UseStandardCommands>true</UseStandardCommands>
-			<RegisteredDocuments/>
+			<RegisteredDocuments>
+				<xr:Item xsi:type="xr:MDObjectRef">Document.Документ1</xr:Item>
+			</RegisteredDocuments>
 			<IncludeHelpInContents>false</IncludeHelpInContents>
 			<ListPresentation/>
 			<ExtendedListPresentation/>

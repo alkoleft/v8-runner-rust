@@ -5,7 +5,7 @@
 			<Name>ОбщаяКоманда1</Name>
 			<Synonym/>
 			<Comment/>
-			<Group/>
+			<Group>NavigationPanelImportant</Group>
 			<Representation>Auto</Representation>
 			<ToolTip/>
 			<Picture/>

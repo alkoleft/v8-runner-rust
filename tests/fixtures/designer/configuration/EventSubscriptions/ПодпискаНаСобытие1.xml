@@ -5,9 +5,11 @@
 			<Name>ПодпискаНаСобытие1</Name>
 			<Synonym/>
 			<Comment/>
-			<Source/>
-			<Event/>
-			<Handler/>
+			<Source>
+				<v8:TypeSet>cfg:CatalogObject</v8:TypeSet>
+			</Source>
+			<Event>OnSetNewCode</Event>
+			<Handler>CommonModule.ОбщийМодуль1.ПодпискаНаСобытие1ПриУстановкеНовогоКода</Handler>
 		</Properties>
 	</EventSubscription>
 </MetaDataObject>

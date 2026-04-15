@@ -5,7 +5,10 @@
 			<Name>ПараметрФункциональныхОпций1</Name>
 			<Synonym/>
 			<Comment/>
-			<Use/>
+			<Use>
+				<xr:Item xsi:type="xr:MDObjectRef">Catalog.Справочник1</xr:Item>
+				<xr:Item xsi:type="xr:MDObjectRef">InformationRegister.РегистрСведений1.Dimension.Измерение1</xr:Item>
+			</Use>
 		</Properties>
 	</FunctionalOptionsParameter>
 </MetaDataObject>

@@ -20,7 +20,9 @@
 			<Synonym/>
 			<Comment/>
 			<MoveBoundaryOnPosting>Move</MoveBoundaryOnPosting>
-			<Documents/>
+			<Documents>
+				<xr:Item xsi:type="xr:MDObjectRef">Document.Документ1</xr:Item>
+			</Documents>
 			<RegisterRecords/>
 			<DataLockControlMode>Managed</DataLockControlMode>
 		</Properties>

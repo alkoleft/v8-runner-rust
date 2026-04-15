@@ -5,7 +5,7 @@
 			<Name>WebСервис1</Name>
 			<Synonym/>
 			<Comment/>
-			<Namespace/>
+			<Namespace>http://example</Namespace>
 			<XDTOPackages/>
 			<DescriptorFileName>ws1.1cws</DescriptorFileName>
 			<ReuseSessions>AutoUse</ReuseSessions>
