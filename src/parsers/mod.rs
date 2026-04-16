@@ -4,6 +4,7 @@ use crate::domain::execution::{ExecutionError, ExecutionMetrics};
 pub mod designer_validation;
 pub mod edt_validation;
 pub mod junit;
+pub mod vanessa_log;
 pub mod yaxunit_log;
 
 /// Normalized parser output shared by runner/package parsers.

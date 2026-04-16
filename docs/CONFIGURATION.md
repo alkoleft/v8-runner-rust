@@ -60,6 +60,19 @@ mcp:
 
 tests:
   execution_timeout_seconds: 300
+  yaxunit:
+    timeouts:
+      total_ms: 300000
+  va:
+    epf_path: /path/to/vanessa.epf
+    params_path: /path/to/va-params.json
+    profile: smoke
+    fail_fast: true
+    timeouts:
+      total_ms: 300000
+    profiles:
+      smoke:
+        feature_path: /path/to/features
 ```
 
 ## Обязательные ключи
@@ -160,6 +173,18 @@ tests:
 - Тип: integer
 - По умолчанию: `300`
 - Допустимый диапазон: `1..=86400`
+- `tests.yaxunit.timeouts.total_ms` и `tests.va.timeouts.total_ms`
+- Тип: integer
+- Используется как активный пользовательский таймаут для `test yaxunit` и `test va`
+- `startup_ms` и `run_ms` в `tests.*.timeouts` зарезервированы и не влияют на запуск
+- `tests.va.epf_path`, `tests.va.params_path`, `tests.va.profile`
+- Обязательны для Vanessa Automation
+- `tests.va.fail_fast`
+- Передаётся в runtime params как `stoponerror`
+- `tests.va.profiles.<name>.feature_path`
+- Обязателен для каждого профиля Vanessa
+- `tests.va.profiles.<name>.features_to_run`, `filter_tags`, `ignore_tags`, `scenario_filter`
+- Дополнительные фильтры VA, передаваемые в runtime params
 
 ### `mcp.http`
 

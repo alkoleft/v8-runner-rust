@@ -99,27 +99,31 @@ v8-test-runner extensions [--name <SOURCE_SET>...]
 ## Команда `test`
 
 ```bash
-v8-test-runner test [--full] all
-v8-test-runner test [--full] module <NAME>
+v8-test-runner test yaxunit [--full] all
+v8-test-runner test yaxunit [--full] module <NAME>
+v8-test-runner test va
 ```
 
 Поведение:
 
 - Всегда сначала запускает `build`.
-- `test module <NAME>` требует непустое имя модуля.
+- `test yaxunit module <NAME>` требует непустое имя модуля.
+- `test va` запускает Vanessa Automation только по профилю из `tests.va.profile`.
 - Компактный режим скрывает успешно прошедшие кейсы и сокращает трассы стека.
 - `--full` сохраняет успешно прошедшие кейсы и полные трассы стека.
-- YaXUnit должен быть уже установлен и доступен из целевой информационной базы.
+- YaXUnit и Vanessa Automation должны быть уже установлены и доступны из целевой информационной базы.
 
 Артефакты и сохранение:
 
-- Для каждого запуска генерируется временный JSON-конфиг YaXUnit.
-- JUnit XML и YaXUnit-логи разбираются в структурированный вывод.
-- Если выполнение упало или JUnit-отчёт не удалось распарсить, сохранённые артефакты остаются под `workPath/temp/yaxunit/runs/<run-id>/`.
+- Для каждого запуска генерируется временный JSON-конфиг YaXUnit или `va-params.json` для Vanessa Automation.
+- JUnit XML и runner-log разбираются в структурированный вывод.
+- Для Vanessa runner-log материализуется из enterprise `/Out`-лога перед парсингом.
+- Если выполнение упало или JUnit-отчёт не удалось распарсить, сохранённые артефакты остаются под `workPath/temp/<runner-id>/runs/<run-id>/`.
 
 Связанный конфиг:
 
-- `tests.execution_timeout_seconds` управляет жёстким тайм-аутом для запуска Enterprise.
+- `tests.execution_timeout_seconds` управляет запасным жёстким тайм-аутом для запуска Enterprise.
+- В активном пользовательском контракте таймаутов используется только `tests.*.timeouts.total_ms`; `startup_ms` и `run_ms` зарезервированы и не влияют на запуск.
 - Флаг `--full` относится именно к команде `test`, поэтому его нужно ставить до `all` или `module`.
 
 ## Команда `dump`

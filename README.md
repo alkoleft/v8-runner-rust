@@ -2,7 +2,7 @@
 
 Локальная автоматизация 1С для разработчиков и AI-ассистентов.
 
-`v8-test-runner` — это CLI-приложение на Rust и MCP-сервер для рутинных операций в разработке на 1С: загрузки исходников в информационную базу, запуска YaXUnit-тестов, выгрузки конфигурации обратно в файлы, синтаксических проверок и запуска инструментов 1С.
+`v8-test-runner` — это CLI-приложение на Rust и MCP-сервер для рутинных операций в разработке на 1С: загрузки исходников в информационную базу, запуска YaXUnit- и Vanessa Automation-тестов, выгрузки конфигурации обратно в файлы, синтаксических проверок и запуска инструментов 1С.
 
 Инструмент закрывает сразу два типа сценариев:
 
@@ -22,7 +22,8 @@
 - `build`: загружать изменённые исходники в ИБ, выбирая частичное или полное выполнение в зависимости от формата исходников и бэкенда.
 - `init`: первично создавать файловую ИБ и, для EDT-проектов, инициализировать workspace импортом всех настроенных `source-set`.
 - `extensions`: обновлять свойства расширений в информационной базе по настроенным `source-set`.
-- `test`: сначала выполнять `build`, затем запускать все YaXUnit-тесты или один модуль.
+- `test yaxunit`: сначала выполнять `build`, затем запускать все YaXUnit-тесты или один модуль.
+- `test va`: сначала выполнять `build`, затем запускать Vanessa Automation по выбранному профилю.
 - `dump`: выгружать состояние конфигурации или расширения обратно в файлы в режимах `full`, `incremental` и `partial`.
 - `syntax`: запускать проверки через Designer для Designer-исходников и `1cedtcli validate` для EDT-проектов.
 - `launch`: открывать Designer, тонкий клиент или толстый клиент.
@@ -49,6 +50,21 @@ source-set:
   - name: main
     purpose: CONFIGURATION
     path: .
+
+tests:
+  yaxunit:
+    timeouts:
+      total_ms: 300000
+  va:
+    epf_path: /path/to/vanessa.epf
+    params_path: /path/to/va-params.json
+    profile: smoke
+    fail_fast: true
+    timeouts:
+      total_ms: 300000
+    profiles:
+      smoke:
+        feature_path: /path/to/features
 ```
 
 Запустите первые команды:
@@ -56,7 +72,8 @@ source-set:
 ```bash
 ./target/release/v8-test-runner --config ./application.yaml build
 ./target/release/v8-test-runner --config ./application.yaml init
-./target/release/v8-test-runner --config ./application.yaml test all
+./target/release/v8-test-runner --config ./application.yaml test yaxunit all
+./target/release/v8-test-runner --config ./application.yaml test va
 ./target/release/v8-test-runner --config ./application.yaml mcp serve stdio
 ```
 
@@ -69,7 +86,8 @@ source-set:
 | `init` | `format=DESIGNER` с `builder=DESIGNER` или `IBCMD`; `format=EDT` с `builder=DESIGNER` |
 | `extensions` | Обновление свойств расширений для EDT и Designer-проектов по настроенным extension `source-set`; только файловая ИБ |
 | `build` | `format=DESIGNER` с `builder=DESIGNER` или `IBCMD`; `format=EDT` с `builder=DESIGNER` |
-| `test` | Следует матрице `build` и всегда сначала запускает `build` |
+| `test yaxunit` | Следует матрице `build` и всегда сначала запускает `build` |
+| `test va` | `tests.va` с выбранным профилем, `epf_path` и `params_path`; всегда сначала запускает `build` |
 | `dump` | `format=DESIGNER` с `builder=DESIGNER` или `IBCMD` |
 | `syntax` | Проверки через Designer для `DESIGNER`-исходников и валидация EDT для `EDT` |
 | `launch` | Designer, тонкий клиент, толстый клиент |

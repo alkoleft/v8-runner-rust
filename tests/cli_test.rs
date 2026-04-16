@@ -70,6 +70,23 @@ fn write_build_script(path: &Path, calls_log: &Path, fail: bool) {
     write_script(path, &body);
 }
 
+fn write_va_test_script(
+    path: &Path,
+    calls_log: &Path,
+    captured_params: &Path,
+    report_xml: &str,
+    exit_code: i32,
+) {
+    let body = format!(
+        "printf '%s\\n' \"$*\" >> '{}'\npayload=\"\"\nout=\"\"\nexecute=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"/C\" ]; then payload=\"$arg\"; fi\n  if [ \"$prev\" = \"/Out\" ]; then out=\"$arg\"; fi\n  if [ \"$prev\" = \"/Execute\" ]; then execute=\"$arg\"; fi\n  prev=\"$arg\"\ndone\ncfg=$(printf '%s' \"$payload\" | sed 's/^StartFeaturePlayer;VAParams=//; s/^\"//; s/\"$//')\ncp \"$cfg\" '{}'\nreport_dir=$(python3 - <<'PY' \"$cfg\"\nimport json, sys\nwith open(sys.argv[1], 'r', encoding='utf-8') as fh:\n    data = json.load(fh)\nprint(data['junitpath'])\nPY\n)\nmkdir -p \"$report_dir\" \"$(dirname \"$out\")\"\ncat <<'XML' > \"$report_dir/result.xml\"\n{}\nXML\nprintf 'va execute=%s\\n' \"$execute\" > \"$out\"\nexit {}",
+        calls_log.display(),
+        captured_params.display(),
+        report_xml,
+        exit_code
+    );
+    write_script(path, &body);
+}
+
 fn write_config(
     path: &Path,
     base_path: &Path,
@@ -174,6 +191,71 @@ fn setup_project_with_additional_launch_keys(
     (dir, config_path, build_calls, test_calls, captured_config)
 }
 
+fn setup_va_project(
+    report_xml: &str,
+    additional_launch_keys: &[&str],
+) -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf, PathBuf) {
+    let dir = tempdir().expect("tempdir");
+    let base_path = dir.path().join("project");
+    let work_path = dir.path().join("work");
+    let install_dir = dir.path().join("platform");
+    let config_path = dir.path().join("application.yaml");
+    let build_calls = dir.path().join("build.calls.log");
+    let test_calls = dir.path().join("test.calls.log");
+    let captured_params = dir.path().join("captured-va-params.json");
+    let va_epf = dir.path().join("va").join("vanessa-automation.epf");
+    let va_params = dir.path().join("cfg").join("va-base.json");
+    let features_dir = dir.path().join("features").join("smoke");
+
+    fs::create_dir_all(base_path.join("main")).expect("main");
+    fs::create_dir_all(&work_path).expect("work");
+    fs::create_dir_all(va_epf.parent().expect("va dir")).expect("va dir");
+    fs::create_dir_all(va_params.parent().expect("cfg dir")).expect("cfg dir");
+    fs::create_dir_all(&features_dir).expect("features");
+    fs::write(
+        base_path.join("main").join("Module.bsl"),
+        "procedure Test() endprocedure",
+    )
+    .expect("module");
+    fs::write(&va_epf, "epf").expect("epf");
+    fs::write(&va_params, "{\n  \"existing\": true\n}\n").expect("params");
+    fs::write(features_dir.join("login.feature"), "Feature: Login\n").expect("feature");
+
+    write_build_script(&install_dir.join("bin").join("1cv8"), &build_calls, false);
+    write_va_test_script(
+        &install_dir.join("bin").join("1cv8c"),
+        &test_calls,
+        &captured_params,
+        report_xml,
+        0,
+    );
+
+    let additional_launch_keys_block = if additional_launch_keys.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "  enterprise:\n    additional-launch-keys:\n{}",
+            additional_launch_keys
+                .iter()
+                .map(|key| format!("      - '{}'\n", key))
+                .collect::<String>()
+        )
+    };
+    let config = format!(
+        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib;Pwd=secret'\ntests:\n  execution_timeout_seconds: 5\n  va:\n    epf_path: '{}'\n    params_path: '{}'\n    profile: smoke\n    fail_fast: true\n    profiles:\n      smoke:\n        feature_path: '{}'\n        features_to_run:\n          - login\n        filter_tags:\n          - '@smoke'\n        ignore_tags:\n          - '@draft'\n        scenario_filter:\n          - Проверка логина\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n{}",
+        base_path.display(),
+        work_path.display(),
+        va_epf.display(),
+        va_params.display(),
+        features_dir.display(),
+        install_dir.display(),
+        additional_launch_keys_block,
+    );
+    fs::write(&config_path, config).expect("config");
+
+    (dir, config_path, build_calls, test_calls, captured_params)
+}
+
 fn scrub_snapshot(value: &mut Value) {
     value["duration_ms"] = Value::String("<duration>".to_owned());
     value["data"]["retained_paths"]["run_dir"] = Value::String("<run_dir>".to_owned());
@@ -210,12 +292,19 @@ fn test_all_full_json_runs_build_first_and_returns_report() {
             "json",
             "test",
             "--full",
+            "yaxunit",
             "all",
         ])
         .output()
         .expect("run");
 
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "status={:?}\nstdout={}\nstderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(fs::read_to_string(build_calls)
         .expect("build calls")
         .contains("/UpdateDBCfg"));
@@ -255,17 +344,86 @@ fn test_run_appends_enterprise_additional_launch_keys() {
             "--output",
             "json",
             "test",
+            "yaxunit",
             "all",
         ])
         .output()
         .expect("run");
 
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "status={:?}\nstdout={}\nstderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let calls = fs::read_to_string(test_calls).expect("test calls");
     assert!(calls.contains("RunUnitTests="));
     assert!(calls.contains("/TESTMANAGER"));
     assert!(calls.contains("/TCUser"));
     assert!(calls.contains("ci-user"));
+}
+
+#[test]
+fn test_va_builds_vanessa_command_and_overlay() {
+    let (_dir, config_path, build_calls, test_calls, captured_params) = setup_va_project(
+        JUNIT_SMOKE_REPORT_FIXTURE,
+        &["/TESTMANAGER", "/VAUSER", "ci-user"],
+    );
+
+    let output = std::process::Command::cargo_bin("v8-test-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--output",
+            "json",
+            "test",
+            "va",
+        ])
+        .output()
+        .expect("run");
+
+    assert!(
+        output.status.success(),
+        "status={:?}\nstdout={}\nstderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(fs::read_to_string(build_calls)
+        .expect("build calls")
+        .contains("/UpdateDBCfg"));
+
+    let calls = fs::read_to_string(test_calls).expect("test calls");
+    assert!(calls.contains("/Execute"));
+    assert!(calls.contains("vanessa-automation.epf"));
+    assert!(calls.contains("StartFeaturePlayer;VAParams="));
+    assert!(calls.contains("/TESTMANAGER"));
+    assert!(calls.contains("/VAUSER"));
+    assert!(calls.contains("ci-user"));
+
+    let params: Value =
+        serde_json::from_slice(&fs::read(captured_params).expect("params")).expect("params json");
+    assert_eq!(params["existing"], true);
+    assert_eq!(params["stoponerror"], true);
+    assert_eq!(params["junitcreatereport"], true);
+    assert!(params["junitpath"]
+        .as_str()
+        .expect("junitpath")
+        .contains("/junit"));
+    assert!(params["featurepath"]
+        .as_str()
+        .expect("featurepath")
+        .contains("/features/smoke"));
+    assert_eq!(params["FeaturesToRun"][0], "login");
+    assert_eq!(params["filtertags"][0], "@smoke");
+    assert_eq!(params["ignoretags"][0], "@draft");
+    assert_eq!(params["scenariofilter"][0], "Проверка логина");
+
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["data"]["report"]["summary"]["total"], 1);
 }
 
 #[test]
@@ -281,6 +439,7 @@ fn test_module_build_failure_prevents_enterprise_launch() {
             "--output",
             "json",
             "test",
+            "yaxunit",
             "module",
             "Foo",
         ])
@@ -320,6 +479,7 @@ stack trace line 2</failure>
             "--output",
             "json",
             "test",
+            "yaxunit",
             "module",
             "Foo",
         ])
@@ -360,6 +520,7 @@ stack trace line 2</failure>
             "json",
             "test",
             "--full",
+            "yaxunit",
             "module",
             "Foo",
         ])
@@ -396,6 +557,7 @@ fn test_timeout_retains_artifacts() {
             "--output",
             "json",
             "test",
+            "yaxunit",
             "all",
         ])
         .output()

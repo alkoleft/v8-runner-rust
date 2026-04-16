@@ -26,6 +26,7 @@ pub fn load_config(
     let path = resolve_config_path(config_path)?;
     let content = std::fs::read_to_string(&path)?;
     let mut config: AppConfig = serde_yaml::from_str(&content)?;
+    normalize_config_paths(&mut config, path.parent().unwrap_or_else(|| Path::new(".")));
 
     if let Some(wd) = workdir_override {
         config.work_path = Path::new(wd).to_path_buf();
@@ -33,6 +34,29 @@ pub fn load_config(
 
     validate(&config)?;
     Ok(config)
+}
+
+fn normalize_config_paths(config: &mut AppConfig, config_dir: &Path) {
+    let va = &mut config.tests.va;
+    if let Some(path) = va.epf_path.as_mut() {
+        *path = normalize_optional_path(path, config_dir);
+    }
+    if let Some(path) = va.params_path.as_mut() {
+        *path = normalize_optional_path(path, config_dir);
+    }
+    for profile in va.profiles.values_mut() {
+        if let Some(path) = profile.feature_path.as_mut() {
+            *path = normalize_optional_path(path, config_dir);
+        }
+    }
+}
+
+fn normalize_optional_path(path: &Path, config_dir: &Path) -> std::path::PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        config_dir.join(path)
+    }
 }
 
 fn resolve_config_path(config_path: Option<&str>) -> Result<std::path::PathBuf, ConfigLoadError> {
@@ -138,6 +162,54 @@ mod tests {
         let config = load_config(config_path.to_str(), None).expect("load config");
 
         assert_eq!(config.tests.execution_timeout_seconds, 17);
+    }
+
+    #[test]
+    fn load_config_normalizes_vanessa_paths_relative_to_config_dir() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let src = base.join("src");
+        let features = dir.path().join("cfg").join("features");
+        let va = dir.path().join("cfg").join("va");
+        std::fs::create_dir_all(&src).expect("src dir");
+        std::fs::create_dir_all(&features).expect("features dir");
+        std::fs::create_dir_all(&va).expect("va dir");
+        std::fs::write(va.join("runner.epf"), "epf").expect("epf");
+        std::fs::write(va.join("params.json"), "{}").expect("params");
+        let config_dir = dir.path().join("cfg");
+        std::fs::create_dir_all(&config_dir).expect("config dir");
+        let config_path = config_dir.join("application.yaml");
+        std::fs::write(
+            &config_path,
+            format!(
+                "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: \"File=/tmp/ib\"\ntests:\n  va:\n    epf_path: va/runner.epf\n    params_path: va/params.json\n    profile: smoke\n    profiles:\n      smoke:\n        feature_path: features\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: src\n",
+                base.display(),
+                work.display()
+            ),
+        )
+        .expect("write config");
+
+        let config = load_config(config_path.to_str(), None).expect("load config");
+
+        assert_eq!(
+            config.tests.va.epf_path.expect("epf"),
+            config_dir.join("va/runner.epf")
+        );
+        assert_eq!(
+            config.tests.va.params_path.expect("params"),
+            config_dir.join("va/params.json")
+        );
+        assert_eq!(
+            config
+                .tests
+                .va
+                .profiles
+                .get("smoke")
+                .and_then(|profile| profile.feature_path.clone())
+                .expect("feature path"),
+            config_dir.join("features")
+        );
     }
 
     #[test]

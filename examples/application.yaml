@@ -60,6 +60,22 @@ tools:
     additional-launch-keys:
       - /TESTMANAGER
 
+tests:
+  execution_timeout_seconds: 300
+  yaxunit:
+    timeouts:
+      total_ms: 300000
+  va:
+    epf_path: /path/to/vanessa.epf
+    params_path: /path/to/va-params.json
+    profile: smoke
+    fail_fast: true
+    timeouts:
+      total_ms: 300000
+    profiles:
+      smoke:
+        feature_path: /path/to/features
+
 # MCP transport defaults (parsed and validated now; transport wiring comes later)
 mcp:
   http:

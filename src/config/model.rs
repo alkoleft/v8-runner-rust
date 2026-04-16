@@ -1,6 +1,9 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::domain::execution::ExecutionTimeouts;
 use crate::platform::connection::V8Connection;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -215,17 +218,62 @@ impl Default for McpExecutionConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default, rename_all = "snake_case")]
 pub struct TestsConfig {
     #[serde(default = "default_test_execution_timeout_seconds")]
     pub execution_timeout_seconds: u64,
+
+    #[serde(default)]
+    pub yaxunit: YaxunitTestConfig,
+
+    #[serde(default)]
+    pub va: VanessaTestConfig,
 }
 
 impl Default for TestsConfig {
     fn default() -> Self {
         Self {
             execution_timeout_seconds: default_test_execution_timeout_seconds(),
+            yaxunit: YaxunitTestConfig::default(),
+            va: VanessaTestConfig::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default, rename_all = "snake_case")]
+pub struct YaxunitTestConfig {
+    pub timeouts: ExecutionTimeouts,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default, rename_all = "snake_case")]
+pub struct VanessaTestConfig {
+    pub epf_path: Option<PathBuf>,
+    pub params_path: Option<PathBuf>,
+    pub profile: Option<String>,
+    pub fail_fast: bool,
+    pub timeouts: ExecutionTimeouts,
+    pub profiles: BTreeMap<String, VanessaProfileConfig>,
+}
+
+impl VanessaTestConfig {
+    pub fn is_configured(&self) -> bool {
+        self.epf_path.is_some()
+            || self.params_path.is_some()
+            || self.profile.is_some()
+            || !self.profiles.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default, rename_all = "snake_case")]
+pub struct VanessaProfileConfig {
+    pub feature_path: Option<PathBuf>,
+    pub features_to_run: Vec<String>,
+    pub filter_tags: Vec<String>,
+    pub ignore_tags: Vec<String>,
+    pub scenario_filter: Vec<String>,
 }
 
 fn default_test_execution_timeout_seconds() -> u64 {

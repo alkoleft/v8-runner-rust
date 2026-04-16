@@ -5,22 +5,26 @@ use std::time::{Duration, Instant};
 
 use regex::Regex;
 use serde::Serialize;
+use serde_json::{Map, Value};
 use uuid::Uuid;
 
-use crate::config::model::AppConfig;
+use crate::config::model::{AppConfig, VanessaProfileConfig};
 use crate::domain::artifact::ArtifactSet;
 use crate::domain::execution::{ExecutionMetrics, ExecutionOutcome, ExecutionStatus, StepResult};
+use crate::domain::runner::RunnerKind;
 use crate::domain::test::{
     test_execution_error, test_execution_status, TestErrorKind, TestOutputMode, TestReport,
     TestRunResult, TestStatus, TestTarget,
 };
 use crate::parsers::junit;
+use crate::parsers::vanessa_log;
 use crate::parsers::yaxunit_log;
-use crate::platform::enterprise::{EnterpriseDsl, EnterpriseError};
+use crate::platform::enterprise::{EnterpriseDsl, EnterpriseError, EnterpriseScenario};
 use crate::platform::locator::UtilityType;
 use crate::platform::process::ProcessError;
 use crate::platform::utilities::PlatformUtilities;
 use crate::support::error::AppError;
+use crate::support::path::is_safe_path_segment;
 use crate::use_cases::build_project;
 use crate::use_cases::context::ExecutionContext;
 use crate::use_cases::request::{
@@ -76,9 +80,18 @@ struct RunArtifacts {
     run_dir: PathBuf,
     config_json: PathBuf,
     junit_xml: PathBuf,
-    yaxunit_log: PathBuf,
+    junit_dir: PathBuf,
+    runner_log: PathBuf,
     platform_log: PathBuf,
     sentinel: PathBuf,
+}
+
+enum PreparedRun {
+    YaXUnit,
+    Vanessa {
+        epf_path: PathBuf,
+        params_path: PathBuf,
+    },
 }
 
 type TestExecutionFailure = UseCaseFailure<TestRunResult>;
@@ -96,39 +109,57 @@ fn make_test_result(
 
 fn run_tests(config: &AppConfig, args: &TestArgs) -> UseCaseResult<TestRunResult> {
     let started = Instant::now();
-    info!(full = args.full, scope = ?args.scope, "starting test run");
+    let runner_kind = args.execution.profile.kind.clone();
+    info!(
+        full = args.full,
+        scope = ?args.scope,
+        runner = ?runner_kind,
+        "starting test run"
+    );
     let mode = if args.full {
         TestOutputMode::Full
     } else {
         TestOutputMode::Compact
     };
-    let target = match &args.scope {
-        TestScope::All => TestTarget::All,
-        TestScope::Module { name } => {
-            let trimmed = name.trim();
-            if trimmed.is_empty() || trimmed.chars().any(char::is_control) {
-                let error =
-                    AppError::Validation("test module requires a non-empty module name".to_owned());
-                let outcome = ExecutionOutcome::new(ExecutionStatus::Failed)
-                    .with_diagnostics(vec![error.to_string()]);
-                let result = make_test_result(
-                    TestTarget::Module { name: name.clone() },
-                    mode,
-                    outcome,
-                    Vec::new(),
-                    Vec::new(),
-                    started.elapsed().as_millis() as u64,
-                );
-                return Err(TestExecutionFailure::with_payload(error, result));
-            }
-            TestTarget::Module {
-                name: trimmed.to_owned(),
-            }
+    let target = match validate_target(&runner_kind, &args.scope) {
+        Ok(target) => target,
+        Err(error) => {
+            let outcome = ExecutionOutcome::new(ExecutionStatus::Failed)
+                .with_diagnostics(vec![error.to_string()]);
+            let result = make_test_result(
+                TestTarget::All,
+                mode,
+                outcome,
+                Vec::new(),
+                Vec::new(),
+                started.elapsed().as_millis() as u64,
+            );
+            return Err(TestExecutionFailure::with_payload(error, result));
         }
     };
 
     let mut steps = Vec::new();
     let mut warnings = Vec::new();
+    let runner_id = match validate_runner_profile_id(&args.execution.profile.id) {
+        Ok(runner_id) => runner_id,
+        Err(error) => {
+            let outcome = ExecutionOutcome::new(ExecutionStatus::Failed)
+                .with_diagnostics(vec![error.to_string()])
+                .with_errors(vec![test_execution_error(
+                    TestErrorKind::EnterpriseSpawnFailed,
+                    error.to_string(),
+                )]);
+            let result = make_test_result(
+                target,
+                mode,
+                outcome,
+                warnings,
+                steps,
+                started.elapsed().as_millis() as u64,
+            );
+            return Err(TestExecutionFailure::with_payload(error, result));
+        }
+    };
 
     info!("running build prerequisite for tests");
     let build_started = Instant::now();
@@ -176,7 +207,7 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> UseCaseResult<TestRunResult
     });
 
     info!("preparing test run artifacts");
-    let artifacts = match create_run_artifacts(config) {
+    let mut artifacts = match create_run_artifacts(config, &runner_id) {
         Ok(artifacts) => artifacts,
         Err(error) => {
             let app_error =
@@ -199,30 +230,30 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> UseCaseResult<TestRunResult
         }
     };
 
-    info!(path = %artifacts.config_json.display(), "writing YaXUnit configuration");
-    let config_payload = build_yaxunit_config(&target, &artifacts);
-    if let Err(error) = write_json_file(&artifacts.config_json, &config_payload) {
-        let app_error = AppError::Runtime(format!("failed to write YaXUnit config: {error}"));
-        let retained_paths = retain_run_artifacts(config, &artifacts).ok();
-        let mut outcome = ExecutionOutcome::new(ExecutionStatus::Failed)
-            .with_diagnostics(vec![app_error.to_string()])
-            .with_errors(vec![test_execution_error(
-                TestErrorKind::EnterpriseSpawnFailed,
-                app_error.to_string(),
-            )]);
-        if let Some(retained_paths) = retained_paths {
-            outcome = outcome.with_artifacts(retained_paths);
+    let prepared_run = match prepare_runner_artifacts(config, args, &target, &mut artifacts) {
+        Ok(prepared_run) => prepared_run,
+        Err(error) => {
+            let retained_paths = retain_run_artifacts(config, &artifacts).ok();
+            let mut outcome = ExecutionOutcome::new(ExecutionStatus::Failed)
+                .with_diagnostics(vec![error.to_string()])
+                .with_errors(vec![test_execution_error(
+                    TestErrorKind::EnterpriseSpawnFailed,
+                    error.to_string(),
+                )]);
+            if let Some(retained_paths) = retained_paths {
+                outcome = outcome.with_artifacts(retained_paths);
+            }
+            let result = make_test_result(
+                target.clone(),
+                mode,
+                outcome,
+                warnings,
+                steps,
+                started.elapsed().as_millis() as u64,
+            );
+            return Err(TestExecutionFailure::with_payload(error, result));
         }
-        let result = make_test_result(
-            target,
-            mode,
-            outcome,
-            warnings,
-            steps,
-            started.elapsed().as_millis() as u64,
-        );
-        return Err(TestExecutionFailure::with_payload(app_error, result));
-    }
+    };
 
     info!(path = %artifacts.run_dir.display(), "launching enterprise test run");
     let run_started = Instant::now();
@@ -257,7 +288,18 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> UseCaseResult<TestRunResult
         }
     };
 
-    let platform_result = match enterprise.run_unit_tests(&artifacts.config_json) {
+    let platform_result = match enterprise.run_scenario(match &prepared_run {
+        PreparedRun::YaXUnit => EnterpriseScenario::YaXUnit {
+            config_path: &artifacts.config_json,
+        },
+        PreparedRun::Vanessa {
+            epf_path,
+            params_path,
+        } => EnterpriseScenario::Vanessa {
+            epf_path,
+            params_path,
+        },
+    }) {
         Ok(result) => {
             steps.push(StepResult {
                 name: "run".to_owned(),
@@ -294,6 +336,13 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> UseCaseResult<TestRunResult
             return Err(TestExecutionFailure::with_payload(app_error, result));
         }
     };
+
+    if matches!(prepared_run, PreparedRun::Vanessa { .. }) {
+        resolve_vanessa_junit_path(&mut artifacts);
+        if let Err(warning) = materialize_vanessa_runner_log(&artifacts) {
+            warnings.push(warning);
+        }
+    }
 
     info!(path = %artifacts.junit_xml.display(), "parsing JUnit report");
     let parse_junit_started = Instant::now();
@@ -347,34 +396,13 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> UseCaseResult<TestRunResult
         }
     };
 
-    info!(path = %artifacts.yaxunit_log.display(), "parsing YaXUnit log");
-    let parse_log_started = Instant::now();
-    match yaxunit_log::normalize_file(&artifacts.yaxunit_log) {
-        Ok(parsed) => {
-            if let Some(errors) = parsed.payload {
-                report.extracted_errors = errors;
-            }
-            warnings.extend(parsed.warnings);
-            steps.push(StepResult {
-                name: "parse_log".to_owned(),
-                ok: true,
-                duration_ms: parse_log_started.elapsed().as_millis() as u64,
-                message: Some(format!(
-                    "extracted {} YaXUnit error block(s)",
-                    report.extracted_errors.len()
-                )),
-            });
-        }
-        Err(error) => {
-            warnings.push(format!("failed to read YaXUnit log: {error}"));
-            steps.push(StepResult {
-                name: "parse_log".to_owned(),
-                ok: false,
-                duration_ms: parse_log_started.elapsed().as_millis() as u64,
-                message: Some(format!("failed to read YaXUnit log: {error}")),
-            });
-        }
-    }
+    parse_runner_log(
+        &prepared_run,
+        &artifacts.runner_log,
+        &mut report,
+        &mut warnings,
+        &mut steps,
+    );
 
     let rendered_report = match mode {
         TestOutputMode::Full => report.clone(),
@@ -450,6 +478,15 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> UseCaseResult<TestRunResult
     ))
 }
 
+fn validate_runner_profile_id(profile_id: &str) -> Result<&str, AppError> {
+    if !is_safe_path_segment(profile_id) {
+        return Err(AppError::Validation(format!(
+            "runner profile contains unsafe path characters: {profile_id}"
+        )));
+    }
+    Ok(profile_id)
+}
+
 fn build_summary(result: &crate::domain::build::BuildResult) -> String {
     if result.ok {
         "build completed".to_owned()
@@ -470,6 +507,50 @@ fn build_summary(result: &crate::domain::build::BuildResult) -> String {
     }
 }
 
+fn validate_target(runner_kind: &RunnerKind, scope: &TestScope) -> Result<TestTarget, AppError> {
+    match scope {
+        TestScope::All => Ok(TestTarget::All),
+        TestScope::Module { name } => {
+            if *runner_kind == RunnerKind::Vanessa {
+                return Err(AppError::Validation(
+                    "Vanessa Automation supports only 'test va' without module scope".to_owned(),
+                ));
+            }
+            let trimmed = name.trim();
+            if trimmed.is_empty() || trimmed.chars().any(char::is_control) {
+                return Err(AppError::Validation(
+                    "test module requires a non-empty module name".to_owned(),
+                ));
+            }
+            Ok(TestTarget::Module {
+                name: trimmed.to_owned(),
+            })
+        }
+    }
+}
+
+fn prepare_runner_artifacts(
+    config: &AppConfig,
+    args: &TestArgs,
+    target: &TestTarget,
+    artifacts: &mut RunArtifacts,
+) -> Result<PreparedRun, AppError> {
+    match args.execution.profile.kind {
+        RunnerKind::YaXUnit => {
+            info!(path = %artifacts.config_json.display(), "writing YaXUnit configuration");
+            let config_payload = build_yaxunit_config(target, artifacts);
+            write_json_file(&artifacts.config_json, &config_payload).map_err(|error| {
+                AppError::Runtime(format!("failed to write YaXUnit config: {error}"))
+            })?;
+            Ok(PreparedRun::YaXUnit)
+        }
+        RunnerKind::Vanessa => prepare_vanessa_run(config, args, artifacts),
+        ref other => Err(AppError::Validation(format!(
+            "unsupported test runner kind: {other:?}"
+        ))),
+    }
+}
+
 fn build_yaxunit_config(target: &TestTarget, artifacts: &RunArtifacts) -> YaXUnitConfig {
     YaXUnitConfig {
         filter: match target {
@@ -483,7 +564,7 @@ fn build_yaxunit_config(target: &TestTarget, artifacts: &RunArtifacts) -> YaXUni
         close_after_tests: true,
         show_report: false,
         logging: YaXUnitLogging {
-            file: artifacts.yaxunit_log.display().to_string(),
+            file: artifacts.runner_log.display().to_string(),
             console: false,
             level: "info",
         },
@@ -516,7 +597,7 @@ fn build_enterprise_dsl<'a>(
     ))
 }
 
-fn create_run_artifacts(config: &AppConfig) -> std::io::Result<RunArtifacts> {
+fn create_run_artifacts(config: &AppConfig, runner_id: &str) -> std::io::Result<RunArtifacts> {
     let run_id = format!(
         "{}-{}-{}",
         chrono::Utc::now().timestamp_millis(),
@@ -526,7 +607,7 @@ fn create_run_artifacts(config: &AppConfig) -> std::io::Result<RunArtifacts> {
     let run_dir = config
         .work_path
         .join("temp")
-        .join("yaxunit")
+        .join(runner_id)
         .join("runs")
         .join(&run_id);
     info!(path = %run_dir.display(), "creating test artifact directory");
@@ -541,7 +622,8 @@ fn create_run_artifacts(config: &AppConfig) -> std::io::Result<RunArtifacts> {
         run_dir: run_dir.clone(),
         config_json: run_dir.join("config.json"),
         junit_xml: run_dir.join("report.xml"),
-        yaxunit_log: run_dir.join("yaxunit.log"),
+        junit_dir: run_dir.join("junit"),
+        runner_log: run_dir.join("runner.log"),
         platform_log: run_dir.join("enterprise.out.log"),
         sentinel,
     };
@@ -551,6 +633,197 @@ fn create_run_artifacts(config: &AppConfig) -> std::io::Result<RunArtifacts> {
 fn write_json_file(path: &Path, payload: &impl Serialize) -> std::io::Result<()> {
     fs::write(path, serde_json::to_vec_pretty(payload)?)?;
     set_file_permissions(path)
+}
+
+fn prepare_vanessa_run(
+    config: &AppConfig,
+    args: &TestArgs,
+    artifacts: &mut RunArtifacts,
+) -> Result<PreparedRun, AppError> {
+    let va = &config.tests.va;
+    let epf_path = va
+        .epf_path
+        .clone()
+        .ok_or_else(|| AppError::Validation("tests.va.epf_path is not configured".to_owned()))?;
+    let params_path = va
+        .params_path
+        .as_ref()
+        .ok_or_else(|| AppError::Validation("tests.va.params_path is not configured".to_owned()))?;
+    let profile_name = args.execution.profile.id.as_str();
+    if !is_safe_path_segment(profile_name) {
+        return Err(AppError::Validation(format!(
+            "tests.va.profile contains unsafe path characters: {profile_name}"
+        )));
+    }
+    let profile = va.profiles.get(profile_name).ok_or_else(|| {
+        AppError::Validation(format!(
+            "unknown Vanessa Automation profile '{profile_name}'"
+        ))
+    })?;
+
+    fs::create_dir_all(&artifacts.junit_dir)
+        .map_err(|error| AppError::Runtime(format!("failed to create JUnit directory: {error}")))?;
+
+    let runtime_params_path = artifacts.run_dir.join("va-params.json");
+    let base = fs::read_to_string(params_path).map_err(|error| {
+        AppError::Runtime(format!("failed to read Vanessa params template: {error}"))
+    })?;
+    let mut payload: Value = serde_json::from_str(&base).map_err(|error| {
+        AppError::Runtime(format!("failed to parse Vanessa params JSON: {error}"))
+    })?;
+    let object = payload
+        .as_object_mut()
+        .ok_or_else(|| AppError::Runtime("Vanessa params JSON must be an object".to_owned()))?;
+    apply_vanessa_overlay(object, profile, va.fail_fast, artifacts);
+    write_json_file(&runtime_params_path, &payload)
+        .map_err(|error| AppError::Runtime(format!("failed to write Vanessa params: {error}")))?;
+    artifacts.config_json = runtime_params_path.clone();
+
+    Ok(PreparedRun::Vanessa {
+        epf_path,
+        params_path: runtime_params_path,
+    })
+}
+
+fn materialize_vanessa_runner_log(artifacts: &RunArtifacts) -> Result<(), String> {
+    fs::copy(&artifacts.platform_log, &artifacts.runner_log).map_err(|error| {
+        format!(
+            "failed to materialize Vanessa runner log from enterprise output: {error}"
+        )
+    })?;
+    set_file_permissions(&artifacts.runner_log)
+        .map_err(|error| format!("failed to chmod Vanessa runner log: {error}"))
+}
+
+fn apply_vanessa_overlay(
+    object: &mut Map<String, Value>,
+    profile: &VanessaProfileConfig,
+    fail_fast: bool,
+    artifacts: &RunArtifacts,
+) {
+    object.insert("stoponerror".to_owned(), Value::Bool(fail_fast));
+    object.insert("junitcreatereport".to_owned(), Value::Bool(true));
+    object.insert(
+        "junitpath".to_owned(),
+        Value::String(artifacts.junit_dir.display().to_string()),
+    );
+
+    if let Some(feature_path) = profile.feature_path.as_ref() {
+        object.insert(
+            "featurepath".to_owned(),
+            Value::String(feature_path.display().to_string()),
+        );
+    }
+    insert_string_array_if_non_empty(object, "FeaturesToRun", &profile.features_to_run);
+    insert_string_array_if_non_empty(object, "filtertags", &profile.filter_tags);
+    insert_string_array_if_non_empty(object, "ignoretags", &profile.ignore_tags);
+    insert_string_array_if_non_empty(object, "scenariofilter", &profile.scenario_filter);
+}
+
+fn insert_string_array_if_non_empty(object: &mut Map<String, Value>, key: &str, values: &[String]) {
+    if values.is_empty() {
+        object.remove(key);
+        return;
+    }
+
+    object.insert(
+        key.to_owned(),
+        Value::Array(values.iter().cloned().map(Value::String).collect()),
+    );
+}
+
+fn parse_runner_log(
+    prepared_run: &PreparedRun,
+    runner_log_path: &Path,
+    report: &mut TestReport,
+    warnings: &mut Vec<String>,
+    steps: &mut Vec<StepResult>,
+) {
+    let parse_log_started = Instant::now();
+    match prepared_run {
+        PreparedRun::YaXUnit => match yaxunit_log::normalize_file(runner_log_path) {
+            Ok(parsed) => {
+                if let Some(errors) = parsed.payload {
+                    report.extracted_errors = errors;
+                }
+                warnings.extend(parsed.warnings);
+                steps.push(StepResult {
+                    name: "parse_log".to_owned(),
+                    ok: true,
+                    duration_ms: parse_log_started.elapsed().as_millis() as u64,
+                    message: Some(format!(
+                        "extracted {} YaXUnit error block(s)",
+                        report.extracted_errors.len()
+                    )),
+                });
+            }
+            Err(error) => {
+                warnings.push(format!("failed to read YaXUnit log: {error}"));
+                steps.push(StepResult {
+                    name: "parse_log".to_owned(),
+                    ok: false,
+                    duration_ms: parse_log_started.elapsed().as_millis() as u64,
+                    message: Some(format!("failed to read YaXUnit log: {error}")),
+                });
+            }
+        },
+        PreparedRun::Vanessa { .. } => match vanessa_log::normalize_file(runner_log_path) {
+            Ok(parsed) => {
+                if let Some(errors) = parsed.payload {
+                    report.extracted_errors = errors;
+                }
+                warnings.extend(parsed.warnings);
+                steps.push(StepResult {
+                    name: "parse_log".to_owned(),
+                    ok: true,
+                    duration_ms: parse_log_started.elapsed().as_millis() as u64,
+                    message: Some(format!(
+                        "extracted {} Vanessa Automation log line(s)",
+                        report.extracted_errors.len()
+                    )),
+                });
+            }
+            Err(error) => {
+                warnings.push(format!("failed to read Vanessa Automation log: {error}"));
+                steps.push(StepResult {
+                    name: "parse_log".to_owned(),
+                    ok: false,
+                    duration_ms: parse_log_started.elapsed().as_millis() as u64,
+                    message: Some(format!("failed to read Vanessa Automation log: {error}")),
+                });
+            }
+        },
+    }
+}
+
+fn resolve_vanessa_junit_path(artifacts: &mut RunArtifacts) {
+    if artifacts.junit_xml.exists() {
+        return;
+    }
+    if let Some(path) = discover_junit_report(&artifacts.junit_dir) {
+        artifacts.junit_xml = path;
+    }
+}
+
+fn discover_junit_report(root: &Path) -> Option<PathBuf> {
+    let entries = fs::read_dir(root).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file()
+            && path
+                .extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("xml"))
+        {
+            return Some(path);
+        }
+        if path.is_dir() {
+            if let Some(found) = discover_junit_report(&path) {
+                return Some(found);
+            }
+        }
+    }
+    None
 }
 
 fn parse_junit_report(artifacts: &RunArtifacts) -> crate::parsers::NormalizedParse<TestReport> {
@@ -672,7 +945,7 @@ fn retain_run_artifacts(
         run_dir: artifacts.run_dir.clone(),
         config_json: artifacts.config_json.clone(),
         junit_xml: artifacts.junit_xml.clone(),
-        yaxunit_log: artifacts.yaxunit_log.clone(),
+        yaxunit_log: artifacts.runner_log.clone(),
         platform_log: artifacts.platform_log.clone(),
         sentinel: artifacts.sentinel.clone(),
     }
@@ -790,15 +1063,18 @@ fn set_file_permissions(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_yaxunit_config, compact_report, create_run_artifacts, sanitize_text,
-        sanitize_text_full, truncate_stack_trace, RunArtifacts,
+        build_yaxunit_config, compact_report, create_run_artifacts, materialize_vanessa_runner_log,
+        parse_junit_report, retain_run_artifacts, sanitize_text, sanitize_text_full,
+        truncate_stack_trace, RunArtifacts,
     };
     use crate::config::model::{
         AppConfig, BuildConfig, BuilderBackend, PlatformToolConfig, SourceFormat, SourceSetConfig,
-        SourceSetPurpose, TestsConfig, ToolsConfig,
+        SourceSetPurpose, TestsConfig, ToolsConfig, VanessaProfileConfig,
     };
+    use crate::domain::execution::ExecutionTimeouts;
+    use crate::domain::runner::{ExecutionPolicy, RunnerKind, RunnerProfile};
     use crate::domain::test::{
-        TestCase, TestReport, TestStatus, TestSuite, TestSummary, TestTarget,
+        TestCase, TestErrorKind, TestReport, TestStatus, TestSuite, TestSummary, TestTarget,
     };
     use std::path::PathBuf;
     use tempfile::tempdir;
@@ -832,8 +1108,8 @@ mod tests {
     fn creates_distinct_run_dirs() {
         let dir = tempdir().expect("tempdir");
         let config = config(dir.path());
-        let first = create_run_artifacts(&config).expect("first");
-        let second = create_run_artifacts(&config).expect("second");
+        let first = create_run_artifacts(&config, "yaxunit").expect("first");
+        let second = create_run_artifacts(&config, "yaxunit").expect("second");
         assert_ne!(first.run_dir, second.run_dir);
     }
 
@@ -900,12 +1176,100 @@ mod tests {
         assert!(truncated.len() < trace.len());
     }
 
+    #[test]
+    fn materialize_vanessa_runner_log_copies_raw_bytes() {
+        let dir = tempdir().expect("tempdir");
+        let artifacts = create_artifacts(dir.path());
+        std::fs::create_dir_all(&artifacts.run_dir).expect("run dir");
+        let payload = [0xff, 0xfe, 0x00, b'J', b'u', b'n'];
+        std::fs::write(&artifacts.platform_log, payload).expect("write platform log");
+
+        materialize_vanessa_runner_log(&artifacts).expect("materialize log");
+
+        let copied = std::fs::read(&artifacts.runner_log).expect("read runner log");
+        assert_eq!(copied, payload);
+    }
+
+    #[test]
+    fn materialize_vanessa_runner_log_returns_warning_on_missing_source() {
+        let dir = tempdir().expect("tempdir");
+        let artifacts = create_artifacts(dir.path());
+        std::fs::create_dir_all(&artifacts.run_dir).expect("run dir");
+
+        let warning = materialize_vanessa_runner_log(&artifacts).expect_err("warning");
+        assert!(warning.contains("failed to materialize Vanessa runner log"));
+    }
+
+    #[test]
+    fn vanessa_junit_parse_failure_retains_materialized_runner_log() {
+        let dir = tempdir().expect("tempdir");
+        let config = config(dir.path());
+        let artifacts = create_artifacts(dir.path());
+        std::fs::create_dir_all(&artifacts.run_dir).expect("run dir");
+        std::fs::write(&artifacts.platform_log, b"enterprise /Out").expect("platform log");
+
+        materialize_vanessa_runner_log(&artifacts).expect("materialize log");
+        let junit_parse = parse_junit_report(&artifacts);
+        assert!(junit_parse.payload.is_none());
+        assert_eq!(junit_parse.errors[0].code, TestErrorKind::JunitNotProduced.code());
+
+        let retained = retain_run_artifacts(&config, &artifacts).expect("retain artifacts");
+        let retained_paths = crate::domain::test::RetainedPaths::from_artifact_set(&retained)
+            .expect("retained paths");
+        assert!(retained_paths.yaxunit_log.exists());
+        assert_eq!(retained_paths.yaxunit_log, artifacts.runner_log);
+    }
+
+    #[test]
+    fn unsafe_vanessa_profile_name_is_rejected() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = config(dir.path());
+        let epf = dir.path().join("runner.epf");
+        let params = dir.path().join("params.json");
+        let feature = dir.path().join("features");
+        std::fs::write(&epf, "epf").expect("epf");
+        std::fs::write(&params, "{}").expect("params");
+        std::fs::create_dir_all(&feature).expect("feature dir");
+
+        config.tests.va.epf_path = Some(epf);
+        config.tests.va.params_path = Some(params);
+        config.tests.va.profile = Some("bad/name".to_owned());
+        config.tests.va.profiles.insert(
+            "bad/name".to_owned(),
+            VanessaProfileConfig {
+                feature_path: Some(feature),
+                ..VanessaProfileConfig::default()
+            },
+        );
+
+        let args = crate::use_cases::request::TestRequest {
+            full: false,
+            scope: crate::use_cases::request::TestScopeRequest::All,
+            execution: crate::domain::runner::ScenarioExecutionRequest {
+                profile: RunnerProfile {
+                    id: "bad/name".to_owned(),
+                    kind: RunnerKind::Vanessa,
+                    output_formats: vec![],
+                    backend_hint: Some("enterprise".to_owned()),
+                },
+                timeouts: ExecutionTimeouts::default(),
+                policy: ExecutionPolicy::default(),
+            },
+        };
+
+        let result = super::run_tests(&config, &args);
+        assert!(result.is_err());
+        let error = result.err().expect("error");
+        assert!(error.error.to_string().contains("unsafe path characters"));
+    }
+
     fn create_artifacts(root: &std::path::Path) -> RunArtifacts {
         RunArtifacts {
             run_dir: root.join("run"),
             config_json: root.join("run/config.json"),
             junit_xml: root.join("run/report.xml"),
-            yaxunit_log: root.join("run/yax.log"),
+            junit_dir: root.join("run/junit"),
+            runner_log: root.join("run/yax.log"),
             platform_log: root.join("run/platform.log"),
             sentinel: root.join("run/run.inprogress"),
         }

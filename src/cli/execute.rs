@@ -4,22 +4,26 @@ use serde_json::json;
 
 use crate::cli::args::{
     ArtifactsArgs, BuildArgs, Command, DesignerConfigSyntaxArgs, DesignerModulesSyntaxArgs,
-    DumpArgs, ExtensionsArgs, LaunchArgs, LoadArgs, SyntaxArgs, SyntaxTarget, TestArgs, TestScope,
+    DumpArgs, ExtensionsArgs, LaunchArgs, LoadArgs, SyntaxArgs, SyntaxTarget, TestArgs, TestRunner,
+    TestScope, TestYaxunitArgs,
 };
 use crate::config::model::{AppConfig, SourceSetPurpose};
 use crate::domain::artifacts::{ArtifactBuildMode, ArtifactsResult};
 use crate::domain::build::{BuildMode, BuildResult};
 use crate::domain::dump::{DumpMode, DumpResult};
+use crate::domain::execution::ExecutionTimeouts;
 use crate::domain::extensions::ExtensionsResult;
 use crate::domain::init::{InitResult, InitStepStatus};
 use crate::domain::issue::{Issue, IssueSeverity};
 use crate::domain::load::{LoadMode, LoadResult};
+use crate::domain::runner::{ExecutionPolicy, RunnerKind, RunnerOutputFormat, RunnerProfile};
 use crate::domain::syntax::{SyntaxCheckResult, SyntaxCheckStatus};
 use crate::domain::test::{TestRunResult, TestStatus, TestTarget};
 use crate::output::json::Envelope;
 use crate::output::presenter::Presenter;
 use crate::support::error::AppError;
 use crate::support::fs::clean_dir;
+use crate::support::path::is_safe_path_segment;
 use crate::support::temp::platform_logs_dir;
 use crate::use_cases::artifacts;
 use crate::use_cases::build_project;
@@ -231,7 +235,7 @@ fn execute_test(
     presenter: &Presenter,
     clean_before_execution: bool,
 ) -> Result<(), UseCaseError> {
-    let request = map_test_request(args)?;
+    let request = map_test_request(config, args)?;
     let context = ExecutionContext::cli(CommandName::Test);
     with_cli_workspace_lock(
         config,
@@ -561,8 +565,26 @@ fn map_extensions_request(args: &ExtensionsArgs) -> ConfigureExtensionsRequest {
     }
 }
 
-fn map_test_request(args: &TestArgs) -> Result<TestRequest, UseCaseError> {
-    let scope = match &args.scope {
+fn map_test_request(config: &AppConfig, args: &TestArgs) -> Result<TestRequest, UseCaseError> {
+    match &args.runner {
+        TestRunner::Yaxunit(TestYaxunitArgs { scope }) => {
+            let scope = map_yaxunit_scope(scope)?;
+            Ok(TestRequest {
+                execution: build_yaxunit_execution(config),
+                full: args.full,
+                scope,
+            })
+        }
+        TestRunner::Va => Ok(TestRequest {
+            execution: build_vanessa_execution(config)?,
+            full: args.full,
+            scope: TestScopeRequest::All,
+        }),
+    }
+}
+
+fn map_yaxunit_scope(scope: &TestScope) -> Result<TestScopeRequest, UseCaseError> {
+    Ok(match scope {
         TestScope::All => TestScopeRequest::All,
         TestScope::Module { name } => {
             let trimmed = name.trim();
@@ -576,12 +598,82 @@ fn map_test_request(args: &TestArgs) -> Result<TestRequest, UseCaseError> {
                 name: trimmed.to_owned(),
             }
         }
-    };
-    Ok(TestRequest {
-        execution: TestRequest::default_execution(),
-        full: args.full,
-        scope,
     })
+}
+
+fn build_yaxunit_execution(config: &AppConfig) -> crate::domain::runner::ScenarioExecutionRequest {
+    let mut execution = TestRequest::default_execution();
+    execution.timeouts = effective_test_timeouts(
+        config.tests.execution_timeout_seconds,
+        &config.tests.yaxunit.timeouts,
+    );
+    execution
+}
+
+fn build_vanessa_execution(
+    config: &AppConfig,
+) -> Result<crate::domain::runner::ScenarioExecutionRequest, UseCaseError> {
+    let profile_id = config.tests.va.profile.as_deref().ok_or_else(|| {
+        UseCaseError::new(
+            UseCaseErrorKind::Validation,
+            "tests.va.profile is not configured",
+        )
+    })?;
+    if !config.tests.va.profiles.contains_key(profile_id) {
+        return Err(UseCaseError::new(
+            UseCaseErrorKind::Validation,
+            format!("unknown Vanessa Automation profile '{profile_id}'"),
+        ));
+    }
+    if !is_safe_path_segment(profile_id) {
+        return Err(UseCaseError::new(
+            UseCaseErrorKind::Validation,
+            format!("tests.va.profile contains unsafe path characters: {profile_id}"),
+        ));
+    }
+    if config.tests.va.epf_path.is_none() {
+        return Err(UseCaseError::new(
+            UseCaseErrorKind::Validation,
+            "tests.va.epf_path is not configured",
+        ));
+    }
+    if config.tests.va.params_path.is_none() {
+        return Err(UseCaseError::new(
+            UseCaseErrorKind::Validation,
+            "tests.va.params_path is not configured",
+        ));
+    }
+
+    Ok(crate::domain::runner::ScenarioExecutionRequest {
+        profile: RunnerProfile {
+            id: profile_id.to_owned(),
+            kind: RunnerKind::Vanessa,
+            output_formats: vec![
+                RunnerOutputFormat::JunitXml,
+                RunnerOutputFormat::PlainTextLog,
+            ],
+            backend_hint: Some("enterprise".to_owned()),
+        },
+        timeouts: effective_test_timeouts(
+            config.tests.execution_timeout_seconds,
+            &config.tests.va.timeouts,
+        ),
+        policy: ExecutionPolicy {
+            retain_artifacts_on_failure: true,
+            retain_artifacts_on_success: false,
+        },
+    })
+}
+
+fn effective_test_timeouts(
+    legacy_total_seconds: u64,
+    runner_timeouts: &ExecutionTimeouts,
+) -> ExecutionTimeouts {
+    let mut timeouts = runner_timeouts.clone();
+    if timeouts.total_ms.is_none() {
+        timeouts.total_ms = Some(legacy_total_seconds.saturating_mul(1_000));
+    }
+    timeouts
 }
 
 fn map_load_request(args: &LoadArgs) -> Result<LoadRequest, UseCaseError> {
@@ -1085,13 +1177,14 @@ mod tests {
     use crate::cli::args::{
         ArtifactsArgs, BuildArgs, Command, DesignerConfigSyntaxArgs, DesignerModulesSyntaxArgs,
         DumpArgs, ExtensionsArgs, LaunchArgs, LoadArgs, SyntaxArgs, SyntaxTarget, TestArgs,
-        TestScope,
+        TestRunner, TestScope, TestYaxunitArgs,
     };
     use crate::config::model::{
         AppConfig, BuildConfig, BuilderBackend, SourceFormat, SourceSetConfig, SourceSetPurpose,
         TestsConfig, ToolsConfig,
     };
     use crate::domain::load::LoadMode;
+    use crate::domain::runner::RunnerKind;
     use crate::output::presenter::{ColorMode, Presenter};
     use crate::support::fs::acquire_advisory_lock;
     use crate::support::temp::platform_logs_dir;
@@ -1108,12 +1201,19 @@ mod tests {
 
     #[test]
     fn maps_test_module_request() {
-        let request = map_test_request(&TestArgs {
-            full: true,
-            scope: TestScope::Module {
-                name: "ModuleA".to_owned(),
+        let work = tempdir().expect("tempdir");
+        let config = sample_config(work.path());
+        let request = map_test_request(
+            &config,
+            &TestArgs {
+                full: true,
+                runner: TestRunner::Yaxunit(TestYaxunitArgs {
+                    scope: TestScope::Module {
+                        name: "ModuleA".to_owned(),
+                    },
+                }),
             },
-        })
+        )
         .expect("request");
 
         assert!(request.full);
@@ -1127,12 +1227,19 @@ mod tests {
 
     #[test]
     fn rejects_blank_test_module_request() {
-        let error = map_test_request(&TestArgs {
-            full: false,
-            scope: TestScope::Module {
-                name: "   ".to_owned(),
+        let work = tempdir().expect("tempdir");
+        let config = sample_config(work.path());
+        let error = map_test_request(
+            &config,
+            &TestArgs {
+                full: false,
+                runner: TestRunner::Yaxunit(TestYaxunitArgs {
+                    scope: TestScope::Module {
+                        name: "   ".to_owned(),
+                    },
+                }),
             },
-        })
+        )
         .expect_err("blank module should be rejected");
 
         assert_eq!(error.kind(), UseCaseErrorKind::Validation);
@@ -1140,6 +1247,46 @@ mod tests {
             error.message(),
             "test module requires a non-empty module name"
         );
+    }
+
+    #[test]
+    fn maps_vanessa_request_from_configured_profile() {
+        let work = tempdir().expect("tempdir");
+        let base = work.path().join("base");
+        let features = work.path().join("features");
+        let epf = work.path().join("va.epf");
+        let params = work.path().join("va.json");
+        std::fs::create_dir_all(base.join("src")).expect("src");
+        std::fs::create_dir_all(&features).expect("features");
+        std::fs::write(&epf, "epf").expect("epf");
+        std::fs::write(&params, "{}").expect("params");
+
+        let mut config = sample_config(work.path());
+        config.base_path = base;
+        config.tests.va.epf_path = Some(epf);
+        config.tests.va.params_path = Some(params);
+        config.tests.va.profile = Some("smoke".to_owned());
+        config.tests.va.profiles.insert(
+            "smoke".to_owned(),
+            crate::config::model::VanessaProfileConfig {
+                feature_path: Some(features),
+                ..Default::default()
+            },
+        );
+
+        let request = map_test_request(
+            &config,
+            &TestArgs {
+                full: false,
+                runner: TestRunner::Va,
+            },
+        )
+        .expect("request");
+
+        assert_eq!(request.execution.profile.kind, RunnerKind::Vanessa);
+        assert_eq!(request.execution.profile.id, "smoke");
+        assert_eq!(request.scope, TestScopeRequest::All);
+        assert_eq!(request.execution.timeouts.total_ms, Some(300_000));
     }
 
     #[test]
@@ -1424,7 +1571,9 @@ mod tests {
             &config,
             &Command::Test(TestArgs {
                 full: false,
-                scope: TestScope::All,
+                runner: TestRunner::Yaxunit(TestYaxunitArgs {
+                    scope: TestScope::All,
+                }),
             }),
             &presenter,
             false,
@@ -1478,9 +1627,11 @@ mod tests {
             &config,
             &Command::Test(TestArgs {
                 full: false,
-                scope: TestScope::Module {
-                    name: "   ".to_owned(),
-                },
+                runner: TestRunner::Yaxunit(TestYaxunitArgs {
+                    scope: TestScope::Module {
+                        name: "   ".to_owned(),
+                    },
+                }),
             }),
             &presenter,
             false,

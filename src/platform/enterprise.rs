@@ -13,6 +13,16 @@ pub enum EnterpriseError {
     Spawn(ProcessError),
 }
 
+pub enum EnterpriseScenario<'a> {
+    YaXUnit {
+        config_path: &'a Path,
+    },
+    Vanessa {
+        epf_path: &'a Path,
+        params_path: &'a Path,
+    },
+}
+
 pub struct EnterpriseDsl<'a> {
     binary: PathBuf,
     connection: V8Connection,
@@ -41,11 +51,11 @@ impl<'a> EnterpriseDsl<'a> {
         }
     }
 
-    pub fn run_unit_tests(
+    pub fn run_scenario(
         &self,
-        config_path: &Path,
+        scenario: EnterpriseScenario<'_>,
     ) -> Result<PlatformCommandResult, EnterpriseError> {
-        let args = self.build_run_unit_tests_args(config_path);
+        let args = self.build_args(scenario);
         let process = self
             .runner
             .run_with_timeout(
@@ -82,15 +92,32 @@ impl<'a> EnterpriseDsl<'a> {
         })
     }
 
-    fn build_run_unit_tests_args(&self, config_path: &Path) -> Vec<String> {
+    fn build_args(&self, scenario: EnterpriseScenario<'_>) -> Vec<String> {
         let mut args = vec!["ENTERPRISE".to_owned()];
         args.extend(self.connection.args());
-        args.extend(self.additional_launch_keys.clone());
-        args.push("/C".to_owned());
-        args.push(format!(
-            "RunUnitTests={}",
-            normalize_c_payload_path(config_path)
-        ));
+        match scenario {
+            EnterpriseScenario::YaXUnit { config_path } => {
+                args.extend(self.additional_launch_keys.clone());
+                args.push("/C".to_owned());
+                args.push(format!(
+                    "RunUnitTests={}",
+                    normalize_c_payload_path(config_path)
+                ));
+            }
+            EnterpriseScenario::Vanessa {
+                epf_path,
+                params_path,
+            } => {
+                args.push("/Execute".to_owned());
+                args.push(normalize_c_payload_path(epf_path));
+                args.extend(self.additional_launch_keys.clone());
+                args.push("/C".to_owned());
+                args.push(format!(
+                    "StartFeaturePlayer;VAParams={}",
+                    normalize_c_payload_path(params_path)
+                ));
+            }
+        }
         args.push("/Out".to_owned());
         args.push(self.log_file.display().to_string());
         args
@@ -103,7 +130,7 @@ fn normalize_c_payload_path(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_c_payload_path, EnterpriseDsl};
+    use super::{normalize_c_payload_path, EnterpriseDsl, EnterpriseScenario};
     use crate::platform::connection::V8Connection;
     use crate::platform::process::{ProcessExecutor, ProcessRunner};
     use std::path::Path;
@@ -129,8 +156,9 @@ mod tests {
             Duration::from_secs(5),
         );
 
-        let args =
-            dsl.build_run_unit_tests_args(Path::new("/tmp/path with space/тест config.json"));
+        let args = dsl.build_args(EnterpriseScenario::YaXUnit {
+            config_path: Path::new("/tmp/path with space/тест config.json"),
+        });
 
         assert_eq!(args[0], "ENTERPRISE");
         assert!(args.iter().any(|arg| arg == "/TESTMANAGER"));
@@ -138,5 +166,35 @@ mod tests {
         assert!(args
             .iter()
             .any(|arg| arg == "RunUnitTests=/tmp/path with space/тест config.json"));
+    }
+
+    #[test]
+    fn builds_expected_vanessa_arguments() {
+        let dir = tempdir().expect("tempdir");
+        let runner = ProcessExecutor;
+        let dsl = EnterpriseDsl::new(
+            dir.path().join("1cv8c"),
+            V8Connection::from_connection_string("File=/tmp/ib"),
+            vec!["/TESTMANAGER".to_owned()],
+            &runner as &dyn ProcessRunner,
+            dir.path().join("platform.log"),
+            Duration::from_secs(5),
+        );
+
+        let args = dsl.build_args(EnterpriseScenario::Vanessa {
+            epf_path: Path::new("/tmp/va/vanessa automation.epf"),
+            params_path: Path::new("/tmp/va/va-params.json"),
+        });
+
+        assert_eq!(args[0], "ENTERPRISE");
+        assert!(args.iter().any(|arg| arg == "/Execute"));
+        assert!(args
+            .iter()
+            .any(|arg| arg == "/tmp/va/vanessa automation.epf"));
+        assert!(args.iter().any(|arg| arg == "/TESTMANAGER"));
+        assert!(args.iter().any(|arg| arg == "/C"));
+        assert!(args
+            .iter()
+            .any(|arg| arg == "StartFeaturePlayer;VAParams=/tmp/va/va-params.json"));
     }
 }

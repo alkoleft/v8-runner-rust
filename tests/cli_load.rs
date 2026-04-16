@@ -58,7 +58,13 @@ fn setup_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf, PathBuf) {
     fs::create_dir_all(base_path.join("main")).expect("main");
     fs::create_dir_all(&work_path).expect("work");
     write_designer_script(&binary_path, &calls_log);
-    write_config(&config_path, &base_path, &work_path, &binary_path, "DESIGNER");
+    write_config(
+        &config_path,
+        &base_path,
+        &work_path,
+        &binary_path,
+        "DESIGNER",
+    );
 
     (dir, config_path, binary_path, base_path, calls_log)
 }
@@ -262,7 +268,10 @@ fn load_rejects_external_artifact_type_with_unknown_target_kind_payload_metadata
     assert!(!output.status.success());
     let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
     assert_eq!(payload["ok"], false);
-    assert_eq!(payload["data"]["artifact_type"], "external_data_processor_epf");
+    assert_eq!(
+        payload["data"]["artifact_type"],
+        "external_data_processor_epf"
+    );
     assert_eq!(payload["data"]["target_kind"], "unknown");
     assert!(payload["data"]["message"]
         .as_str()

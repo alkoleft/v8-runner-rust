@@ -311,10 +311,7 @@ fn parse_external_descriptor(path: &Path) -> Result<ParsedExternalDescriptor, Ap
         buf.clear();
     }
 
-    let artifact_type = match artifact_root_tag
-        .as_deref()
-        .or(root_tag.as_deref())
-    {
+    let artifact_type = match artifact_root_tag.as_deref().or(root_tag.as_deref()) {
         Some("ExternalDataProcessor") => ExternalArtifactKind::DataProcessor,
         Some("ExternalReport") => ExternalArtifactKind::Report,
         Some(other) => {
@@ -480,7 +477,10 @@ mod tests {
 
         assert_eq!(artifacts.len(), 1);
         assert_eq!(artifacts[0].logical_name, "Foo");
-        assert_eq!(artifacts[0].artifact_type, ExternalArtifactKind::DataProcessor);
+        assert_eq!(
+            artifacts[0].artifact_type,
+            ExternalArtifactKind::DataProcessor
+        );
     }
 
     #[cfg(unix)]

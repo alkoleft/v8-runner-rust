@@ -92,9 +92,23 @@ pub struct ExtensionsArgs {
 
 #[derive(Args, Debug)]
 pub struct TestArgs {
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub full: bool,
 
+    #[command(subcommand)]
+    pub runner: TestRunner,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum TestRunner {
+    /// Run YaXUnit tests
+    Yaxunit(TestYaxunitArgs),
+    /// Run Vanessa Automation feature scenarios
+    Va,
+}
+
+#[derive(Args, Debug)]
+pub struct TestYaxunitArgs {
     #[command(subcommand)]
     pub scope: TestScope,
 }
@@ -281,7 +295,7 @@ pub struct DesignerModulesSyntaxArgs {
 mod tests {
     use super::{
         ArtifactsArgs, Cli, Command, ExtensionsArgs, LoadArgs, McpCommand, McpServeTransport,
-        SyntaxTarget,
+        SyntaxTarget, TestRunner, TestScope,
     };
     use clap::Parser;
 
@@ -385,6 +399,39 @@ mod tests {
                 assert_eq!(mode, "merge");
                 assert_eq!(settings.as_deref(), Some("merge.xml"));
                 assert_eq!(extension.as_deref(), Some("SalesAddon"));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn parses_test_yaxunit_module_command() {
+        let cli = Cli::try_parse_from(["v8-test-runner", "test", "yaxunit", "module", "Foo"])
+            .expect("parse test yaxunit");
+
+        match cli.command {
+            Command::Test(args) => {
+                assert!(!args.full);
+                match args.runner {
+                    TestRunner::Yaxunit(yaxunit) => {
+                        assert!(
+                            matches!(yaxunit.scope, TestScope::Module { name } if name == "Foo")
+                        );
+                    }
+                    _ => panic!("unexpected test runner"),
+                }
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn parses_test_va_command() {
+        let cli = Cli::try_parse_from(["v8-test-runner", "test", "va"]).expect("parse test va");
+
+        match cli.command {
+            Command::Test(args) => {
+                assert!(matches!(args.runner, TestRunner::Va));
             }
             _ => panic!("unexpected command"),
         }

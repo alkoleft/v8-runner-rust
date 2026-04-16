@@ -67,7 +67,7 @@ flowchart TB
 
 #### `parsers`
 
-- Парсит JUnit XML, YaXUnit-логи, логи Designer validation и вывод EDT validation в структурированные результаты.
+- Парсит JUnit XML, runner-log, логи Designer validation и вывод EDT validation в структурированные результаты.
 
 #### `domain` и `output`
 

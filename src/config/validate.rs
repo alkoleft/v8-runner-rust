@@ -3,7 +3,9 @@ use std::net::SocketAddr;
 use std::path::Path;
 use thiserror::Error;
 
-use crate::config::model::{AppConfig, BuilderBackend, SourceFormat, SourceSetPurpose};
+use crate::config::model::{
+    AppConfig, BuilderBackend, SourceFormat, SourceSetPurpose, VanessaProfileConfig,
+};
 use crate::platform::locator::PlatformVersion;
 use crate::support::path::is_safe_path_segment;
 
@@ -29,6 +31,9 @@ pub enum ConfigValidationError {
 
     #[error("source-set name contains unsafe path or filename characters: {0}")]
     InvalidSourceSetName(String),
+
+    #[error("tests.va.profile name contains unsafe path or filename characters: {0}")]
+    InvalidVanessaProfileName(String),
 
     #[error("source-set name is reserved for internal work directories: {0}")]
     ReservedSourceSetName(String),
@@ -74,6 +79,36 @@ pub enum ConfigValidationError {
 
     #[error("tests.execution_timeout_seconds must be between 1 and 86400 seconds")]
     InvalidTestExecutionTimeout,
+
+    #[error("tests.yaxunit.timeouts.{0} must be greater than or equal to 1")]
+    InvalidYaxunitTimeout(&'static str),
+
+    #[error("tests.va.epf_path is required when Vanessa Automation is configured")]
+    MissingVanessaEpfPath,
+
+    #[error("tests.va.params_path is required when Vanessa Automation is configured")]
+    MissingVanessaParamsPath,
+
+    #[error("tests.va.profile is required when Vanessa Automation is configured")]
+    MissingVanessaProfile,
+
+    #[error("tests.va.profile references unknown profile '{0}'")]
+    UnknownVanessaProfile(String),
+
+    #[error("tests.va.epf_path does not exist: {0}")]
+    VanessaEpfPathInvalid(String),
+
+    #[error("tests.va.params_path does not exist: {0}")]
+    VanessaParamsPathInvalid(String),
+
+    #[error("tests.va.profiles.{profile}.feature_path is required")]
+    MissingVanessaFeaturePath { profile: String },
+
+    #[error("tests.va.profiles.{profile}.feature_path does not exist: {path}")]
+    VanessaFeaturePathInvalid { profile: String, path: String },
+
+    #[error("tests.va.timeouts.{0} must be greater than or equal to 1")]
+    InvalidVanessaTimeout(&'static str),
 
     #[error("mcp.http.bind_address must be a valid socket address: {0}")]
     InvalidMcpBindAddress(String),
@@ -329,6 +364,98 @@ fn validate_test_config(config: &AppConfig) -> Result<(), ConfigValidationError>
         return Err(ConfigValidationError::InvalidTestExecutionTimeout);
     }
 
+    validate_timeout_block(
+        &config.tests.yaxunit.timeouts,
+        ConfigValidationError::InvalidYaxunitTimeout,
+    )?;
+
+    let va = &config.tests.va;
+    if !va.is_configured() {
+        return Ok(());
+    }
+
+    let epf_path = va
+        .epf_path
+        .as_ref()
+        .ok_or(ConfigValidationError::MissingVanessaEpfPath)?;
+    if !epf_path.exists() {
+        return Err(ConfigValidationError::VanessaEpfPathInvalid(
+            epf_path.display().to_string(),
+        ));
+    }
+
+    let params_path = va
+        .params_path
+        .as_ref()
+        .ok_or(ConfigValidationError::MissingVanessaParamsPath)?;
+    if !params_path.exists() {
+        return Err(ConfigValidationError::VanessaParamsPathInvalid(
+            params_path.display().to_string(),
+        ));
+    }
+
+    let profile_name = va
+        .profile
+        .as_deref()
+        .ok_or(ConfigValidationError::MissingVanessaProfile)?;
+    validate_vanessa_profile_name(profile_name)?;
+    let profile = va
+        .profiles
+        .get(profile_name)
+        .ok_or_else(|| ConfigValidationError::UnknownVanessaProfile(profile_name.to_owned()))?;
+    for key in va.profiles.keys() {
+        validate_vanessa_profile_name(key)?;
+    }
+    validate_vanessa_profile(profile_name, profile)?;
+    validate_timeout_block(&va.timeouts, ConfigValidationError::InvalidVanessaTimeout)?;
+
+    Ok(())
+}
+
+fn validate_vanessa_profile(
+    profile_name: &str,
+    profile: &VanessaProfileConfig,
+) -> Result<(), ConfigValidationError> {
+    let feature_path = profile.feature_path.as_ref().ok_or_else(|| {
+        ConfigValidationError::MissingVanessaFeaturePath {
+            profile: profile_name.to_owned(),
+        }
+    })?;
+
+    if !feature_path.exists() {
+        return Err(ConfigValidationError::VanessaFeaturePathInvalid {
+            profile: profile_name.to_owned(),
+            path: feature_path.display().to_string(),
+        });
+    }
+
+    Ok(())
+}
+
+fn validate_vanessa_profile_name(profile_name: &str) -> Result<(), ConfigValidationError> {
+    if !is_safe_path_segment(profile_name) {
+        return Err(ConfigValidationError::InvalidVanessaProfileName(
+            profile_name.to_owned(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_timeout_block(
+    timeouts: &crate::domain::execution::ExecutionTimeouts,
+    error_factory: fn(&'static str) -> ConfigValidationError,
+) -> Result<(), ConfigValidationError> {
+    for (name, value) in [
+        ("startup_ms", timeouts.startup_ms),
+        ("run_ms", timeouts.run_ms),
+        ("total_ms", timeouts.total_ms),
+    ] {
+        if matches!(value, Some(0)) {
+            return Err(error_factory(name));
+        }
+    }
+
     Ok(())
 }
 
@@ -381,7 +508,7 @@ mod tests {
     use super::{validate, ConfigValidationError};
     use crate::config::model::{
         AppConfig, BuildConfig, BuilderBackend, PlatformToolConfig, SourceFormat, SourceSetConfig,
-        SourceSetPurpose, TestsConfig, ToolsConfig,
+        SourceSetPurpose, TestsConfig, ToolsConfig, VanessaProfileConfig,
     };
     use tempfile::tempdir;
 
@@ -1050,6 +1177,151 @@ mod tests {
         assert!(matches!(
             err,
             ConfigValidationError::InvalidEdtCliCommandTimeoutMs
+        ));
+    }
+
+    #[test]
+    fn rejects_configured_vanessa_without_known_profile() {
+        let base = tempdir().expect("base");
+        let work = tempdir().expect("work");
+        let source_dir = base.path().join("src");
+        let epf = base.path().join("runner.epf");
+        let params = base.path().join("params.json");
+        std::fs::create_dir_all(&source_dir).expect("source dir");
+        std::fs::write(&epf, "epf").expect("epf");
+        std::fs::write(&params, "{}").expect("params");
+
+        let mut config = AppConfig {
+            base_path: base.path().to_path_buf(),
+            work_path: work.path().to_path_buf(),
+            format: SourceFormat::Designer,
+            builder: BuilderBackend::Designer,
+            connection: "File=/tmp/ib".to_owned(),
+            credentials: Default::default(),
+            source_sets: vec![SourceSetConfig {
+                name: "main".to_owned(),
+                purpose: SourceSetPurpose::Configuration,
+                path: source_dir
+                    .strip_prefix(base.path())
+                    .expect("relative")
+                    .to_path_buf(),
+            }],
+            build: BuildConfig::default(),
+            tools: ToolsConfig::default(),
+            mcp: Default::default(),
+            tests: TestsConfig::default(),
+        };
+        config.tests.va.epf_path = Some(epf);
+        config.tests.va.params_path = Some(params);
+        config.tests.va.profile = Some("smoke".to_owned());
+
+        let err = validate(&config).expect_err("expected invalid profile");
+        assert!(matches!(
+            err,
+            ConfigValidationError::UnknownVanessaProfile(name) if name == "smoke"
+        ));
+    }
+
+    #[test]
+    fn rejects_unsafe_vanessa_profile_name() {
+        let base = tempdir().expect("base");
+        let work = tempdir().expect("work");
+        let source_dir = base.path().join("src");
+        let epf = base.path().join("runner.epf");
+        let params = base.path().join("params.json");
+        let feature = base.path().join("features");
+        std::fs::create_dir_all(&source_dir).expect("source dir");
+        std::fs::create_dir_all(&feature).expect("feature dir");
+        std::fs::write(&epf, "epf").expect("epf");
+        std::fs::write(&params, "{}").expect("params");
+
+        let mut config = AppConfig {
+            base_path: base.path().to_path_buf(),
+            work_path: work.path().to_path_buf(),
+            format: SourceFormat::Designer,
+            builder: BuilderBackend::Designer,
+            connection: "File=/tmp/ib".to_owned(),
+            credentials: Default::default(),
+            source_sets: vec![SourceSetConfig {
+                name: "main".to_owned(),
+                purpose: SourceSetPurpose::Configuration,
+                path: source_dir
+                    .strip_prefix(base.path())
+                    .expect("relative")
+                    .to_path_buf(),
+            }],
+            build: BuildConfig::default(),
+            tools: ToolsConfig::default(),
+            mcp: Default::default(),
+            tests: TestsConfig::default(),
+        };
+        config.tests.va.epf_path = Some(epf);
+        config.tests.va.params_path = Some(params);
+        config.tests.va.profile = Some("bad/name".to_owned());
+        config.tests.va.profiles.insert(
+            "bad/name".to_owned(),
+            VanessaProfileConfig {
+                feature_path: Some(feature),
+                ..Default::default()
+            },
+        );
+
+        let err = validate(&config).expect_err("expected invalid profile name");
+        assert!(matches!(
+            err,
+            ConfigValidationError::InvalidVanessaProfileName(name) if name == "bad/name"
+        ));
+    }
+
+    #[test]
+    fn rejects_zero_vanessa_timeout() {
+        let base = tempdir().expect("base");
+        let work = tempdir().expect("work");
+        let source_dir = base.path().join("src");
+        let features = base.path().join("features");
+        let epf = base.path().join("runner.epf");
+        let params = base.path().join("params.json");
+        std::fs::create_dir_all(&source_dir).expect("source dir");
+        std::fs::create_dir_all(&features).expect("features dir");
+        std::fs::write(&epf, "epf").expect("epf");
+        std::fs::write(&params, "{}").expect("params");
+
+        let mut config = AppConfig {
+            base_path: base.path().to_path_buf(),
+            work_path: work.path().to_path_buf(),
+            format: SourceFormat::Designer,
+            builder: BuilderBackend::Designer,
+            connection: "File=/tmp/ib".to_owned(),
+            credentials: Default::default(),
+            source_sets: vec![SourceSetConfig {
+                name: "main".to_owned(),
+                purpose: SourceSetPurpose::Configuration,
+                path: source_dir
+                    .strip_prefix(base.path())
+                    .expect("relative")
+                    .to_path_buf(),
+            }],
+            build: BuildConfig::default(),
+            tools: ToolsConfig::default(),
+            mcp: Default::default(),
+            tests: TestsConfig::default(),
+        };
+        config.tests.va.epf_path = Some(epf);
+        config.tests.va.params_path = Some(params);
+        config.tests.va.profile = Some("smoke".to_owned());
+        config.tests.va.timeouts.total_ms = Some(0);
+        config.tests.va.profiles.insert(
+            "smoke".to_owned(),
+            VanessaProfileConfig {
+                feature_path: Some(features),
+                ..Default::default()
+            },
+        );
+
+        let err = validate(&config).expect_err("expected invalid timeout");
+        assert!(matches!(
+            err,
+            ConfigValidationError::InvalidVanessaTimeout("total_ms")
         ));
     }
 }

@@ -535,7 +535,9 @@ fn run_external_designer_export(
     )
     .map_err(|error| {
         (
-            AppError::Runtime(format!("failed to publish staged external directory: {error}")),
+            AppError::Runtime(format!(
+                "failed to publish staged external directory: {error}"
+            )),
             artifacts.clone(),
             last_result.platform_log_path.clone(),
         )
@@ -1152,9 +1154,7 @@ mod tests {
         AppConfig, BuildConfig, BuilderBackend, PlatformToolConfig, SourceFormat, SourceSetConfig,
         SourceSetPurpose, TestsConfig, ToolsConfig,
     };
-    use crate::domain::artifact::{
-        ARTIFACT_ROLE_PACKAGE_FILE, ARTIFACT_ROLE_PLATFORM_LOG,
-    };
+    use crate::domain::artifact::{ARTIFACT_ROLE_PACKAGE_FILE, ARTIFACT_ROLE_PLATFORM_LOG};
     use crate::domain::artifacts::ArtifactBuildMode;
     use crate::support::fs::{
         metadata_sidecar_path, read_temp_dir_metadata, write_temp_dir_metadata, TempDirKind,
@@ -1503,7 +1503,10 @@ mod tests {
         let failure = run_artifacts(&config, &request).expect_err("failure");
         let payload = failure.payload.expect("payload");
 
-        assert_eq!(fs::read_to_string(output.join("stale.epf")).expect("stale"), "stale");
+        assert_eq!(
+            fs::read_to_string(output.join("stale.epf")).expect("stale"),
+            "stale"
+        );
         assert!(!output.join("Alpha.epf").exists());
         assert!(!output.join("Beta.epf").exists());
         assert!(!payload.ok);

@@ -471,7 +471,8 @@ fn validate_supported_matrix(config: &AppConfig) -> Option<AppError> {
 }
 
 fn request_snapshot_for_failure_payload(args: &LoadRequest) -> ResolvedLoadRequest {
-    let artifact_type = infer_artifact_type(&args.artifact_path).unwrap_or(ArtifactBuildMode::Unknown);
+    let artifact_type =
+        infer_artifact_type(&args.artifact_path).unwrap_or(ArtifactBuildMode::Unknown);
     let extension = trim_optional(args.extension.clone());
     let target_kind = match artifact_type {
         ArtifactBuildMode::ExtensionCfe => LoadTargetKind::Extension,
@@ -788,11 +789,7 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn write_designer_script_with_merge_failure(
-        path: &Path,
-        calls_log: &Path,
-        fail_merge: bool,
-    ) {
+    fn write_designer_script_with_merge_failure(path: &Path, calls_log: &Path, fail_merge: bool) {
         let merge_block = if fail_merge {
             "if printf '%s' \"$*\" | grep -F -q -- '/MergeCfg'; then\n  printf 'merge failed\\n' >&2\n  exit 23\nfi\n"
         } else {
@@ -922,7 +919,10 @@ mod tests {
         let payload = failure.payload.expect("payload");
         assert!(!payload.ok);
         assert_eq!(payload.artifact_type, ArtifactBuildMode::ExtensionCfe);
-        assert_eq!(payload.target_kind, crate::domain::load::LoadTargetKind::Extension);
+        assert_eq!(
+            payload.target_kind,
+            crate::domain::load::LoadTargetKind::Extension
+        );
         assert_eq!(payload.extension.as_deref(), Some("ExistingExt"));
         assert!(payload
             .message
@@ -1016,7 +1016,10 @@ mod tests {
 
         assert_eq!(failure.error.kind(), UseCaseErrorKind::Validation);
         let payload = failure.payload.expect("payload");
-        assert_eq!(payload.compatibility_state, CompatibilityState::NotSupported);
+        assert_eq!(
+            payload.compatibility_state,
+            CompatibilityState::NotSupported
+        );
         assert!(payload
             .message
             .as_deref()
@@ -1116,7 +1119,10 @@ mod tests {
         assert_eq!(failure.error.kind(), UseCaseErrorKind::Validation);
         let payload = failure.payload.expect("payload");
         assert_eq!(payload.artifact_type, ArtifactBuildMode::ExtensionCfe);
-        assert_eq!(payload.target_kind, crate::domain::load::LoadTargetKind::Extension);
+        assert_eq!(
+            payload.target_kind,
+            crate::domain::load::LoadTargetKind::Extension
+        );
         assert_eq!(payload.extension.as_deref(), None);
     }
 
@@ -1141,7 +1147,10 @@ mod tests {
         assert_eq!(failure.error.kind(), UseCaseErrorKind::Validation);
         let payload = failure.payload.expect("payload");
         assert_eq!(payload.artifact_type, ArtifactBuildMode::Unknown);
-        assert_eq!(payload.target_kind, crate::domain::load::LoadTargetKind::Unknown);
+        assert_eq!(
+            payload.target_kind,
+            crate::domain::load::LoadTargetKind::Unknown
+        );
         assert_eq!(payload.extension.as_deref(), None);
         assert!(payload
             .message
@@ -1170,8 +1179,14 @@ mod tests {
 
         assert_eq!(failure.error.kind(), UseCaseErrorKind::Validation);
         let payload = failure.payload.expect("payload");
-        assert_eq!(payload.artifact_type, ArtifactBuildMode::ExternalDataProcessorEpf);
-        assert_eq!(payload.target_kind, crate::domain::load::LoadTargetKind::Unknown);
+        assert_eq!(
+            payload.artifact_type,
+            ArtifactBuildMode::ExternalDataProcessorEpf
+        );
+        assert_eq!(
+            payload.target_kind,
+            crate::domain::load::LoadTargetKind::Unknown
+        );
         assert_eq!(payload.extension.as_deref(), None);
         assert!(payload
             .message
