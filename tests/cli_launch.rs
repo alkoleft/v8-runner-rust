@@ -24,6 +24,23 @@ fn write_script(path: &Path) {
     fs::rename(&staged, path).expect("rename");
 }
 
+fn write_logging_script(path: &Path, args_log: &Path) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("parent");
+    }
+    let staged = path.with_extension("tmp");
+    fs::write(
+        &staged,
+        format!(
+            "#!/bin/sh\nprintf '%s\n' \"$@\" > '{}'\nsleep 1\n",
+            args_log.display()
+        ),
+    )
+    .expect("write");
+    make_executable(&staged);
+    fs::rename(&staged, path).expect("rename");
+}
+
 fn write_config(
     path: &Path,
     base_path: &Path,
@@ -251,4 +268,54 @@ fn launch_json_failure_keeps_stdout_empty_and_exit_code() {
     assert_eq!(output.status.code(), Some(4));
     assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn launch_ordinary_supports_typed_keys_and_filters_reserved_raw_duplicates() {
+    let (_dir, config_path, install_dir, _work_path) = setup_project();
+    let args_log = install_dir.join("ordinary.args.log");
+    write_logging_script(&install_dir.join("bin").join("1cv8"), &args_log);
+
+    let output = std::process::Command::cargo_bin("v8-test-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--output",
+            "json",
+            "launch",
+            "--mode",
+            "ordinary",
+            "--c",
+            "DoWork",
+            "--execute",
+            "/tmp/tool.epf",
+            "--use-privileged-mode",
+            "--out",
+            "/tmp/user.out.log",
+            "--raw-key",
+            "/RunModeOrdinaryApplication",
+            "--raw-key",
+            "/Out",
+            "--raw-key",
+            "/tmp/ignored.out.log",
+            "--raw-key",
+            "/WA-",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let args = fs::read_to_string(args_log).expect("args log");
+    assert!(args.contains("ENTERPRISE"));
+    assert!(args.contains("/DisableStartupDialogs"));
+    assert_eq!(args.matches("/RunModeOrdinaryApplication").count(), 1);
+    assert!(args.contains("/UsePrivilegedMode"));
+    assert!(args.contains("/Execute"));
+    assert!(args.contains("/tmp/tool.epf"));
+    assert!(args.contains("/C"));
+    assert!(args.contains("DoWork"));
+    assert!(args.contains("/WA-"));
+    assert!(args.contains("/tmp/user.out.log"));
+    assert!(!args.contains("/tmp/ignored.out.log"));
 }

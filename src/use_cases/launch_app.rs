@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use crate::config::model::AppConfig;
 use crate::domain::launch::{LaunchMode, LaunchResult};
+use crate::platform::enterprise::{build_launch_args, LaunchClientMode};
 use crate::platform::locator::UtilityType;
 use crate::platform::process::ProcessRequest;
 use crate::platform::utilities::PlatformUtilities;
@@ -24,10 +25,19 @@ pub fn execute(
         mode = ?args.mode,
         "executing launch use case"
     );
-    let (mode, utility, command_mode) = match args.mode {
-        LaunchModeRequest::Designer => (LaunchMode::Designer, UtilityType::V8, "DESIGNER"),
-        LaunchModeRequest::Thin => (LaunchMode::Thin, UtilityType::V8C, "ENTERPRISE"),
-        LaunchModeRequest::Thick => (LaunchMode::Thick, UtilityType::V8, "ENTERPRISE"),
+    let (mode, utility, client_mode) = match args.mode {
+        LaunchModeRequest::Designer => (
+            LaunchMode::Designer,
+            UtilityType::V8,
+            LaunchClientMode::Designer,
+        ),
+        LaunchModeRequest::Thin => (LaunchMode::Thin, UtilityType::V8C, LaunchClientMode::Thin),
+        LaunchModeRequest::Thick => (LaunchMode::Thick, UtilityType::V8, LaunchClientMode::Thick),
+        LaunchModeRequest::Ordinary => (
+            LaunchMode::Ordinary,
+            UtilityType::V8,
+            LaunchClientMode::Ordinary,
+        ),
     };
 
     let mut utilities = PlatformUtilities::from_config(config);
@@ -35,14 +45,12 @@ pub fn execute(
         .locate(utility)
         .map_err(|e| UseCaseFailure::without_payload(AppError::Platform(e.to_string())))?;
 
-    let mut process_args = vec![command_mode.to_owned()];
-    process_args.extend(config.v8_connection().args());
-    if matches!(
-        args.mode,
-        LaunchModeRequest::Thin | LaunchModeRequest::Thick
-    ) {
-        process_args.extend(config.tools.enterprise.additional_launch_keys.clone());
-    }
+    let process_args = build_launch_args(
+        client_mode,
+        &config.v8_connection(),
+        &config.tools.enterprise.additional_launch_keys,
+        &args.launch,
+    );
 
     info!("[Запуск] Приложение: {}", mode_label(args.mode));
     let spawned = utilities
@@ -77,6 +85,7 @@ fn mode_label(mode: LaunchModeRequest) -> &'static str {
         LaunchModeRequest::Designer => "конфигуратор",
         LaunchModeRequest::Thin => "тонкий клиент",
         LaunchModeRequest::Thick => "толстый клиент",
+        LaunchModeRequest::Ordinary => "обычное приложение",
     }
 }
 
@@ -157,6 +166,7 @@ mod tests {
             &config,
             &LaunchRequest {
                 mode: LaunchModeRequest::Thin,
+                launch: Default::default(),
             },
         )
         .expect("launch succeeds");
@@ -186,6 +196,7 @@ mod tests {
             &config,
             &LaunchRequest {
                 mode: LaunchModeRequest::Designer,
+                launch: Default::default(),
             },
         )
         .expect("launch succeeds");
@@ -193,6 +204,37 @@ mod tests {
         assert!(result.ok);
         let args = fs::read_to_string(args_log).expect("args log");
         assert!(args.contains("DESIGNER"));
+        assert!(args.contains("/DisableStartupDialogs"));
         assert!(!args.contains("/TESTMANAGER"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ordinary_launch_app_uses_enterprise_binary_and_ordinary_mode_key() {
+        let dir = tempdir().expect("tempdir");
+        let args_log = dir.path().join("ordinary.args.log");
+        let platform_dir = dir.path().join("platform");
+        write_script(
+            &platform_dir.join("bin").join("1cv8"),
+            &format!("printf '%s\n' \"$@\" > '{}'\nsleep 1", args_log.display()),
+        );
+
+        let config = sample_config(dir.path(), dir.path(), &platform_dir);
+
+        let result = execute(
+            &ExecutionContext::cli(CommandName::Launch),
+            &config,
+            &LaunchRequest {
+                mode: LaunchModeRequest::Ordinary,
+                launch: Default::default(),
+            },
+        )
+        .expect("launch succeeds");
+
+        assert!(result.ok);
+        let args = fs::read_to_string(args_log).expect("args log");
+        assert!(args.contains("ENTERPRISE"));
+        assert!(args.contains("/RunModeOrdinaryApplication"));
+        assert!(args.contains("/DisableStartupDialogs"));
     }
 }

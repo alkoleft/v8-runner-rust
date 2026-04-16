@@ -24,4 +24,5 @@ pub enum LaunchMode {
     Designer,
     Thin,
     Thick,
+    Ordinary,
 }

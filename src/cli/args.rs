@@ -95,6 +95,13 @@ pub struct TestArgs {
     #[arg(long, global = true)]
     pub full: bool,
 
+    /// Client mode used for enterprise launch during test execution
+    #[arg(long = "client-mode", value_parser = ["designer", "thin", "thick", "ordinary"])]
+    pub client_mode: Option<String>,
+
+    #[command(flatten)]
+    pub launch: LaunchOptionsArgs,
+
     #[command(subcommand)]
     pub runner: TestRunner,
 }
@@ -181,8 +188,30 @@ pub enum SyntaxTarget {
 #[derive(Args, Debug)]
 pub struct LaunchArgs {
     /// Launch mode
-    #[arg(long, value_parser = ["designer", "thin", "thick"])]
+    #[arg(long, value_parser = ["designer", "thin", "thick", "ordinary"])]
     pub mode: String,
+
+    #[command(flatten)]
+    pub launch: LaunchOptionsArgs,
+}
+
+#[derive(Args, Debug, Clone, Default, PartialEq, Eq)]
+pub struct LaunchOptionsArgs {
+    /// Value for `/C`
+    #[arg(long = "c")]
+    pub c: Option<String>,
+    /// Value for `/Execute`
+    #[arg(long)]
+    pub execute: Option<String>,
+    /// Enables `/UsePrivilegedMode`
+    #[arg(long = "use-privileged-mode")]
+    pub use_privileged_mode: bool,
+    /// User-provided `/Out` path allowed only for direct launch
+    #[arg(long)]
+    pub out: Option<String>,
+    /// Additional raw launch arguments appended after typed launch keys
+    #[arg(long = "raw-key")]
+    pub raw_keys: Vec<String>,
 }
 
 #[derive(Args, Debug)]
@@ -294,8 +323,8 @@ pub struct DesignerModulesSyntaxArgs {
 #[cfg(test)]
 mod tests {
     use super::{
-        ArtifactsArgs, Cli, Command, ExtensionsArgs, LoadArgs, McpCommand, McpServeTransport,
-        SyntaxTarget, TestRunner, TestScope,
+        ArtifactsArgs, Cli, Command, ExtensionsArgs, LaunchArgs, LaunchOptionsArgs, LoadArgs,
+        McpCommand, McpServeTransport, SyntaxTarget, TestRunner, TestScope,
     };
     use clap::Parser;
 
@@ -412,6 +441,7 @@ mod tests {
         match cli.command {
             Command::Test(args) => {
                 assert!(!args.full);
+                assert_eq!(args.launch.raw_keys, Vec::<String>::new());
                 match args.runner {
                     TestRunner::Yaxunit(yaxunit) => {
                         assert!(
@@ -432,6 +462,76 @@ mod tests {
         match cli.command {
             Command::Test(args) => {
                 assert!(matches!(args.runner, TestRunner::Va));
+                assert_eq!(args.launch, LaunchOptionsArgs::default());
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn parses_test_command_with_launch_options() {
+        let cli = Cli::try_parse_from([
+            "v8-test-runner",
+            "test",
+            "--c",
+            "RunUnitTests=config.json",
+            "--use-privileged-mode",
+            "--raw-key",
+            "/WA-",
+            "yaxunit",
+            "all",
+        ])
+        .expect("parse test");
+
+        match cli.command {
+            Command::Test(args) => {
+                assert_eq!(
+                    args.launch,
+                    LaunchOptionsArgs {
+                        c: Some("RunUnitTests=config.json".to_owned()),
+                        execute: None,
+                        use_privileged_mode: true,
+                        out: None,
+                        raw_keys: vec!["/WA-".to_owned()],
+                    }
+                );
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn parses_launch_command_with_typed_and_raw_keys() {
+        let cli = Cli::try_parse_from([
+            "v8-test-runner",
+            "launch",
+            "--mode",
+            "ordinary",
+            "--c",
+            "DoWork",
+            "--execute",
+            "tool.epf",
+            "--use-privileged-mode",
+            "--out",
+            "launch.log",
+            "--raw-key",
+            "/WA-",
+            "--raw-key",
+            "/DisplayAllFunctions",
+        ])
+        .expect("parse launch");
+
+        match cli.command {
+            Command::Launch(LaunchArgs {
+                mode,
+                launch,
+            }) => {
+                assert_eq!(mode, "ordinary");
+                assert_eq!(launch.c.as_deref(), Some("DoWork"));
+                assert_eq!(launch.execute.as_deref(), Some("tool.epf"));
+                assert!(launch.use_privileged_mode);
+                assert_eq!(launch.out.as_deref(), Some("launch.log"));
+                assert_eq!(launch.raw_keys, vec!["/WA-", "/DisplayAllFunctions"]);
             }
             _ => panic!("unexpected command"),
         }

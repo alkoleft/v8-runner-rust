@@ -2,7 +2,9 @@ use crate::domain::artifacts::{CFE_RUNNER_ID, CF_RUNNER_ID, EPF_RUNNER_ID, ERF_R
 use crate::domain::execution::ExecutionTimeouts;
 use crate::domain::load::LoadMode;
 use crate::domain::runner::{
-    ExecutionPolicy, RunnerKind, RunnerOutputFormat, RunnerProfile, ScenarioExecutionRequest,
+    ExecutionPolicy, LaunchClientModeRequest, LaunchOptions, RunnerKind, RunnerOutputFormat,
+    RunnerProfile,
+    ScenarioExecutionRequest,
 };
 use crate::domain::test::TEST_RUNNER_ID;
 
@@ -52,11 +54,13 @@ impl TestRequest {
                 ],
                 backend_hint: Some("enterprise".to_owned()),
             },
+            client_mode: Some(LaunchClientModeRequest::Thin),
             timeouts: ExecutionTimeouts::default(),
             policy: ExecutionPolicy {
                 retain_artifacts_on_failure: true,
                 retain_artifacts_on_success: false,
             },
+            launch: LaunchOptions::default(),
         }
     }
 }
@@ -132,11 +136,13 @@ impl ArtifactsRequest {
                 output_formats: vec![RunnerOutputFormat::Binary, RunnerOutputFormat::PlainTextLog],
                 backend_hint: Some("designer".to_owned()),
             },
+            client_mode: Some(LaunchClientModeRequest::Designer),
             timeouts: ExecutionTimeouts::default(),
             policy: ExecutionPolicy {
                 retain_artifacts_on_failure: true,
                 retain_artifacts_on_success: true,
             },
+            launch: LaunchOptions::default(),
         }
     }
 }
@@ -212,6 +218,7 @@ pub enum LaunchModeRequest {
     Designer,
     Thin,
     Thick,
+    Ordinary,
 }
 
 /// Transport-neutral request for the `launch` use case.
@@ -219,6 +226,8 @@ pub enum LaunchModeRequest {
 pub struct LaunchRequest {
     /// Requested launch target.
     pub mode: LaunchModeRequest,
+    /// Shared launch options mapped from CLI/test scenarios.
+    pub launch: LaunchOptions,
 }
 
 /// Transport-neutral request for the `init` use case.

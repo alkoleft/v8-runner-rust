@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::config::model::{AppConfig, VanessaProfileConfig};
 use crate::domain::artifact::ArtifactSet;
 use crate::domain::execution::{ExecutionMetrics, ExecutionOutcome, ExecutionStatus, StepResult};
-use crate::domain::runner::RunnerKind;
+use crate::domain::runner::{LaunchClientModeRequest, LaunchOptions, RunnerKind};
 use crate::domain::test::{
     test_execution_error, test_execution_status, TestErrorKind, TestOutputMode, TestReport,
     TestRunResult, TestStatus, TestTarget,
@@ -19,7 +19,8 @@ use crate::domain::test::{
 use crate::parsers::junit;
 use crate::parsers::vanessa_log;
 use crate::parsers::yaxunit_log;
-use crate::platform::enterprise::{EnterpriseDsl, EnterpriseError, EnterpriseScenario};
+use crate::platform::enterprise::EnterpriseDsl;
+use crate::platform::enterprise::EnterpriseError;
 use crate::platform::locator::UtilityType;
 use crate::platform::process::ProcessError;
 use crate::platform::utilities::PlatformUtilities;
@@ -262,6 +263,7 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> UseCaseResult<TestRunResult
         config,
         &artifacts,
         &enterprise_runner,
+        args.execution.client_mode.unwrap_or(LaunchClientModeRequest::Thin),
         args.execution.timeouts.total_ms,
     ) {
         Ok(dsl) => dsl,
@@ -288,18 +290,9 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> UseCaseResult<TestRunResult
         }
     };
 
-    let platform_result = match enterprise.run_scenario(match &prepared_run {
-        PreparedRun::YaXUnit => EnterpriseScenario::YaXUnit {
-            config_path: &artifacts.config_json,
-        },
-        PreparedRun::Vanessa {
-            epf_path,
-            params_path,
-        } => EnterpriseScenario::Vanessa {
-            epf_path,
-            params_path,
-        },
-    }) {
+    let platform_launch = build_platform_launch(&args.execution.launch, &prepared_run, &artifacts);
+
+    let platform_result = match enterprise.run_launch(&platform_launch) {
         Ok(result) => {
             steps.push(StepResult {
                 name: "run".to_owned(),
@@ -575,11 +568,17 @@ fn build_enterprise_dsl<'a>(
     config: &AppConfig,
     artifacts: &'a RunArtifacts,
     runner: &'a dyn crate::platform::process::ProcessRunner,
+    client_mode: LaunchClientModeRequest,
     timeout_override_ms: Option<u64>,
 ) -> Result<EnterpriseDsl<'a>, AppError> {
     let mut utilities = PlatformUtilities::from_config(config);
+    let utility = match client_mode {
+        LaunchClientModeRequest::Designer => UtilityType::V8,
+        LaunchClientModeRequest::Thin => UtilityType::V8C,
+        LaunchClientModeRequest::Thick | LaunchClientModeRequest::Ordinary => UtilityType::V8,
+    };
     let location = utilities
-        .locate(UtilityType::V8C)
+        .locate(utility)
         .map_err(|error| AppError::Platform(error.to_string()))?;
     tracing::info!(
         additional_launch_keys = ?config.tools.enterprise.additional_launch_keys,
@@ -589,6 +588,7 @@ fn build_enterprise_dsl<'a>(
         location.path,
         config.v8_connection(),
         config.tools.enterprise.additional_launch_keys.clone(),
+        client_mode.into(),
         runner,
         artifacts.platform_log.clone(),
         timeout_override_ms
@@ -687,12 +687,40 @@ fn prepare_vanessa_run(
 
 fn materialize_vanessa_runner_log(artifacts: &RunArtifacts) -> Result<(), String> {
     fs::copy(&artifacts.platform_log, &artifacts.runner_log).map_err(|error| {
-        format!(
-            "failed to materialize Vanessa runner log from enterprise output: {error}"
-        )
+        format!("failed to materialize Vanessa runner log from enterprise output: {error}")
     })?;
     set_file_permissions(&artifacts.runner_log)
         .map_err(|error| format!("failed to chmod Vanessa runner log: {error}"))
+}
+
+fn build_platform_launch(
+    base: &LaunchOptions,
+    prepared_run: &PreparedRun,
+    artifacts: &RunArtifacts,
+) -> LaunchOptions {
+    let mut launch = base.clone();
+    match prepared_run {
+        PreparedRun::YaXUnit => {
+            launch.c = Some(format!(
+                "RunUnitTests={}",
+                crate::platform::enterprise::normalize_launch_payload_path(&artifacts.config_json)
+            ));
+            launch.execute = None;
+        }
+        PreparedRun::Vanessa {
+            epf_path,
+            params_path,
+        } => {
+            launch.execute = Some(crate::platform::enterprise::normalize_launch_payload_path(
+                epf_path,
+            ));
+            launch.c = Some(format!(
+                "StartFeaturePlayer;VAParams={}",
+                crate::platform::enterprise::normalize_launch_payload_path(params_path)
+            ));
+        }
+    }
+    launch
 }
 
 fn apply_vanessa_overlay(
@@ -1072,7 +1100,9 @@ mod tests {
         SourceSetPurpose, TestsConfig, ToolsConfig, VanessaProfileConfig,
     };
     use crate::domain::execution::ExecutionTimeouts;
-    use crate::domain::runner::{ExecutionPolicy, RunnerKind, RunnerProfile};
+    use crate::domain::runner::{
+        ExecutionPolicy, LaunchClientModeRequest, LaunchOptions, RunnerKind, RunnerProfile,
+    };
     use crate::domain::test::{
         TestCase, TestErrorKind, TestReport, TestStatus, TestSuite, TestSummary, TestTarget,
     };
@@ -1211,7 +1241,10 @@ mod tests {
         materialize_vanessa_runner_log(&artifacts).expect("materialize log");
         let junit_parse = parse_junit_report(&artifacts);
         assert!(junit_parse.payload.is_none());
-        assert_eq!(junit_parse.errors[0].code, TestErrorKind::JunitNotProduced.code());
+        assert_eq!(
+            junit_parse.errors[0].code,
+            TestErrorKind::JunitNotProduced.code()
+        );
 
         let retained = retain_run_artifacts(&config, &artifacts).expect("retain artifacts");
         let retained_paths = crate::domain::test::RetainedPaths::from_artifact_set(&retained)
@@ -1252,8 +1285,10 @@ mod tests {
                     output_formats: vec![],
                     backend_hint: Some("enterprise".to_owned()),
                 },
+                client_mode: Some(LaunchClientModeRequest::Thin),
                 timeouts: ExecutionTimeouts::default(),
                 policy: ExecutionPolicy::default(),
+                launch: LaunchOptions::default(),
             },
         };
 

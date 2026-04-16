@@ -4,6 +4,7 @@ use crate::domain::dump::{DumpMode, DumpResult};
 use crate::domain::execution::StepResult;
 use crate::domain::issue::{EdtIssue, Issue, IssueSeverity, ModuleIssue, ObjectIssue};
 use crate::domain::launch::{LaunchMode, LaunchResult};
+use crate::domain::runner::LaunchOptions;
 use crate::domain::syntax::{SyntaxCheckResult, SyntaxCheckStatus};
 use crate::domain::test::{TestCase, TestRunResult, TestStatus, TestSuite};
 use crate::mcp::context::McpCallContext;
@@ -242,6 +243,7 @@ where
                     },
                 ))
             })?,
+            launch: LaunchOptions::default(),
         };
 
         match self
@@ -624,6 +626,7 @@ fn map_launch_response(result: LaunchResult) -> McpLaunchResponse {
         LaunchMode::Designer => "Launched Designer successfully",
         LaunchMode::Thin => "Launched thin client successfully",
         LaunchMode::Thick => "Launched thick client successfully",
+        LaunchMode::Ordinary => "Launched ordinary application successfully",
     };
 
     McpLaunchResponse {

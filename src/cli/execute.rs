@@ -4,8 +4,8 @@ use serde_json::json;
 
 use crate::cli::args::{
     ArtifactsArgs, BuildArgs, Command, DesignerConfigSyntaxArgs, DesignerModulesSyntaxArgs,
-    DumpArgs, ExtensionsArgs, LaunchArgs, LoadArgs, SyntaxArgs, SyntaxTarget, TestArgs, TestRunner,
-    TestScope, TestYaxunitArgs,
+    DumpArgs, ExtensionsArgs, LaunchArgs, LaunchOptionsArgs, LoadArgs, SyntaxArgs, SyntaxTarget,
+    TestArgs, TestRunner, TestScope, TestYaxunitArgs,
 };
 use crate::config::model::{AppConfig, SourceSetPurpose};
 use crate::domain::artifacts::{ArtifactBuildMode, ArtifactsResult};
@@ -16,7 +16,10 @@ use crate::domain::extensions::ExtensionsResult;
 use crate::domain::init::{InitResult, InitStepStatus};
 use crate::domain::issue::{Issue, IssueSeverity};
 use crate::domain::load::{LoadMode, LoadResult};
-use crate::domain::runner::{ExecutionPolicy, RunnerKind, RunnerOutputFormat, RunnerProfile};
+use crate::domain::runner::{
+    ExecutionPolicy, LaunchClientModeRequest, LaunchOptions, RunnerKind, RunnerOutputFormat,
+    RunnerProfile,
+};
 use crate::domain::syntax::{SyntaxCheckResult, SyntaxCheckStatus};
 use crate::domain::test::{TestRunResult, TestStatus, TestTarget};
 use crate::output::json::Envelope;
@@ -566,21 +569,40 @@ fn map_extensions_request(args: &ExtensionsArgs) -> ConfigureExtensionsRequest {
 }
 
 fn map_test_request(config: &AppConfig, args: &TestArgs) -> Result<TestRequest, UseCaseError> {
+    let client_mode = map_test_client_mode(args.client_mode.as_deref())?;
     match &args.runner {
         TestRunner::Yaxunit(TestYaxunitArgs { scope }) => {
             let scope = map_yaxunit_scope(scope)?;
             Ok(TestRequest {
-                execution: build_yaxunit_execution(config),
+                execution: build_yaxunit_execution(config, &args.launch, client_mode)?,
                 full: args.full,
                 scope,
             })
         }
         TestRunner::Va => Ok(TestRequest {
-            execution: build_vanessa_execution(config)?,
+            execution: build_vanessa_execution(config, &args.launch, client_mode)?,
             full: args.full,
             scope: TestScopeRequest::All,
         }),
     }
+}
+
+fn map_test_client_mode(
+    client_mode: Option<&str>,
+) -> Result<Option<LaunchClientModeRequest>, UseCaseError> {
+    Ok(match client_mode {
+        Some("designer") => Some(LaunchClientModeRequest::Designer),
+        Some("thin") => Some(LaunchClientModeRequest::Thin),
+        Some("thick") => Some(LaunchClientModeRequest::Thick),
+        Some("ordinary") => Some(LaunchClientModeRequest::Ordinary),
+        Some(other) => {
+            return Err(UseCaseError::new(
+                UseCaseErrorKind::Validation,
+                format!("unsupported test client mode: {other}"),
+            ));
+        }
+        None => None,
+    })
 }
 
 fn map_yaxunit_scope(scope: &TestScope) -> Result<TestScopeRequest, UseCaseError> {
@@ -601,18 +623,29 @@ fn map_yaxunit_scope(scope: &TestScope) -> Result<TestScopeRequest, UseCaseError
     })
 }
 
-fn build_yaxunit_execution(config: &AppConfig) -> crate::domain::runner::ScenarioExecutionRequest {
+fn build_yaxunit_execution(
+    config: &AppConfig,
+    launch_args: &LaunchOptionsArgs,
+    client_mode: Option<LaunchClientModeRequest>,
+) -> Result<crate::domain::runner::ScenarioExecutionRequest, UseCaseError> {
+    validate_test_launch_options(launch_args)?;
     let mut execution = TestRequest::default_execution();
     execution.timeouts = effective_test_timeouts(
         config.tests.execution_timeout_seconds,
         &config.tests.yaxunit.timeouts,
     );
-    execution
+    execution.launch = map_test_launch_options(launch_args)?;
+    execution.client_mode = client_mode.or(Some(LaunchClientModeRequest::Thin));
+    execution.launch.c = Some("RunUnitTests={config_path}".to_owned());
+    Ok(execution)
 }
 
 fn build_vanessa_execution(
     config: &AppConfig,
+    launch_args: &LaunchOptionsArgs,
+    client_mode: Option<LaunchClientModeRequest>,
 ) -> Result<crate::domain::runner::ScenarioExecutionRequest, UseCaseError> {
+    validate_test_launch_options(launch_args)?;
     let profile_id = config.tests.va.profile.as_deref().ok_or_else(|| {
         UseCaseError::new(
             UseCaseErrorKind::Validation,
@@ -644,7 +677,7 @@ fn build_vanessa_execution(
         ));
     }
 
-    Ok(crate::domain::runner::ScenarioExecutionRequest {
+    let mut execution = crate::domain::runner::ScenarioExecutionRequest {
         profile: RunnerProfile {
             id: profile_id.to_owned(),
             kind: RunnerKind::Vanessa,
@@ -654,6 +687,7 @@ fn build_vanessa_execution(
             ],
             backend_hint: Some("enterprise".to_owned()),
         },
+        client_mode: Some(LaunchClientModeRequest::Thin),
         timeouts: effective_test_timeouts(
             config.tests.execution_timeout_seconds,
             &config.tests.va.timeouts,
@@ -662,7 +696,52 @@ fn build_vanessa_execution(
             retain_artifacts_on_failure: true,
             retain_artifacts_on_success: false,
         },
+        launch: LaunchOptions::default(),
+    };
+    execution.launch = map_test_launch_options(launch_args)?;
+    execution.client_mode = client_mode.or(Some(LaunchClientModeRequest::Thin));
+    execution.launch.c = Some("StartFeaturePlayer;VAParams={params_path}".to_owned());
+    execution.launch.execute = Some("{epf_path}".to_owned());
+    Ok(execution)
+}
+
+fn map_test_launch_options(args: &LaunchOptionsArgs) -> Result<LaunchOptions, UseCaseError> {
+    if args.c.is_some() {
+        return Err(UseCaseError::new(
+            UseCaseErrorKind::Validation,
+            "--c is not supported for test; it is reserved for the internal runner payload",
+        ));
+    }
+    if args.execute.is_some() {
+        return Err(UseCaseError::new(
+            UseCaseErrorKind::Validation,
+            "--execute is not supported for test; it is reserved for the internal runner payload",
+        ));
+    }
+    if args.out.is_some() {
+        return Err(UseCaseError::new(
+            UseCaseErrorKind::Validation,
+            "--out is not supported for test; the platform log path is managed internally",
+        ));
+    }
+    Ok(LaunchOptions {
+        c: None,
+        execute: None,
+        use_privileged_mode: args.use_privileged_mode,
+        out: None,
+        internal_out: None,
+        raw_args: args.raw_keys.clone(),
     })
+}
+
+fn validate_test_launch_options(args: &LaunchOptionsArgs) -> Result<(), UseCaseError> {
+    if args.c.is_some() || args.execute.is_some() || args.out.is_some() {
+        return Err(UseCaseError::new(
+            UseCaseErrorKind::Validation,
+            "test accepts only --use-privileged-mode and raw launch keys; /C, /Execute, and /Out are managed by the runner",
+        ));
+    }
+    Ok(())
 }
 
 fn effective_test_timeouts(
@@ -820,6 +899,7 @@ fn map_launch_request(args: &LaunchArgs) -> Result<LaunchRequest, UseCaseError> 
             "designer" => LaunchModeRequest::Designer,
             "thin" => LaunchModeRequest::Thin,
             "thick" => LaunchModeRequest::Thick,
+            "ordinary" => LaunchModeRequest::Ordinary,
             other => {
                 return Err(UseCaseError::new(
                     UseCaseErrorKind::Validation,
@@ -827,7 +907,19 @@ fn map_launch_request(args: &LaunchArgs) -> Result<LaunchRequest, UseCaseError> 
                 ));
             }
         },
+        launch: map_direct_launch_options(&args.launch),
     })
+}
+
+fn map_direct_launch_options(args: &LaunchOptionsArgs) -> LaunchOptions {
+    LaunchOptions {
+        c: args.c.clone(),
+        execute: args.execute.clone(),
+        use_privileged_mode: args.use_privileged_mode,
+        out: args.out.clone(),
+        internal_out: None,
+        raw_args: args.raw_keys.clone(),
+    }
 }
 
 fn build_test_envelope(result: TestRunResult, ok: bool) -> Envelope<TestRunResult> {
@@ -1176,22 +1268,22 @@ mod tests {
     };
     use crate::cli::args::{
         ArtifactsArgs, BuildArgs, Command, DesignerConfigSyntaxArgs, DesignerModulesSyntaxArgs,
-        DumpArgs, ExtensionsArgs, LaunchArgs, LoadArgs, SyntaxArgs, SyntaxTarget, TestArgs,
-        TestRunner, TestScope, TestYaxunitArgs,
+        DumpArgs, ExtensionsArgs, LaunchArgs, LaunchOptionsArgs, LoadArgs, SyntaxArgs, SyntaxTarget,
+        TestArgs, TestRunner, TestScope, TestYaxunitArgs,
     };
     use crate::config::model::{
         AppConfig, BuildConfig, BuilderBackend, SourceFormat, SourceSetConfig, SourceSetPurpose,
         TestsConfig, ToolsConfig,
     };
     use crate::domain::load::LoadMode;
-    use crate::domain::runner::RunnerKind;
+    use crate::domain::runner::{LaunchOptions, RunnerKind};
     use crate::output::presenter::{ColorMode, Presenter};
     use crate::support::fs::acquire_advisory_lock;
     use crate::support::temp::platform_logs_dir;
     use crate::use_cases::context::CommandName;
     use crate::use_cases::request::{
-        ArtifactsModeRequest, DumpModeRequest, LaunchModeRequest, SyntaxTargetRequest,
-        TestScopeRequest,
+        ArtifactsModeRequest, DumpModeRequest, LaunchModeRequest, LaunchRequest,
+        SyntaxTargetRequest, TestScopeRequest,
     };
     use crate::use_cases::result::UseCaseErrorKind;
     use crate::use_cases::workspace_lock::workspace_lock_path;
@@ -1207,6 +1299,8 @@ mod tests {
             &config,
             &TestArgs {
                 full: true,
+                client_mode: None,
+                launch: LaunchOptionsArgs::default(),
                 runner: TestRunner::Yaxunit(TestYaxunitArgs {
                     scope: TestScope::Module {
                         name: "ModuleA".to_owned(),
@@ -1233,6 +1327,8 @@ mod tests {
             &config,
             &TestArgs {
                 full: false,
+                client_mode: None,
+                launch: LaunchOptionsArgs::default(),
                 runner: TestRunner::Yaxunit(TestYaxunitArgs {
                     scope: TestScope::Module {
                         name: "   ".to_owned(),
@@ -1278,6 +1374,8 @@ mod tests {
             &config,
             &TestArgs {
                 full: false,
+                client_mode: None,
+                launch: LaunchOptionsArgs::default(),
                 runner: TestRunner::Va,
             },
         )
@@ -1349,7 +1447,41 @@ mod tests {
         );
         assert_eq!(
             map_launch_request(&LaunchArgs {
-                mode: "thin".to_owned()
+                mode: "thin".to_owned(),
+                launch: LaunchOptionsArgs {
+                    c: Some("Command".to_owned()),
+                    execute: Some("tool.epf".to_owned()),
+                    use_privileged_mode: true,
+                    out: Some("launch.log".to_owned()),
+                    raw_keys: vec!["/WA-".to_owned(), "/DisplayAllFunctions".to_owned()],
+                },
+            })
+            .expect("request"),
+            LaunchRequest {
+                mode: LaunchModeRequest::Thin,
+                launch: LaunchOptions {
+                    c: Some("Command".to_owned()),
+                    execute: Some("tool.epf".to_owned()),
+                    use_privileged_mode: true,
+                    out: Some("launch.log".to_owned()),
+                    internal_out: None,
+                    raw_args: vec!["/WA-".to_owned(), "/DisplayAllFunctions".to_owned()],
+                },
+            }
+        );
+        assert_eq!(
+            map_launch_request(&LaunchArgs {
+                mode: "ordinary".to_owned(),
+                launch: LaunchOptionsArgs::default(),
+            })
+            .expect("request")
+            .mode,
+            LaunchModeRequest::Ordinary
+        );
+        assert_eq!(
+            map_launch_request(&LaunchArgs {
+                mode: "thin".to_owned(),
+                launch: LaunchOptionsArgs::default(),
             })
             .expect("request")
             .mode,
@@ -1408,6 +1540,7 @@ mod tests {
         .expect_err("dump mode should be rejected");
         let launch_error = map_launch_request(&LaunchArgs {
             mode: "garbage".to_owned(),
+            launch: LaunchOptionsArgs::default(),
         })
         .expect_err("launch mode should be rejected");
 
@@ -1571,6 +1704,8 @@ mod tests {
             &config,
             &Command::Test(TestArgs {
                 full: false,
+                client_mode: None,
+                launch: LaunchOptionsArgs::default(),
                 runner: TestRunner::Yaxunit(TestYaxunitArgs {
                     scope: TestScope::All,
                 }),
@@ -1601,6 +1736,7 @@ mod tests {
             &config,
             &Command::Launch(LaunchArgs {
                 mode: "garbage".to_owned(),
+                launch: LaunchOptionsArgs::default(),
             }),
             &presenter,
             false,
@@ -1627,6 +1763,8 @@ mod tests {
             &config,
             &Command::Test(TestArgs {
                 full: false,
+                client_mode: None,
+                launch: LaunchOptionsArgs::default(),
                 runner: TestRunner::Yaxunit(TestYaxunitArgs {
                     scope: TestScope::Module {
                         name: "   ".to_owned(),

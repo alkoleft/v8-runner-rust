@@ -365,6 +365,77 @@ fn test_run_appends_enterprise_additional_launch_keys() {
 }
 
 #[test]
+fn test_accepts_explicit_client_mode_for_vanessa_and_yaxunit() {
+    let (dir, config_path, _build_calls, test_calls, _captured_config) = setup_project(
+        "work",
+        JUNIT_SMOKE_REPORT_FIXTURE,
+        "12:00:00.000 [INF] ok",
+        0,
+        false,
+        5,
+        None,
+    );
+    write_script(
+        &dir.path().join("platform").join("bin").join("1cv8"),
+        &format!(
+            "printf '%s\\n' \"$*\" >> '{}'\npayload=\"\"\nout=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"/C\" ]; then payload=\"$arg\"; fi\n  if [ \"$prev\" = \"/Out\" ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif printf '%s' \"$payload\" | grep -F -q -- 'RunUnitTests='; then\n  cfg=$(printf '%s' \"$payload\" | sed 's/^RunUnitTests=//; s/^\"//; s/\"$//')\n  report=$(awk -F '\"' '/reportPath/ {{print $4; exit}}' \"$cfg\")\n  ylog=$(awk -F '\"' '/\"file\"/ {{print $4; exit}}' \"$cfg\")\n  mkdir -p \"$(dirname \"$report\")\" \"$(dirname \"$ylog\")\"\n  cat <<'XML' > \"$report\"\n{}\nXML\n  cat <<'LOG' > \"$ylog\"\n12:00:00.000 [INF] ok\nLOG\n  if [ -n \"$out\" ]; then mkdir -p \"$(dirname \"$out\")\" && : > \"$out\"; fi\n  exit 0\nfi\nif [ -n \"$out\" ]; then printf 'build /P secret\\n' > \"$out\"; fi\nexit 0",
+            test_calls.display(),
+            JUNIT_SMOKE_REPORT_FIXTURE
+        ),
+    );
+
+    let output = std::process::Command::cargo_bin("v8-test-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--output",
+            "json",
+            "test",
+            "--client-mode",
+            "ordinary",
+            "yaxunit",
+            "all",
+        ])
+        .output()
+        .expect("run");
+
+    assert!(
+        output.status.success(),
+        "status={:?}\nstdout={}\nstderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let calls = fs::read_to_string(test_calls).expect("test calls");
+    assert!(calls.contains("/RunModeOrdinaryApplication"));
+}
+
+#[test]
+fn test_rejects_c_and_execute_on_test_surface() {
+    let (_dir, config_path, _build_calls, test_calls, _captured_config) =
+        setup_project("work", JUNIT_SMOKE_REPORT_FIXTURE, "", 0, false, 5, None);
+
+    let output = std::process::Command::cargo_bin("v8-test-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "test",
+            "--c",
+            "ignored",
+            "yaxunit",
+            "all",
+        ])
+        .output()
+        .expect("run");
+
+    assert!(!output.status.success());
+    assert_ne!(output.status.code(), Some(0));
+    assert!(!test_calls.exists());
+}
+
+#[test]
 fn test_va_builds_vanessa_command_and_overlay() {
     let (_dir, config_path, build_calls, test_calls, captured_params) = setup_va_project(
         JUNIT_SMOKE_REPORT_FIXTURE,
