@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 use std::io::Write;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
 use crate::change_detection::source_sets::SourceSetsService;
@@ -22,6 +21,9 @@ use crate::support::error::AppError;
 use crate::support::fs::{
     acquire_advisory_lock, ensure_dir, metadata_sidecar_path, read_temp_dir_metadata,
     remove_path_if_exists, replace_dir_atomically, write_temp_dir_metadata, TempDirKind,
+};
+use crate::support::path::{
+    hashed_lock_path, is_filesystem_root, nearest_existing_canonical_path, stable_path_identity,
 };
 use crate::support::temp::{dump_object_list_file, platform_logs_dir};
 use crate::use_cases::context::ExecutionContext;
@@ -550,15 +552,27 @@ pub(crate) fn run_external_dump_designer(
             result.platform_log_path.clone(),
         ));
     }
-    let contents = std::fs::read_to_string(root_xml_path).map_err(|error| {
-        (
-            AppError::Runtime(format!(
-                "failed to read external dump root xml '{}': {error}",
-                root_xml_path.display()
-            )),
-            result.platform_log_path.clone(),
-        )
-    })?;
+    let contents = match std::fs::read_to_string(root_xml_path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err((
+                AppError::Validation(format!(
+                    "external dump '{}' did not produce descriptor xml",
+                    root_xml_path.display()
+                )),
+                result.platform_log_path.clone(),
+            ));
+        }
+        Err(error) => {
+            return Err((
+                AppError::Runtime(format!(
+                    "failed to read external dump root xml '{}': {error}",
+                    root_xml_path.display()
+                )),
+                result.platform_log_path.clone(),
+            ));
+        }
+    };
     let (root_tag, logical_name) = parse_external_dump_descriptor(&contents, root_xml_path)
         .map_err(|error| (error, result.platform_log_path.clone()))?;
     if root_tag != expected_kind.root_tag() {
@@ -768,20 +782,15 @@ fn resolve_target(config: &AppConfig, args: &DumpArgs) -> Result<ResolvedDumpTar
         .map_err(|error| AppError::Runtime(format!("failed to canonicalize basePath: {error}")))?;
     let canonical_work_path = nearest_existing_canonical_path(&config.work_path)
         .map_err(|error| AppError::Runtime(format!("failed to canonicalize workPath: {error}")))?;
-    let target_identity = hash_path(&canonical_target_path);
+    let target_identity = stable_path_identity(&canonical_target_path);
     if target_path.parent().is_none() {
         return Err(AppError::Runtime(format!(
             "target path has no parent: {}",
             target_path.display()
         )));
     }
-    let canonical_target_parent = canonical_target_path.parent().ok_or_else(|| {
-        AppError::Runtime(format!(
-            "canonical target path has no parent: {}",
-            canonical_target_path.display()
-        ))
-    })?;
-    let lock_path = canonical_target_parent.join(format!(".dump-{target_identity}.lock"));
+    let lock_path = hashed_lock_path(&canonical_target_path, "dump")
+        .map_err(|error| AppError::Runtime(format!("failed to resolve dump lock path: {error}")))?;
 
     Ok(ResolvedDumpTarget {
         source_set_name: source_set.name.clone(),
@@ -830,68 +839,12 @@ fn validate_publish_target(resolved: &ResolvedDumpTarget) -> Result<(), AppError
             "dump target must not equal workPath".to_owned(),
         ));
     }
-    if resolved.canonical_target_path == Path::new("/") {
+    if is_filesystem_root(&resolved.canonical_target_path) {
         return Err(AppError::Validation(
             "dump target must not equal filesystem root".to_owned(),
         ));
     }
     Ok(())
-}
-
-fn nearest_existing_canonical_path(path: &Path) -> std::io::Result<PathBuf> {
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir()?.join(path)
-    };
-
-    let mut existing = absolute.as_path();
-    while !existing.exists() {
-        existing = existing.parent().ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("no existing ancestor for path '{}'", path.display()),
-            )
-        })?;
-    }
-
-    let existing_canonical = std::fs::canonicalize(existing)?;
-    if existing == absolute {
-        return Ok(existing_canonical);
-    }
-
-    let suffix = absolute
-        .strip_prefix(existing)
-        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
-    let suffix =
-        suffix
-            .components()
-            .try_fold(PathBuf::new(), |mut acc, component| match component {
-                Component::Normal(part) => {
-                    acc.push(part);
-                    Ok(acc)
-                }
-                _ => Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!(
-                        "path '{}' contains unsupported component '{}'",
-                        path.display(),
-                        component.as_os_str().to_string_lossy()
-                    ),
-                )),
-            })?;
-
-    Ok(existing_canonical.join(suffix))
-}
-
-fn hash_path(path: &Path) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(path.to_string_lossy().as_bytes());
-    let digest = hasher.finalize();
-    digest[..16]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
 }
 
 fn cleanup_orphan_dirs(resolved: &ResolvedDumpTarget) -> Result<(), AppError> {
@@ -1142,10 +1095,10 @@ fn make_run_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_designer_dsl, cleanup_orphan_dirs, create_dump_object_list_file_with, hash_path,
-        metadata_sidecar_path, nearest_existing_canonical_path, parse_external_dump_descriptor,
-        resolve_target, run_dump, validate_publish_target, validate_supported_matrix, DUMP_COMMAND,
-        NON_PARTIAL_OBJECTS_ERROR, ORPHAN_TTL, PARTIAL_OBJECTS_REQUIRED_ERROR,
+        build_designer_dsl, cleanup_orphan_dirs, create_dump_object_list_file_with,
+        metadata_sidecar_path, parse_external_dump_descriptor, resolve_target, run_dump,
+        run_external_dump_designer, validate_publish_target, validate_supported_matrix,
+        DUMP_COMMAND, NON_PARTIAL_OBJECTS_ERROR, ORPHAN_TTL, PARTIAL_OBJECTS_REQUIRED_ERROR,
         PARTIAL_OBJECT_BLANK_ERROR, PARTIAL_OBJECT_CONTROL_ERROR, SUPPORTED_DUMP_ERROR,
     };
     use crate::config::model::{
@@ -1158,21 +1111,29 @@ mod tests {
     use crate::support::fs::{
         acquire_advisory_lock, read_temp_dir_metadata, write_temp_dir_metadata, TempDirKind,
     };
+    use crate::support::path::{nearest_existing_canonical_path, stable_path_identity};
+    use crate::use_cases::external_artifacts::ExternalArtifactKind;
     use crate::use_cases::request::{DumpModeRequest, DumpRequest as DumpArgs};
     use crate::use_cases::result::UseCaseErrorKind;
     use std::fs;
-    use std::os::unix::fs::{symlink, PermissionsExt};
     use std::path::{Path, PathBuf};
     use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
     use tempfile::tempdir;
 
+    #[cfg(unix)]
+    use std::os::unix::fs::{symlink, PermissionsExt};
+
+    #[cfg(unix)]
     fn make_executable(path: &Path) {
         let mut perms = fs::metadata(path).expect("metadata").permissions();
         perms.set_mode(0o755);
         fs::set_permissions(path, perms).expect("chmod");
     }
+
+    #[cfg(not(unix))]
+    fn make_executable(_path: &Path) {}
 
     fn write_script(path: &Path, body: &str) {
         if let Some(parent) = path.parent() {
@@ -1610,7 +1571,7 @@ mod tests {
         let target = dir.path().join("main");
         fs::create_dir_all(&target).expect("target");
         let canonical = std::fs::canonicalize(&target).expect("canonical");
-        let identity = hash_path(&canonical);
+        let identity = stable_path_identity(&canonical);
         let stage_dir = target
             .parent()
             .expect("parent")
@@ -1639,7 +1600,7 @@ mod tests {
         let target = dir.path().join("main");
         fs::create_dir_all(&target).expect("target");
         let canonical = std::fs::canonicalize(&target).expect("canonical");
-        let identity = hash_path(&canonical);
+        let identity = stable_path_identity(&canonical);
         let stage_dir = target.parent().expect("parent").join(".dump-stage-old");
         fs::create_dir_all(&stage_dir).expect("stage");
         write_temp_dir_metadata(&stage_dir, TempDirKind::Stage, "run", &target, &identity)
@@ -2131,6 +2092,7 @@ mod tests {
         handle.join().expect("join");
     }
 
+    #[cfg(unix)]
     #[test]
     fn resolve_target_uses_same_lock_path_for_canonical_and_symlinked_base_path() {
         let dir = tempdir().expect("tempdir");
@@ -2170,6 +2132,7 @@ mod tests {
         assert_eq!(resolved_real.lock_path, resolved_link.lock_path);
     }
 
+    #[cfg(unix)]
     #[test]
     fn lock_identity_is_based_on_canonical_target() {
         let dir = tempdir().expect("tempdir");
@@ -2178,8 +2141,8 @@ mod tests {
         fs::create_dir_all(&real).expect("real");
         symlink(&real, &link).expect("symlink");
 
-        let hash_real = hash_path(&std::fs::canonicalize(&real).expect("canonical"));
-        let hash_link = hash_path(&std::fs::canonicalize(&link).expect("canonical"));
+        let hash_real = stable_path_identity(&std::fs::canonicalize(&real).expect("canonical"));
+        let hash_link = stable_path_identity(&std::fs::canonicalize(&link).expect("canonical"));
 
         assert_eq!(hash_real, hash_link);
     }
@@ -2247,5 +2210,31 @@ mod tests {
 
         assert_eq!(root, "ExternalDataProcessor");
         assert_eq!(logical_name, "Foo");
+    }
+
+    #[test]
+    fn run_external_dump_designer_rejects_missing_descriptor() {
+        let dir = tempdir().expect("tempdir");
+        let script = dir.path().join("1cv8");
+        let calls = dir.path().join("calls.log");
+        let work = dir.path().join("work");
+        let root_xml = dir.path().join("out").join("root.xml");
+        create_source_tree(dir.path());
+        write_dump_script(&script, &calls, None, 0);
+        let config = build_config(dir.path(), &work, &script);
+        let runner = crate::platform::process::ProcessExecutor;
+        let dsl =
+            build_designer_dsl(&config, &script, &runner, "main", "incremental").expect("dsl");
+
+        let error = run_external_dump_designer(
+            &dsl,
+            &script,
+            &root_xml,
+            ExternalArtifactKind::DataProcessor,
+            "Foo",
+        )
+        .expect_err("missing descriptor");
+
+        assert!(matches!(error.0, AppError::Validation(_)));
     }
 }

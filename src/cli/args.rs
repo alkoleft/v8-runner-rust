@@ -522,10 +522,7 @@ mod tests {
         .expect("parse launch");
 
         match cli.command {
-            Command::Launch(LaunchArgs {
-                mode,
-                launch,
-            }) => {
+            Command::Launch(LaunchArgs { mode, launch }) => {
                 assert_eq!(mode, "ordinary");
                 assert_eq!(launch.c.as_deref(), Some("DoWork"));
                 assert_eq!(launch.execute.as_deref(), Some("tool.epf"));

@@ -1268,8 +1268,8 @@ mod tests {
     };
     use crate::cli::args::{
         ArtifactsArgs, BuildArgs, Command, DesignerConfigSyntaxArgs, DesignerModulesSyntaxArgs,
-        DumpArgs, ExtensionsArgs, LaunchArgs, LaunchOptionsArgs, LoadArgs, SyntaxArgs, SyntaxTarget,
-        TestArgs, TestRunner, TestScope, TestYaxunitArgs,
+        DumpArgs, ExtensionsArgs, LaunchArgs, LaunchOptionsArgs, LoadArgs, SyntaxArgs,
+        SyntaxTarget, TestArgs, TestRunner, TestScope, TestYaxunitArgs,
     };
     use crate::config::model::{
         AppConfig, BuildConfig, BuilderBackend, SourceFormat, SourceSetConfig, SourceSetPurpose,
@@ -1663,7 +1663,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn execute_command_reports_workspace_lock_conflict_before_dispatch() {
         let dir = tempdir().expect("tempdir");
@@ -1688,7 +1687,6 @@ mod tests {
         assert!(error.to_string().contains("already"));
     }
 
-    #[cfg(unix)]
     #[test]
     fn execute_command_reports_workspace_lock_conflict_for_test_command() {
         let dir = tempdir().expect("tempdir");
@@ -1720,7 +1718,6 @@ mod tests {
         assert!(error.to_string().contains("already"));
     }
 
-    #[cfg(unix)]
     #[test]
     fn execute_command_validates_before_trying_workspace_lock() {
         let dir = tempdir().expect("tempdir");
@@ -1747,7 +1744,6 @@ mod tests {
         assert!(!error.to_string().contains("workspace"));
     }
 
-    #[cfg(unix)]
     #[test]
     fn execute_command_validates_test_module_before_trying_workspace_lock() {
         let dir = tempdir().expect("tempdir");
@@ -1780,7 +1776,6 @@ mod tests {
         assert!(!error.to_string().contains("workspace"));
     }
 
-    #[cfg(unix)]
     #[test]
     fn execute_command_does_not_clean_logs_when_workspace_is_busy() {
         let dir = tempdir().expect("tempdir");

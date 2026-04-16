@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use thiserror::Error;
 
-use crate::domain::runner::LaunchOptions;
 use crate::domain::runner::LaunchClientModeRequest;
+use crate::domain::runner::LaunchOptions;
 use crate::platform::connection::V8Connection;
 use crate::platform::process::{ProcessError, ProcessRequest, ProcessRunner};
 use crate::platform::result::PlatformCommandResult;

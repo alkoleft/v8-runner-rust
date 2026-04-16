@@ -3,8 +3,7 @@ use crate::domain::execution::ExecutionTimeouts;
 use crate::domain::load::LoadMode;
 use crate::domain::runner::{
     ExecutionPolicy, LaunchClientModeRequest, LaunchOptions, RunnerKind, RunnerOutputFormat,
-    RunnerProfile,
-    ScenarioExecutionRequest,
+    RunnerProfile, ScenarioExecutionRequest,
 };
 use crate::domain::test::TEST_RUNNER_ID;
 

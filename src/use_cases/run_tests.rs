@@ -263,7 +263,9 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> UseCaseResult<TestRunResult
         config,
         &artifacts,
         &enterprise_runner,
-        args.execution.client_mode.unwrap_or(LaunchClientModeRequest::Thin),
+        args.execution
+            .client_mode
+            .unwrap_or(LaunchClientModeRequest::Thin),
         args.execution.timeouts.total_ms,
     ) {
         Ok(dsl) => dsl,

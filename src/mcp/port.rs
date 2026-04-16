@@ -213,7 +213,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn default_port_reports_workspace_lock_conflict_before_use_case_dispatch() {
         let dir = tempdir().expect("tempdir");

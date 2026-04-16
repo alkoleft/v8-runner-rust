@@ -1,9 +1,8 @@
 use std::collections::HashMap;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
-use sha2::{Digest, Sha256};
 use tracing::info;
 
 use crate::change_detection::source_sets::SourceSetsService;
@@ -27,6 +26,9 @@ use crate::support::fs::{
     acquire_advisory_lock, ensure_dir, metadata_sidecar_path, read_temp_dir_metadata,
     remove_path_if_exists, replace_dir_atomically, replace_file_atomically,
     write_temp_dir_metadata, TempDirKind,
+};
+use crate::support::path::{
+    hashed_lock_path, is_filesystem_root, nearest_existing_canonical_path, stable_path_identity,
 };
 use crate::support::temp::platform_logs_dir;
 use crate::use_cases::context::ExecutionContext;
@@ -712,14 +714,10 @@ fn resolve_target(
         .map_err(|error| AppError::Runtime(format!("failed to canonicalize basePath: {error}")))?;
     let canonical_work_path = nearest_existing_canonical_path(&config.work_path)
         .map_err(|error| AppError::Runtime(format!("failed to canonicalize workPath: {error}")))?;
-    let target_identity = hash_path(&canonical_output_path);
-    let canonical_parent = canonical_output_path.parent().ok_or_else(|| {
-        AppError::Runtime(format!(
-            "canonical output path has no parent: {}",
-            canonical_output_path.display()
-        ))
+    let target_identity = stable_path_identity(&canonical_output_path);
+    let lock_path = hashed_lock_path(&canonical_output_path, "artifacts").map_err(|error| {
+        AppError::Runtime(format!("failed to resolve artifacts lock path: {error}"))
     })?;
-    let lock_path = canonical_parent.join(format!(".artifacts-{target_identity}.lock"));
 
     Ok(ResolvedArtifactsTarget {
         mode: map_mode(args.mode),
@@ -863,7 +861,7 @@ fn validate_publish_target(resolved: &ResolvedArtifactsTarget) -> Result<(), App
             "artifacts output must not equal workPath".to_owned(),
         ));
     }
-    if resolved.canonical_output_path == Path::new("/") {
+    if is_filesystem_root(&resolved.canonical_output_path) {
         return Err(AppError::Validation(
             "artifacts output must not equal filesystem root".to_owned(),
         ));
@@ -1087,58 +1085,6 @@ fn published_file_names(artifacts: &ArtifactSet) -> Vec<String> {
         .collect()
 }
 
-fn nearest_existing_canonical_path(path: &Path) -> std::io::Result<PathBuf> {
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir()?.join(path)
-    };
-    let mut existing = absolute.as_path();
-    while !existing.exists() {
-        existing = existing.parent().ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("no existing ancestor for path '{}'", path.display()),
-            )
-        })?;
-    }
-    let existing_canonical = std::fs::canonicalize(existing)?;
-    if existing == absolute {
-        return Ok(existing_canonical);
-    }
-    let suffix = absolute
-        .strip_prefix(existing)
-        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
-    let suffix =
-        suffix
-            .components()
-            .try_fold(PathBuf::new(), |mut acc, component| match component {
-                Component::Normal(part) => {
-                    acc.push(part);
-                    Ok(acc)
-                }
-                _ => Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!(
-                        "path '{}' contains unsupported component '{}'",
-                        path.display(),
-                        component.as_os_str().to_string_lossy()
-                    ),
-                )),
-            })?;
-    Ok(existing_canonical.join(suffix))
-}
-
-fn hash_path(path: &Path) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(path.to_string_lossy().as_bytes());
-    let digest = hasher.finalize();
-    digest[..16]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
-}
-
 fn make_run_id() -> String {
     let timestamp = Utc::now().timestamp_nanos_opt().unwrap_or_default();
     format!("{}-{timestamp:x}", std::process::id())
@@ -1172,12 +1118,24 @@ mod tests {
         fs::set_permissions(path, perms).expect("chmod");
     }
 
+    #[cfg(not(unix))]
+    fn make_executable(_path: &Path) {}
+
     #[cfg(unix)]
     fn write_script(path: &Path, body: &str) {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).expect("create dirs");
         }
         fs::write(path, format!("#!/bin/sh\n{body}\n")).expect("write script");
+        make_executable(path);
+    }
+
+    #[cfg(not(unix))]
+    fn write_script(path: &Path, body: &str) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create dirs");
+        }
+        fs::write(path, body).expect("write script");
         make_executable(path);
     }
 
@@ -1479,7 +1437,7 @@ mod tests {
         let script = dir.path().join("1cv8");
         write_script(
             &script,
-            "out=''\nload_state=0\nseen=0\nfor arg in \"$@\"; do\n  if [ \"$prev\" = '/LoadExternalDataProcessorOrReportFromFiles' ]; then load_state=1; prev=\"$arg\"; continue; fi\n  if [ \"$load_state\" = 1 ]; then seen=$((seen + 1)); if [ \"$seen\" = 1 ]; then printf 'external' > \"$arg\"; else printf 'boom' > \"$arg\"; exit 12; fi; load_state=0; fi\n  if [ \"$prev\" = '/Out' ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$out\" ]; then printf 'platform fail' > \"$out\"; fi\nexit 0",
+            "out=''\nload_state=0\nfor arg in \"$@\"; do\n  if [ \"$prev\" = '/LoadExternalDataProcessorOrReportFromFiles' ]; then load_state=1; prev=\"$arg\"; continue; fi\n  if [ \"$load_state\" = 1 ]; then case \"$arg\" in *Beta.epf) printf 'boom' > \"$arg\"; exit 12 ;; *) printf 'external' > \"$arg\" ;; esac; load_state=0; fi\n  if [ \"$prev\" = '/Out' ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$out\" ]; then printf 'platform fail' > \"$out\"; fi\nexit 0",
         );
         let base = dir.path().join("base");
         let work = dir.path().join("work");

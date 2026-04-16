@@ -7,7 +7,12 @@ use tracing::warn;
 
 use crate::config::model::AppConfig;
 use crate::support::error::AppError;
-use crate::support::fs::{try_acquire_advisory_lock, AdvisoryLockGuard};
+use crate::support::fs::publish_file_atomically;
+use crate::support::fs::{
+    advisory_lock_owner_id, read_advisory_lock_metadata, try_acquire_advisory_lock,
+    AdvisoryLockGuard,
+};
+use crate::support::path::nearest_existing_canonical_path;
 
 const WORKSPACE_LOCK_FILE_NAME: &str = ".v8-test-runner.workspace.lock";
 const WORKSPACE_LOCK_SIDECAR_FILE_NAME: &str = ".v8-test-runner.workspace.lock.json";
@@ -27,8 +32,7 @@ impl Drop for WorkspaceLockGuard {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WorkspaceLockMetadata {
     pid: u32,
-    #[serde(default)]
-    holder_start_ticks: Option<u64>,
+    lock_owner: String,
     command: String,
     started_at: DateTime<Utc>,
     canonical_work_path: PathBuf,
@@ -52,6 +56,7 @@ pub(crate) fn acquire_workspace_lock(
         ErrorKind::WouldBlock => AppError::Runtime(render_busy_message(
             command_name,
             &canonical_work_path,
+            &lock_path,
             &sidecar_path,
         )),
         _ => AppError::Runtime(format!(
@@ -62,7 +67,9 @@ pub(crate) fn acquire_workspace_lock(
 
     cleanup_sidecar_temp_files(&canonical_work_path);
 
-    if let Err(error) = write_lock_metadata(&sidecar_path, command_name, &canonical_work_path) {
+    if let Err(error) =
+        write_lock_metadata(&sidecar_path, command_name, &canonical_work_path, &lock)
+    {
         let _ = std::fs::remove_file(&sidecar_path);
         warn!(
             command = command_name,
@@ -90,10 +97,11 @@ fn write_lock_metadata(
     sidecar_path: &Path,
     command_name: &str,
     canonical_work_path: &Path,
+    lock: &AdvisoryLockGuard,
 ) -> Result<(), AppError> {
     let metadata = WorkspaceLockMetadata {
         pid: std::process::id(),
-        holder_start_ticks: current_process_start_ticks(),
+        lock_owner: advisory_lock_owner_id(lock).to_owned(),
         command: command_name.to_owned(),
         started_at: Utc::now(),
         canonical_work_path: canonical_work_path.to_path_buf(),
@@ -115,7 +123,7 @@ fn write_lock_metadata(
             temp_path.display()
         ))
     })?;
-    std::fs::rename(&temp_path, sidecar_path).map_err(|error| {
+    publish_file_atomically(&temp_path, sidecar_path).map_err(|error| {
         let _ = std::fs::remove_file(&temp_path);
         AppError::Runtime(format!(
             "failed to publish workspace lock metadata '{}': {error}",
@@ -127,9 +135,16 @@ fn write_lock_metadata(
 fn render_busy_message(
     command_name: &str,
     canonical_work_path: &Path,
+    lock_path: &Path,
     sidecar_path: &Path,
 ) -> String {
-    match read_lock_metadata(sidecar_path).ok().filter(metadata_holder_is_live) {
+    let active_lock = read_advisory_lock_metadata(lock_path).ok();
+    match read_lock_metadata(sidecar_path)
+        .ok()
+        .zip(active_lock)
+        .filter(|(metadata, lock)| metadata.lock_owner == lock.owner_id)
+        .map(|(metadata, _)| metadata)
+    {
         Some(metadata) => format!(
             "cannot start {command_name}: workspace '{}' is already locked by '{}' (pid {}, started at {})",
             canonical_work_path.display(),
@@ -150,26 +165,6 @@ fn read_lock_metadata(path: &Path) -> std::io::Result<WorkspaceLockMetadata> {
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
-fn metadata_holder_is_live(metadata: &WorkspaceLockMetadata) -> bool {
-    #[cfg(unix)]
-    {
-        let rc = unsafe { libc::kill(metadata.pid as i32, 0) };
-        if rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM) {
-            return match metadata.holder_start_ticks {
-                Some(expected) => process_start_ticks(metadata.pid) == Some(expected),
-                None => false,
-            };
-        }
-        return false;
-    }
-
-    #[cfg(not(unix))]
-    {
-        let _ = metadata;
-        true
-    }
-}
-
 fn cleanup_sidecar_temp_files(work_path: &Path) {
     let prefix = format!("{WORKSPACE_LOCK_SIDECAR_FILE_NAME}.tmp.");
     let Ok(entries) = std::fs::read_dir(work_path) else {
@@ -185,57 +180,6 @@ fn cleanup_sidecar_temp_files(work_path: &Path) {
             let _ = std::fs::remove_file(path);
         }
     }
-}
-
-#[cfg(target_os = "linux")]
-fn current_process_start_ticks() -> Option<u64> {
-    process_start_ticks(std::process::id())
-}
-
-#[cfg(not(target_os = "linux"))]
-fn current_process_start_ticks() -> Option<u64> {
-    None
-}
-
-#[cfg(target_os = "linux")]
-fn process_start_ticks(pid: u32) -> Option<u64> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let (_, rest) = stat.rsplit_once(") ")?;
-    rest.split_whitespace().nth(19)?.parse().ok()
-}
-
-#[cfg(not(target_os = "linux"))]
-fn process_start_ticks(pid: u32) -> Option<u64> {
-    let _ = pid;
-    None
-}
-
-fn nearest_existing_canonical_path(path: &Path) -> std::io::Result<PathBuf> {
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir()?.join(path)
-    };
-
-    let mut existing = absolute.as_path();
-    while !existing.exists() {
-        existing = existing.parent().ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("no existing ancestor for path '{}'", path.display()),
-            )
-        })?;
-    }
-
-    let existing_canonical = std::fs::canonicalize(existing)?;
-    if existing == absolute {
-        return Ok(existing_canonical);
-    }
-
-    let suffix = absolute
-        .strip_prefix(existing)
-        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
-    Ok(existing_canonical.join(suffix))
 }
 
 #[cfg(test)]
@@ -304,7 +248,6 @@ mod tests {
         assert!(message.contains("started at"));
     }
 
-    #[cfg(unix)]
     #[test]
     fn stale_sidecar_metadata_falls_back_to_generic_busy_message() {
         let dir = tempdir().expect("tempdir");
