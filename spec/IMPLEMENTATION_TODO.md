@@ -4,7 +4,7 @@
 
 ## Foundation
 
-- [x] Создать `Cargo.toml` для бинаря `v8-test-runner`
+- [x] Создать `Cargo.toml` для бинаря `v8-runner`
 - [x] Добавить базовые зависимости: `clap`, `serde`, `serde_yaml`, `serde_json`, `thiserror`, `tracing`, `walkdir`, `sha2`, `quick-xml`, `tempfile`
 - [x] Создать `src/main.rs`
 - [x] Создать `src/app.rs`
@@ -29,7 +29,7 @@
 - [x] Валидировать `format`
 - [x] Валидировать `builder`
 - [x] Валидировать строку подключения
-- [x] Подготовить `examples/application.yaml`
+- [x] Подготовить `examples/v8project.yaml`
 
 ## Процессы и утилиты платформы
 
@@ -159,12 +159,12 @@
 
 ## MCP
 
-- [x] Добавить `v8-test-runner mcp serve stdio`
+- [x] Добавить `v8-runner mcp serve stdio`
 - [x] Поднять rmcp stdio tool server с tools-only capability и опубликовать 8 MCP tools
 - [x] Добавить bounded execution через semaphore и per-call timeout/cancel semantics для MCP path
 - [x] Подключить shared EDT actor к live MCP `check_syntax_edt`
 - [x] Добавить baseline/reset pre-dispatch для shared EDT session (`cd <workspace>` + probe `cd`)
-- [x] Добавить `v8-test-runner mcp serve http`
+- [x] Добавить `v8-runner mcp serve http`
 - [x] Поднять `axum` + `rmcp` streamable HTTP transport с stateful/stateless session semantics
 - [x] Переиспользовать shared EDT actor и общий execution semaphore для HTTP MCP sessions
 - [x] Добавить MCP runtime telemetry: semaphore wait time, EDT queue depth, restart count и shutdown/restart drain stats

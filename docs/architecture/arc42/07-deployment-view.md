@@ -5,8 +5,8 @@
 ```mermaid
 flowchart TB
     subgraph Host["Машина разработчика / локальный automation-host"]
-        Binary["Бинарь v8-test-runner"]
-        Config["application.yaml"]
+        Binary["Бинарь v8-runner"]
+        Config["v8project.yaml"]
         Sources["Исходники проекта"]
         Work["workPath\nлоги, temp, хеши, edt-workspace"]
         Binary --> Config
@@ -26,5 +26,5 @@ flowchart TB
 - процесс может запускать дочерние процессы;
 - настроенный `workPath` доступен на запись;
 - деревья исходников и пути к ИБ доступны локально;
-- отдельный database service самому `v8-test-runner` не нужен;
+- отдельный database service самому `v8-runner` не нужен;
 - HTTP listener нужен только для MCP transport и не участвует в обычном CLI path.

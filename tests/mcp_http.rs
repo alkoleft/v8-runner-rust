@@ -202,7 +202,7 @@ fn setup_http_designer_project_with_script(
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let platform_dir = dir.path().join("platform");
-    let config_path = dir.path().join("application.yaml");
+    let config_path = dir.path().join("v8project.yaml");
     let bind_address = reserve_local_address();
 
     fs::create_dir_all(&base_path).expect("base");
@@ -232,7 +232,7 @@ fn setup_http_ibcmd_dump_project(
     let work_path = dir.path().join("work");
     let ibcmd_path = dir.path().join("ibcmd");
     let calls_log = dir.path().join("ibcmd.calls.log");
-    let config_path = dir.path().join("application.yaml");
+    let config_path = dir.path().join("v8project.yaml");
     let bind_address = reserve_local_address();
 
     fs::create_dir_all(base_path.join("main")).expect("main");
@@ -271,7 +271,7 @@ fn setup_http_edt_project(
     let edt_path = edt_dir.join("1cedtcli");
     let command_log = dir.path().join("edt-commands.log");
     let lifecycle_log = dir.path().join("edt-lifecycle.log");
-    let config_path = dir.path().join("application.yaml");
+    let config_path = dir.path().join("v8project.yaml");
     let bind_address = reserve_local_address();
 
     fs::create_dir_all(base_path.join("main-edt")).expect("main edt");
@@ -310,7 +310,7 @@ struct HttpServerProcess {
 
 impl HttpServerProcess {
     async fn spawn(config_path: &Path, url: &str) -> Self {
-        let child = tokio::process::Command::new(cargo_bin("v8-test-runner"))
+        let child = tokio::process::Command::new(cargo_bin("v8-runner"))
             .arg("--config")
             .arg(config_path)
             .arg("mcp")
@@ -511,10 +511,10 @@ async fn wait_for_log_contains(path: &Path, needle: &str) {
 
 #[test]
 fn mcp_http_missing_config_reports_error_on_stderr() {
-    let output = std::process::Command::new(cargo_bin("v8-test-runner"))
+    let output = std::process::Command::new(cargo_bin("v8-runner"))
         .args([
             "--config",
-            "/definitely/missing/application.yaml",
+            "/definitely/missing/v8project.yaml",
             "mcp",
             "serve",
             "http",

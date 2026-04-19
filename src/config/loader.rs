@@ -4,6 +4,8 @@ use thiserror::Error;
 use crate::config::model::AppConfig;
 use crate::config::validate::{validate, ConfigValidationError};
 
+const DEFAULT_CONFIG_FILE_NAME: &str = "v8project.yaml";
+
 #[derive(Debug, Error)]
 pub enum ConfigLoadError {
     #[error("config file not found: {0}")]
@@ -68,22 +70,14 @@ fn resolve_config_path(config_path: Option<&str>) -> Result<std::path::PathBuf, 
         return Ok(path.to_path_buf());
     }
 
-    // Default search locations
-    let candidates = [
-        "application.yaml",
-        "application.yml",
-        "config/application.yaml",
-    ];
-    for candidate in &candidates {
-        let p = Path::new(candidate);
-        if p.exists() {
-            return Ok(p.to_path_buf());
-        }
+    let path = Path::new(DEFAULT_CONFIG_FILE_NAME);
+    if path.exists() {
+        return Ok(path.to_path_buf());
     }
 
-    Err(ConfigLoadError::NotFound(
-        "application.yaml (searched default locations)".to_string(),
-    ))
+    Err(ConfigLoadError::NotFound(format!(
+        "{DEFAULT_CONFIG_FILE_NAME} (default config file)"
+    )))
 }
 
 #[cfg(test)]
@@ -99,7 +93,7 @@ mod tests {
         let work = dir.path().join("work");
         let src = base.join("src");
         std::fs::create_dir_all(&src).expect("src dir");
-        let config_path = dir.path().join("application.yaml");
+        let config_path = dir.path().join("v8project.yaml");
         std::fs::write(
             &config_path,
             format!(
@@ -125,7 +119,7 @@ mod tests {
         let work = dir.path().join("work");
         let src = base.join("src");
         std::fs::create_dir_all(&src).expect("src dir");
-        let config_path = dir.path().join("application.yaml");
+        let config_path = dir.path().join("v8project.yaml");
         std::fs::write(
             &config_path,
             format!(
@@ -148,7 +142,7 @@ mod tests {
         let work = dir.path().join("work");
         let src = base.join("src");
         std::fs::create_dir_all(&src).expect("src dir");
-        let config_path = dir.path().join("application.yaml");
+        let config_path = dir.path().join("v8project.yaml");
         std::fs::write(
             &config_path,
             format!(
@@ -179,7 +173,7 @@ mod tests {
         std::fs::write(va.join("params.json"), "{}").expect("params");
         let config_dir = dir.path().join("cfg");
         std::fs::create_dir_all(&config_dir).expect("config dir");
-        let config_path = config_dir.join("application.yaml");
+        let config_path = config_dir.join("v8project.yaml");
         std::fs::write(
             &config_path,
             format!(
@@ -219,7 +213,7 @@ mod tests {
         let work = dir.path().join("work");
         let src = base.join("src");
         std::fs::create_dir_all(&src).expect("src dir");
-        let config_path = dir.path().join("application.yaml");
+        let config_path = dir.path().join("v8project.yaml");
         std::fs::write(
             &config_path,
             format!(
@@ -292,7 +286,7 @@ mod tests {
         let work = dir.path().join("work");
         let src = base.join("src");
         std::fs::create_dir_all(&src).expect("src dir");
-        let config_path = dir.path().join("application.yaml");
+        let config_path = dir.path().join("v8project.yaml");
         std::fs::write(
             &config_path,
             format!(
@@ -323,7 +317,7 @@ mod tests {
         let work = dir.path().join("work");
         let src = base.join("src");
         std::fs::create_dir_all(&src).expect("src dir");
-        let config_path = dir.path().join("application.yaml");
+        let config_path = dir.path().join("v8project.yaml");
         std::fs::write(
             &config_path,
             format!(
@@ -347,7 +341,7 @@ mod tests {
         let work = dir.path().join("work");
         let src = base.join("src");
         std::fs::create_dir_all(&src).expect("src dir");
-        let config_path = dir.path().join("application.yaml");
+        let config_path = dir.path().join("v8project.yaml");
         std::fs::write(
             &config_path,
             format!(

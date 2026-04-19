@@ -49,7 +49,7 @@ fn setup_project(script_body: &str) -> (tempfile::TempDir, PathBuf) {
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let install_dir = dir.path().join("platform");
-    let config_path = dir.path().join("application.yaml");
+    let config_path = dir.path().join("v8project.yaml");
 
     fs::create_dir_all(&base_path).expect("base");
     fs::create_dir_all(&work_path).expect("work");
@@ -72,7 +72,7 @@ fn setup_edt_project(script_body: &str) -> (tempfile::TempDir, PathBuf) {
     let work_path = dir.path().join("work");
     let install_dir = dir.path().join("platform");
     let edt_cli = dir.path().join("edt").join("1cedtcli");
-    let config_path = dir.path().join("application.yaml");
+    let config_path = dir.path().join("v8project.yaml");
 
     fs::create_dir_all(&base_path).expect("base");
     fs::create_dir_all(&work_path).expect("work");
@@ -96,7 +96,7 @@ fn syntax_designer_config_json_returns_clean_envelope() {
         "out=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"/Out\" ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$out\" ]; then printf '' > \"$out\"; fi\nprintf 'RAW_STDOUT\\n'\nexit 0",
     );
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -124,7 +124,7 @@ fn syntax_designer_modules_json_returns_structured_validation_failure() {
         "args=\"$*\"\nout=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"/Out\" ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif printf '%s' \"$args\" | grep -F -q -- '/CheckModules'; then\n  cat <<'LOG' > \"$out\"\n{CommonModules.TestModule(4,2)}: Ошибка компиляции\n{1}: context\nLOG\n  exit 101\nfi\nexit 0",
     );
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -159,7 +159,7 @@ fn syntax_text_output_hides_raw_stdout_and_prints_structured_issue() {
         "args=\"$*\"\nout=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"/Out\" ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nprintf 'RAW_STDOUT\\n'\nif printf '%s' \"$args\" | grep -F -q -- '/CheckModules'; then\n  cat <<'LOG' > \"$out\"\nCommonModules.TestModule Warning: потенциальная проблема\nLOG\n  exit 101\nfi\nexit 0",
     );
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -186,7 +186,7 @@ fn syntax_edt_json_returns_structured_edt_issues() {
         "out=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"--file\" ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$out\" ]; then cat <<'LOG' > \"$out\"\nERROR\tCommonModules.Test\t7\t2\tRule\tbad call\nLOG\nfi\nexit 1",
     );
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",

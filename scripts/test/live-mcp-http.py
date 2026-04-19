@@ -20,7 +20,7 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 
 CONFIG_VALUE = os.environ.get("V8TR_REAL_CONFIG")
 CONFIG_PATH = Path(CONFIG_VALUE) if CONFIG_VALUE else None
-BIN_PATH = Path(os.environ.get("V8TR_BIN", str(ROOT_DIR / "target/debug/v8-test-runner")))
+BIN_PATH = Path(os.environ.get("V8TR_BIN", str(ROOT_DIR / "target/debug/v8-runner")))
 MCP_URL = os.environ.get("V8TR_MCP_URL", "http://127.0.0.1:3000/mcp")
 SMOKE_MODULE = os.environ.get("V8TR_SMOKE_MODULE", "ЮТДымовыеТесты")
 EDT_PROJECT = os.environ.get("V8TR_EDT_PROJECT", "configuration")
@@ -32,9 +32,9 @@ SERVER_LOG = ROOT_DIR / "target/manual-tests/live-mcp-http/server.stderr.log"
 def ensure_binary() -> None:
     if BIN_PATH.exists() and os.access(BIN_PATH, os.X_OK):
         return
-    print("Building v8-test-runner binary...", file=sys.stderr)
+    print("Building v8-runner binary...", file=sys.stderr)
     subprocess.run(
-        ["cargo", "build", "--locked", "--bin", "v8-test-runner"],
+        ["cargo", "build", "--locked", "--bin", "v8-runner"],
         cwd=ROOT_DIR,
         check=True,
         stdout=subprocess.DEVNULL,
@@ -189,7 +189,7 @@ def main() -> int:
     if not CONFIG_PATH.is_file():
         print(
             f"Live config not found: {CONFIG_PATH}\n"
-            "Override it with V8TR_REAL_CONFIG=/abs/path/to/application.yaml",
+            "Override it with V8TR_REAL_CONFIG=/abs/path/to/v8project.yaml",
             file=sys.stderr,
         )
         return 2

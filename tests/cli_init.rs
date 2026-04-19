@@ -26,7 +26,7 @@ fn setup_designer_init_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBu
     let dir = tempdir().expect("tempdir");
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
-    let config_path = dir.path().join("application.yaml");
+    let config_path = dir.path().join("v8project.yaml");
     let v8_path = dir.path().join("1cv8");
     let infobase_path = dir.path().join("ib");
 
@@ -68,7 +68,7 @@ fn setup_edt_init_project(
     let dir = tempdir().expect("tempdir");
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
-    let config_path = dir.path().join("application.yaml");
+    let config_path = dir.path().join("v8project.yaml");
     let platform_path = dir
         .path()
         .join(if builder == "IBCMD" { "ibcmd" } else { "1cv8" });
@@ -126,7 +126,7 @@ fn setup_edt_init_project(
 fn init_designer_creates_infobase_and_skips_edt_workspace() {
     let (_dir, config_path, work_path, infobase_path) = setup_designer_init_project();
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args(["--config", &config_path.display().to_string(), "init"])
         .output()
@@ -145,7 +145,7 @@ fn init_ibcmd_creates_infobase_and_imports_edt_projects_in_order() {
     let (_dir, config_path, work_path, _base_path, _platform_path, edt_calls_log) =
         setup_edt_init_project("DESIGNER", "IBCMD", "__AUTO_FILE__");
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args(["--config", &config_path.display().to_string(), "init"])
         .output()
@@ -172,7 +172,7 @@ fn init_edt_imports_projects_in_configuration_then_extension_order() {
     let (_dir, config_path, work_path, base_path, _platform_path, edt_calls_log) =
         setup_edt_init_project("EDT", "DESIGNER", "__AUTO_FILE__");
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args(["--config", &config_path.display().to_string(), "init"])
         .output()
@@ -203,7 +203,7 @@ fn init_non_file_connection_keeps_running_workspace_step_and_returns_payload() {
     let (_dir, config_path, work_path, base_path, _platform_path, edt_calls_log) =
         setup_edt_init_project("EDT", "DESIGNER", "Srvr=demo;Ref=test");
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -238,7 +238,7 @@ fn init_skips_existing_workspace() {
     )
     .expect("marker");
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -269,7 +269,7 @@ fn init_retries_edt_import_when_previous_run_left_incomplete_workspace() {
         ),
     );
 
-    let first = std::process::Command::cargo_bin("v8-test-runner")
+    let first = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -304,7 +304,7 @@ fn init_retries_edt_import_when_previous_run_left_incomplete_workspace() {
         ),
     );
 
-    let second = std::process::Command::cargo_bin("v8-test-runner")
+    let second = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -336,7 +336,7 @@ fn init_rejects_workspace_path_that_is_not_a_directory() {
         setup_edt_init_project("EDT", "DESIGNER", "__AUTO_FILE__");
     fs::write(work_path.join("edt-workspace"), "not a dir\n").expect("workspace file");
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",

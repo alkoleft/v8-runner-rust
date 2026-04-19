@@ -23,7 +23,7 @@
 
 Default mandatory `test` stage uses `V8TR_DESIGNER_TEST_MODE=va`, so the canonical happy-path also requires these Vanessa Automation assets to be present:
 
-- `target/vanessa-automation-single.epf`
+- `tests/fixtures/vanessa-automation-single.epf`
 - `scripts/test/live-cli-designer.va-params.json`
 - `scripts/test/features/live-cli-designer`
 
@@ -43,9 +43,9 @@ bash scripts/test/ci-rust.sh
 
 Поведение:
 
-- `V8_TEST_RUNNER_CI_SCOPE=contract` или `full` запускает `cargo test --locked`
-- `V8_TEST_RUNNER_CI_SCOPE=runtime-locks` запускает только lock-focused regression subset
-- `V8_TEST_RUNNER_CI_SCOPE=happy-path` запускает обязательную цепочку `build -> syntax/check -> test -> package -> deploy-ready artifacts`
+- `V8_RUNNER_CI_SCOPE=contract` или `full` запускает `cargo test --locked`
+- `V8_RUNNER_CI_SCOPE=runtime-locks` запускает только lock-focused regression subset
+- `V8_RUNNER_CI_SCOPE=happy-path` запускает обязательную цепочку `build -> syntax/check -> test -> package -> deploy-ready artifacts`
 
 ### 2. Mandatory Linux/Windows happy-path
 
@@ -54,12 +54,12 @@ bash scripts/test/ci-rust.sh
 Canonical entrypoint:
 
 ```bash
-V8_TEST_RUNNER_CI_SCOPE=happy-path bash scripts/test/ci-rust.sh
+V8_RUNNER_CI_SCOPE=happy-path bash scripts/test/ci-rust.sh
 ```
 
 Реальный helper chain:
 
-1. `cargo build --locked --bin v8-test-runner`
+1. `cargo build --locked --bin v8-runner`
 2. `cargo check --locked --all-targets`
 3. `cargo test --locked`
 4. `bash scripts/test/live-cli-designer.sh`
@@ -112,7 +112,7 @@ bash scripts/test/live-cli-designer.sh
 
 Опциональные hook-переменные:
 
-- `V8TR_BIN` - путь к бинарю `v8-test-runner`
+- `V8TR_BIN` - путь к бинарю `v8-runner`
 - `V8TR_PLATFORM_PATH` - явный override пути до `1cv8`/`1cv8.exe`
 - `V8TR_DESIGNER_SMOKE_PROFILE=mandatory|extended` - mandatory по умолчанию; `extended` включает dump-only хвост
 - `V8TR_DESIGNER_TEST_MODE=va|module` - конкретизация текущего test-stage helper-а
@@ -150,7 +150,7 @@ Cross-platform hardening:
 
 ```bash
 bash scripts/test/ci-rust.sh
-V8_TEST_RUNNER_CI_SCOPE=happy-path bash scripts/test/ci-rust.sh
+V8_RUNNER_CI_SCOPE=happy-path bash scripts/test/ci-rust.sh
 python3 scripts/test/live-mcp-http.py
 bash scripts/test/live-cli-ibcmd.sh
 ```
@@ -160,7 +160,7 @@ bash scripts/test/live-cli-ibcmd.sh
 Для `ubuntu-latest` и `windows-latest` blocking должен использоваться один и тот же entrypoint:
 
 ```bash
-V8_TEST_RUNNER_CI_SCOPE=happy-path bash scripts/test/ci-rust.sh
+V8_RUNNER_CI_SCOPE=happy-path bash scripts/test/ci-rust.sh
 ```
 
 Install/bootstrap шаги для 1С, `ibsrv`, trusted/fork gating, artifact upload и branch filters пользователь добавит позже в workflow wiring.

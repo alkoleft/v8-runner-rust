@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-CI_SCOPE="${V8_TEST_RUNNER_CI_SCOPE:-contract}"
+CI_SCOPE="${V8_RUNNER_CI_SCOPE:-contract}"
 
 cd "$ROOT_DIR"
 
@@ -21,7 +21,7 @@ case "$CI_SCOPE" in
     bash "$ROOT_DIR/scripts/test/ci-happy-path.sh"
     ;;
   *)
-    echo "Unsupported V8_TEST_RUNNER_CI_SCOPE: $CI_SCOPE" >&2
+    echo "Unsupported V8_RUNNER_CI_SCOPE: $CI_SCOPE" >&2
     echo "Expected one of: contract, runtime-locks, happy-path" >&2
     exit 2
     ;;

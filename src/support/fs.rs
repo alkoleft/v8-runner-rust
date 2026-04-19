@@ -8,6 +8,12 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub const TOOL_NAME: &str = "v8-runner";
+
+pub fn is_known_tool_name(tool: &str) -> bool {
+    tool == TOOL_NAME
+}
+
 #[cfg(test)]
 thread_local! {
     static TEST_LOCK_WRITE_HOOK: std::cell::RefCell<Option<Box<dyn Fn()>>> =
@@ -114,7 +120,7 @@ fn try_acquire_advisory_lock_impl(path: &Path) -> std::io::Result<AdvisoryLockGu
     }
 
     let metadata = AdvisoryLockMetadata {
-        tool: "v8-test-runner".to_owned(),
+        tool: TOOL_NAME.to_owned(),
         pid: std::process::id(),
         owner_id: Uuid::new_v4().to_string(),
         created_at: Utc::now(),
@@ -173,9 +179,9 @@ fn stale_advisory_lock_can_be_removed(path: &Path) -> bool {
     match read_advisory_lock_metadata(path) {
         Ok(metadata) => !lock_holder_is_live(metadata.pid),
         Err(error) if error.kind() == ErrorKind::NotFound => true,
-        Err(error) if error.kind() == ErrorKind::InvalidData => {
-            std::fs::metadata(path).map(|metadata| metadata.len() > 0).unwrap_or(true)
-        }
+        Err(error) if error.kind() == ErrorKind::InvalidData => std::fs::metadata(path)
+            .map(|metadata| metadata.len() > 0)
+            .unwrap_or(true),
         Err(_) => false,
     }
 }
@@ -353,7 +359,7 @@ pub fn write_temp_dir_metadata(
     target_identity: &str,
 ) -> std::io::Result<()> {
     let metadata = TempDirMetadata {
-        tool: "v8-test-runner".to_owned(),
+        tool: TOOL_NAME.to_owned(),
         kind,
         run_id: run_id.to_owned(),
         target_path: target_path.to_path_buf(),
@@ -607,6 +613,7 @@ mod tests {
         acquire_advisory_lock, advisory_lock_owner_id, publish_file_atomically,
         publish_file_atomically_impl, read_advisory_lock_metadata, remove_path_if_exists,
         try_acquire_advisory_lock, try_acquire_advisory_lock_with_hook, AdvisoryLockMetadata,
+        TOOL_NAME,
     };
     use std::fs;
     use std::io::ErrorKind;
@@ -730,7 +737,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let lock_path = dir.path().join("live.lock");
         let metadata = AdvisoryLockMetadata {
-            tool: "v8-test-runner".to_owned(),
+            tool: TOOL_NAME.to_owned(),
             pid: std::process::id(),
             owner_id: "live-owner".to_owned(),
             created_at: chrono::Utc::now(),
@@ -745,7 +752,9 @@ mod tests {
 
         assert_eq!(error.kind(), ErrorKind::WouldBlock);
         assert_eq!(
-            read_advisory_lock_metadata(&lock_path).expect("metadata").owner_id,
+            read_advisory_lock_metadata(&lock_path)
+                .expect("metadata")
+                .owner_id,
             "live-owner"
         );
     }

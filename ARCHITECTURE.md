@@ -4,7 +4,7 @@
 
 ## Overview
 
-`v8-test-runner` is a Rust CLI for orchestrating local 1C platform operations. The current codebase is organized into eight main layers:
+`v8-runner` is a Rust CLI for orchestrating local 1C platform operations. The current codebase is organized into eight main layers:
 
 1. `cli` parses arguments, maps them into transport-neutral requests, and owns command-level text/json rendering.
 2. `config` loads and validates YAML configuration.

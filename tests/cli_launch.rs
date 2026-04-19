@@ -66,7 +66,7 @@ fn setup_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let install_dir = dir.path().join("platform");
-    let config_path = dir.path().join("application.yaml");
+    let config_path = dir.path().join("v8project.yaml");
 
     fs::create_dir_all(&base_path).expect("base");
     fs::create_dir_all(&work_path).expect("work");
@@ -83,7 +83,7 @@ fn setup_versioned_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
     let work_path = dir.path().join("work");
     let root_path = dir.path().join("platform-root");
     let version = root_path.join("8.3.25.1234");
-    let config_path = dir.path().join("application.yaml");
+    let config_path = dir.path().join("v8project.yaml");
 
     fs::create_dir_all(&base_path).expect("base");
     fs::create_dir_all(&work_path).expect("work");
@@ -103,7 +103,7 @@ fn setup_versioned_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
 #[test]
 fn launch_json_returns_pid_and_selected_binary() {
     let (_dir, config_path, install_dir, _work_path) = setup_project();
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -137,7 +137,7 @@ fn launch_text_includes_binary_pid_and_cleans_platform_logs() {
     let stale_log = logs_dir.join("stale.log");
     fs::write(&stale_log, "old log").expect("stale log");
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -168,7 +168,7 @@ fn launch_text_includes_binary_pid_and_cleans_platform_logs() {
 #[test]
 fn launch_thick_uses_v8_binary() {
     let (_dir, config_path, install_dir, _work_path) = setup_project();
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -193,7 +193,7 @@ fn launch_thick_uses_v8_binary() {
 #[test]
 fn launch_uses_versioned_root_hint() {
     let (_dir, config_path, version_dir, _work_path) = setup_versioned_project();
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -224,7 +224,7 @@ fn launch_fails_when_process_exits_during_startup_probe() {
     make_executable(&staged);
     fs::rename(&staged, &thin).expect("rename");
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -250,7 +250,7 @@ fn launch_json_failure_keeps_stdout_empty_and_exit_code() {
     make_executable(&staged);
     fs::rename(&staged, &thin).expect("rename");
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -276,7 +276,7 @@ fn launch_ordinary_supports_typed_keys_and_filters_reserved_raw_duplicates() {
     let args_log = install_dir.join("ordinary.args.log");
     write_logging_script(&install_dir.join("bin").join("1cv8"), &args_log);
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",

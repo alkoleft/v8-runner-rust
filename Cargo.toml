@@ -1,10 +1,10 @@
 [package]
-name = "v8-test-runner"
+name = "v8-runner"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "v8-test-runner"
+name = "v8-runner"
 path = "src/main.rs"
 
 [dependencies]

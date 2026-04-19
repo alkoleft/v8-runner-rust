@@ -90,7 +90,7 @@ fn setup_project() -> (tempfile::TempDir, PathBuf) {
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let platform_path = dir.path().join("platform");
-    let config_path = dir.path().join("application.yaml");
+    let config_path = dir.path().join("v8project.yaml");
 
     fs::create_dir_all(&base_path).expect("base");
     fs::create_dir_all(&work_path).expect("work");
@@ -114,7 +114,7 @@ fn setup_edt_project_with_options(
     let work_path = dir.path().join("work");
     let edt_dir = dir.path().join("edt");
     let edt_path = edt_dir.join("1cedtcli");
-    let config_path = dir.path().join("application.yaml");
+    let config_path = dir.path().join("v8project.yaml");
 
     fs::create_dir_all(base_path.join("main-edt")).expect("main edt");
     fs::create_dir_all(&work_path).expect("work");
@@ -146,7 +146,7 @@ fn setup_designer_project_with_options(
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let platform_dir = dir.path().join("platform");
-    let config_path = dir.path().join("application.yaml");
+    let config_path = dir.path().join("v8project.yaml");
 
     fs::create_dir_all(&base_path).expect("base");
     fs::create_dir_all(&work_path).expect("work");
@@ -175,7 +175,7 @@ fn setup_hybrid_edt_project_with_options(
     let edt_dir = dir.path().join("edt");
     let edt_path = edt_dir.join("1cedtcli");
     let platform_dir = dir.path().join("platform");
-    let config_path = dir.path().join("application.yaml");
+    let config_path = dir.path().join("v8project.yaml");
 
     fs::create_dir_all(base_path.join("main-edt")).expect("main edt");
     fs::create_dir_all(&work_path).expect("work");
@@ -220,7 +220,7 @@ fn setup_designer_suite_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathB
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let platform_dir = dir.path().join("platform");
-    let config_path = dir.path().join("application.yaml");
+    let config_path = dir.path().join("v8project.yaml");
     let designer_calls_log = dir.path().join("designer.calls.log");
     let enterprise_calls_log = dir.path().join("enterprise.calls.log");
     let captured_config = dir.path().join("captured-config.json");
@@ -290,7 +290,7 @@ fn setup_ibcmd_dump_project(fail_pattern: Option<&str>) -> (tempfile::TempDir, P
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let ibcmd_path = dir.path().join("ibcmd");
-    let config_path = dir.path().join("application.yaml");
+    let config_path = dir.path().join("v8project.yaml");
     let calls_log = dir.path().join("ibcmd.calls.log");
 
     fs::create_dir_all(base_path.join("main")).expect("main");
@@ -411,10 +411,10 @@ fn schema_supports_type(value: &Value, expected: &str) -> bool {
 
 #[test]
 fn mcp_missing_config_reports_error_on_stderr() {
-    let output = std::process::Command::new(cargo_bin("v8-test-runner"))
+    let output = std::process::Command::new(cargo_bin("v8-runner"))
         .args([
             "--config",
-            "/definitely/missing/application.yaml",
+            "/definitely/missing/v8project.yaml",
             "mcp",
             "serve",
             "stdio",
@@ -434,7 +434,7 @@ fn mcp_missing_config_reports_error_on_stderr() {
 async fn mcp_stdio_exposes_expected_tools_and_capabilities() {
     let (_dir, config_path) = setup_project();
     let (transport, _stderr) = TokioChildProcess::builder(
-        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -562,7 +562,7 @@ async fn mcp_stdio_exposes_expected_tools_and_capabilities() {
 async fn mcp_stdio_returns_structured_business_failure() {
     let (_dir, config_path) = setup_project();
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -597,7 +597,7 @@ async fn mcp_stdio_run_all_tests_returns_success_payload() {
     let (_dir, config_path, designer_calls_log, enterprise_calls_log, _captured_config) =
         setup_designer_suite_project();
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -634,7 +634,7 @@ async fn mcp_stdio_run_module_tests_preserves_module_scope() {
     let (_dir, config_path, _designer_calls_log, enterprise_calls_log, captured_config) =
         setup_designer_suite_project();
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -675,7 +675,7 @@ async fn mcp_stdio_build_project_runs_full_rebuild_successfully() {
     let (_dir, config_path, designer_calls_log, _enterprise_calls_log, _captured_config) =
         setup_designer_suite_project();
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -710,7 +710,7 @@ async fn mcp_stdio_launch_app_returns_success_for_thin_client() {
     let (_dir, config_path, _designer_calls_log, enterprise_calls_log, _captured_config) =
         setup_designer_suite_project();
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -745,7 +745,7 @@ async fn mcp_stdio_check_syntax_designer_modules_returns_structured_issues() {
     let (_dir, config_path, designer_calls_log, _enterprise_calls_log, _captured_config) =
         setup_designer_suite_project();
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -787,7 +787,7 @@ async fn mcp_stdio_dump_config_full_returns_success_payload() {
     let (_dir, config_path, designer_calls_log, _enterprise_calls_log, _captured_config) =
         setup_designer_suite_project();
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -824,7 +824,7 @@ async fn mcp_stdio_dump_config_partial_designer_preserves_partial_mode() {
     let (_dir, config_path, designer_calls_log, _enterprise_calls_log, _captured_config) =
         setup_designer_suite_project();
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -865,7 +865,7 @@ async fn mcp_stdio_dump_config_partial_designer_preserves_partial_mode() {
 async fn mcp_stdio_dump_config_partial_ibcmd_returns_degraded_success() {
     let (_dir, config_path, calls_log) = setup_ibcmd_dump_project(None);
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -910,7 +910,7 @@ async fn mcp_stdio_dump_config_partial_ibcmd_returns_degraded_success() {
 async fn mcp_stdio_dump_config_partial_ibcmd_preserves_partial_mode_on_failure() {
     let (_dir, config_path, calls_log) = setup_ibcmd_dump_project(Some("--sync"));
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -958,7 +958,7 @@ async fn mcp_stdio_dump_config_partial_ibcmd_preserves_partial_mode_on_failure()
 async fn mcp_stdio_returns_transport_timeout_for_edt_syntax() {
     let (_dir, config_path) = setup_edt_project();
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -1009,7 +1009,7 @@ async fn mcp_stdio_edt_syntax_resets_interactive_state_before_each_call() {
     let validate_handler = "if [ \"$cwd\" != \"$workspace\" ]; then\n  printf 'cwd mismatch:%s\\n' \"$cwd\"\nelif [ \"$dirty\" -ne 0 ]; then\n  printf 'state leaked\\n'\nelse\n  if [ -n \"$out\" ]; then : > \"$out\"; fi\n  dirty=1\nfi\nprompt";
     let (dir, config_path) = setup_edt_project_with_options(validate_handler, 200, 1);
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -1059,7 +1059,7 @@ async fn mcp_stdio_cancels_running_edt_tool_and_retains_capacity_until_detached_
     );
     let (_project, config_path) = setup_edt_project_with_options(&validate_handler, 1200, 1);
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -1133,7 +1133,7 @@ async fn mcp_stdio_edt_syntax_preserves_issues_found_when_stdout_is_non_empty() 
     let validate_handler = "printf 'informational stdout\\n'\nif [ -n \"$out\" ]; then printf 'ERROR\\tCatalogs.Items\\t1\\t2\\tUnusedVariables\\tunused variable\\n' > \"$out\"; fi\nprompt";
     let (_dir, config_path) = setup_edt_project_with_options(validate_handler, 200, 1);
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -1169,7 +1169,7 @@ async fn mcp_stdio_edt_syntax_treats_stdout_without_issues_as_tool_failure() {
         "printf 'unexpected stdout\\n'\nif [ -n \"$out\" ]; then : > \"$out\"; fi\nprompt";
     let (_dir, config_path) = setup_edt_project_with_options(validate_handler, 200, 1);
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -1208,7 +1208,7 @@ async fn mcp_stdio_cancels_running_standard_tool_and_retains_capacity_until_deta
     );
     let (_project, config_path) = setup_designer_project_with_options(&script_body, 20, 1);
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -1286,7 +1286,7 @@ async fn mcp_stdio_queued_timeout_reports_full_payload_for_bounded_tool() {
     let (_project, config_path) =
         setup_hybrid_edt_project_with_options(&edt_script_body, &platform_script_body, 20, 1);
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -1356,7 +1356,7 @@ async fn mcp_stdio_standard_tools_do_not_inherit_edt_running_timeout() {
         1,
     );
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-test-runner")).configure(|cmd| {
+        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")

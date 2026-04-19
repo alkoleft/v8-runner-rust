@@ -1,9 +1,9 @@
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser, Debug)]
-#[command(name = "v8-test-runner", about = "1C:Enterprise test runner CLI")]
+#[command(name = "v8-runner", about = "1C:Enterprise test runner CLI")]
 pub struct Cli {
-    /// Path to YAML config file
+    /// Path to YAML config file. Defaults to ./v8project.yaml
     #[arg(long, global = true, env = "V8TR_CONFIG")]
     pub config: Option<String>,
 
@@ -331,7 +331,7 @@ mod tests {
     #[test]
     fn syntax_config_extension_conflicts_with_all_extensions() {
         let result = Cli::try_parse_from([
-            "v8-test-runner",
+            "v8-runner",
             "syntax",
             "designer-config",
             "--extension",
@@ -345,7 +345,7 @@ mod tests {
     #[test]
     fn syntax_config_sync_calls_require_extended_modules_check() {
         let result = Cli::try_parse_from([
-            "v8-test-runner",
+            "v8-runner",
             "syntax",
             "designer-config",
             "--check-use-synchronous-calls",
@@ -356,14 +356,14 @@ mod tests {
 
     #[test]
     fn parses_init_command() {
-        let cli = Cli::try_parse_from(["v8-test-runner", "init"]).expect("parse");
+        let cli = Cli::try_parse_from(["v8-runner", "init"]).expect("parse");
         assert!(matches!(cli.command, Command::Init));
     }
 
     #[test]
     fn parses_extensions_command_with_names() {
         let cli = Cli::try_parse_from([
-            "v8-test-runner",
+            "v8-runner",
             "extensions",
             "--name",
             "client_mcp",
@@ -382,7 +382,7 @@ mod tests {
 
     #[test]
     fn parses_load_command_with_default_mode() {
-        let cli = Cli::try_parse_from(["v8-test-runner", "load", "--path", "dist/main.cf"])
+        let cli = Cli::try_parse_from(["v8-runner", "load", "--path", "dist/main.cf"])
             .expect("parse load");
 
         match cli.command {
@@ -404,7 +404,7 @@ mod tests {
     #[test]
     fn parses_load_command_with_merge_mode() {
         let cli = Cli::try_parse_from([
-            "v8-test-runner",
+            "v8-runner",
             "load",
             "--path",
             "dist/ext.cfe",
@@ -435,7 +435,7 @@ mod tests {
 
     #[test]
     fn parses_test_yaxunit_module_command() {
-        let cli = Cli::try_parse_from(["v8-test-runner", "test", "yaxunit", "module", "Foo"])
+        let cli = Cli::try_parse_from(["v8-runner", "test", "yaxunit", "module", "Foo"])
             .expect("parse test yaxunit");
 
         match cli.command {
@@ -457,7 +457,7 @@ mod tests {
 
     #[test]
     fn parses_test_va_command() {
-        let cli = Cli::try_parse_from(["v8-test-runner", "test", "va"]).expect("parse test va");
+        let cli = Cli::try_parse_from(["v8-runner", "test", "va"]).expect("parse test va");
 
         match cli.command {
             Command::Test(args) => {
@@ -471,7 +471,7 @@ mod tests {
     #[test]
     fn parses_test_command_with_launch_options() {
         let cli = Cli::try_parse_from([
-            "v8-test-runner",
+            "v8-runner",
             "test",
             "--c",
             "RunUnitTests=config.json",
@@ -503,7 +503,7 @@ mod tests {
     #[test]
     fn parses_launch_command_with_typed_and_raw_keys() {
         let cli = Cli::try_parse_from([
-            "v8-test-runner",
+            "v8-runner",
             "launch",
             "--mode",
             "ordinary",
@@ -537,7 +537,7 @@ mod tests {
     #[test]
     fn syntax_modules_all_extensions_conflicts_with_extension() {
         let result = Cli::try_parse_from([
-            "v8-test-runner",
+            "v8-runner",
             "syntax",
             "designer-modules",
             "--server",
@@ -551,7 +551,7 @@ mod tests {
 
     #[test]
     fn syntax_config_accepts_zero_mode_flags() {
-        let cli = Cli::try_parse_from(["v8-test-runner", "syntax", "designer-config"])
+        let cli = Cli::try_parse_from(["v8-runner", "syntax", "designer-config"])
             .expect("parse syntax config");
 
         match cli.command {
@@ -568,8 +568,8 @@ mod tests {
 
     #[test]
     fn parses_mcp_stdio_command() {
-        let cli = Cli::try_parse_from(["v8-test-runner", "mcp", "serve", "stdio"])
-            .expect("parse mcp stdio");
+        let cli =
+            Cli::try_parse_from(["v8-runner", "mcp", "serve", "stdio"]).expect("parse mcp stdio");
 
         match cli.command {
             Command::Mcp(args) => match args.command {
@@ -583,8 +583,8 @@ mod tests {
 
     #[test]
     fn parses_mcp_http_command() {
-        let cli = Cli::try_parse_from(["v8-test-runner", "mcp", "serve", "http"])
-            .expect("parse mcp http");
+        let cli =
+            Cli::try_parse_from(["v8-runner", "mcp", "serve", "http"]).expect("parse mcp http");
 
         match cli.command {
             Command::Mcp(args) => match args.command {
@@ -598,7 +598,7 @@ mod tests {
 
     #[test]
     fn parses_make_cf_command() {
-        let cli = Cli::try_parse_from(["v8-test-runner", "make", "--output", "dist/main.cf"])
+        let cli = Cli::try_parse_from(["v8-runner", "make", "--output", "dist/main.cf"])
             .expect("parse make");
 
         match cli.command {
@@ -618,7 +618,7 @@ mod tests {
     #[test]
     fn parses_make_cfe_command_with_extension_and_source_set() {
         let cli = Cli::try_parse_from([
-            "v8-test-runner",
+            "v8-runner",
             "make",
             "--output",
             "dist/ext.cfe",
@@ -645,7 +645,7 @@ mod tests {
 
     #[test]
     fn parses_artifacts_alias_command() {
-        let cli = Cli::try_parse_from(["v8-test-runner", "artifacts", "--output", "dist/main.cf"])
+        let cli = Cli::try_parse_from(["v8-runner", "artifacts", "--output", "dist/main.cf"])
             .expect("parse artifacts alias");
 
         assert!(matches!(cli.command, Command::Artifacts(_)));

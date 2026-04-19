@@ -1,8 +1,8 @@
-# v8-test-runner
+# v8-runner
 
 Локальная автоматизация 1С для разработчиков и AI-ассистентов.
 
-`v8-test-runner` — это CLI-приложение на Rust и MCP-сервер для рутинных операций в разработке на 1С: загрузки исходников в информационную базу, запуска YaXUnit- и Vanessa Automation-тестов, выгрузки конфигурации обратно в файлы, синтаксических проверок и запуска инструментов 1С.
+`v8-runner` — это CLI-приложение на Rust и MCP-сервер для рутинных операций в разработке на 1С: загрузки исходников в информационную базу, запуска YaXUnit- и Vanessa Automation-тестов, выгрузки конфигурации обратно в файлы, синтаксических проверок и запуска инструментов 1С.
 
 Инструмент закрывает сразу два типа сценариев:
 
@@ -37,11 +37,11 @@
 cargo build --release
 ```
 
-Создайте минимальный `application.yaml`:
+Создайте минимальный `v8project.yaml`:
 
 ```yaml
 basePath: /path/to/project/sources
-workPath: /tmp/v8-test-runner/my-project
+workPath: /tmp/v8-runner/my-project
 format: DESIGNER
 builder: DESIGNER
 connection: "File=/path/to/infobase"
@@ -70,11 +70,11 @@ tests:
 Запустите первые команды:
 
 ```bash
-./target/release/v8-test-runner --config ./application.yaml build
-./target/release/v8-test-runner --config ./application.yaml init
-./target/release/v8-test-runner --config ./application.yaml test yaxunit all
-./target/release/v8-test-runner --config ./application.yaml test va
-./target/release/v8-test-runner --config ./application.yaml mcp serve stdio
+./target/release/v8-runner build
+./target/release/v8-runner init
+./target/release/v8-runner test yaxunit all
+./target/release/v8-runner test va
+./target/release/v8-runner mcp serve stdio
 ```
 
 Если конфиг валиден, но локальные утилиты 1С не установлены, вы должны получить ошибку поиска платформенной утилиты или ошибку времени выполнения, а не ошибку парсинга YAML или CLI. Это тоже полезная первая проверка: она означает, что связка настроена корректно, а не хватает только локального 1С-окружения.
@@ -111,9 +111,9 @@ tests:
 ## Карта документации
 
 - [docs/CAPABILITIES.md](docs/CAPABILITIES.md): основной пользовательский справочник по командам, MCP-инструментам, матрицам поддержки и ограничениям.
-- [docs/CONFIGURATION.md](docs/CONFIGURATION.md): полный справочник по `application.yaml` и всем поддержанным ключам конфигурации.
+- [docs/CONFIGURATION.md](docs/CONFIGURATION.md): полный справочник по `v8project.yaml` и всем поддержанным ключам конфигурации.
 - [docs/DEEP_DIVE.md](docs/DEEP_DIVE.md): объяснение внутренних эксплуатационных потоков без дублирования полного справочника команд.
-- [examples/application.yaml](examples/application.yaml): полный пример конфига с опциональными секциями и значениями по умолчанию.
+- [examples/v8project.yaml](examples/v8project.yaml): полный пример конфига с опциональными секциями и значениями по умолчанию.
 - [ARCHITECTURE.md](ARCHITECTURE.md): карта модулей и внутренних границ для контрибьюторов.
 - [docs/decisions/0001-granitsy-podderzhki-ibcmd-kak-ogranichennogo-backend.md](docs/decisions/0001-granitsy-podderzhki-ibcmd-kak-ogranichennogo-backend.md): принятая граница поддержки `IBCMD` как ограниченного backend.
 

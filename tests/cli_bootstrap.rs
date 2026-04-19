@@ -7,9 +7,9 @@ use tempfile::tempdir;
 
 #[test]
 fn missing_config_in_text_mode_returns_validation_error_on_stderr() {
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
-        .args(["--config", "/definitely/missing/application.yaml", "build"])
+        .args(["--config", "/definitely/missing/v8project.yaml", "build"])
         .output()
         .expect("run command");
 
@@ -21,11 +21,11 @@ fn missing_config_in_text_mode_returns_validation_error_on_stderr() {
 
 #[test]
 fn missing_config_in_json_mode_keeps_error_envelope_shape() {
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
-            "/definitely/missing/application.yaml",
+            "/definitely/missing/v8project.yaml",
             "--output",
             "json",
             "build",
@@ -42,14 +42,14 @@ fn missing_config_in_json_mode_keeps_error_envelope_shape() {
     assert_eq!(payload["duration_ms"], 0);
     assert_eq!(
         payload["data"]["message"],
-        "config file not found: /definitely/missing/application.yaml"
+        "config file not found: /definitely/missing/v8project.yaml"
     );
 }
 
 #[test]
-fn mcp_rejects_clean_before_execution_flag() {
+fn default_config_path_uses_v8project_yaml_from_current_dir() {
     let dir = tempdir().expect("tempdir");
-    let config_path = dir.path().join("application.yaml");
+    let config_path = dir.path().join("v8project.yaml");
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     fs::create_dir_all(&base_path).expect("base");
@@ -64,7 +64,38 @@ fn mcp_rejects_clean_before_execution_flag() {
     )
     .expect("config");
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .current_dir(dir.path())
+        .args(["--output", "json", "build"])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["command"], "build");
+}
+
+#[test]
+fn mcp_rejects_clean_before_execution_flag() {
+    let dir = tempdir().expect("tempdir");
+    let config_path = dir.path().join("v8project.yaml");
+    let base_path = dir.path().join("project");
+    let work_path = dir.path().join("work");
+    fs::create_dir_all(&base_path).expect("base");
+    fs::create_dir_all(&work_path).expect("work");
+    fs::write(
+        &config_path,
+        format!(
+            "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: .\n",
+            base_path.display(),
+            work_path.display()
+        ),
+    )
+    .expect("config");
+
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",

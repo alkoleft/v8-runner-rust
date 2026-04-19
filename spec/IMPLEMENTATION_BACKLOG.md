@@ -46,7 +46,7 @@
 - `Cargo.lock`
 - `README.md`
 - `.gitignore`
-- `examples/application.yaml`
+- `examples/v8project.yaml`
 
 ### Исходники
 
@@ -153,7 +153,7 @@ tests/
 
 Имя бинаря:
 
-- `v8-test-runner`
+- `v8-runner`
 
 Глобальные флаги:
 
@@ -167,28 +167,28 @@ tests/
 ### Команды волны 1
 
 ```bash
-v8-test-runner build [--full-rebuild]
+v8-runner build [--full-rebuild]
 
-v8-test-runner test all
-v8-test-runner test module <MODULE_NAME>
+v8-runner test all
+v8-runner test module <MODULE_NAME>
 
-v8-test-runner dump --mode <full|incremental|partial> \
+v8-runner dump --mode <full|incremental|partial> \
   [--source-set <NAME>] \
   [--extension <NAME>] \
   [--object <TYPE:NAME> ...]
 
-v8-test-runner syntax designer-config
-v8-test-runner syntax designer-modules
+v8-runner syntax designer-config
+v8-runner syntax designer-modules
 
-v8-test-runner launch --mode <designer|thin|thick>
+v8-runner launch --mode <designer|thin|thick>
 ```
 
 ### Команды волны 2
 
 ```bash
-v8-test-runner syntax edt --project <EDT_PROJECT_NAME> ...
+v8-runner syntax edt --project <EDT_PROJECT_NAME> ...
 
-v8-test-runner build --format edt [--full-rebuild]
+v8-runner build --format edt [--full-rebuild]
 ```
 
 Примечания по API:
@@ -426,7 +426,7 @@ Definition of done:
 
 1. Покрыть unit-тестами parsers и change detection.
 2. Добавить integration tests для CLI surface.
-3. Подготовить `examples/application.yaml`.
+3. Подготовить `examples/v8project.yaml`.
 4. Обновить `README.md` по запуску CLI.
 
 Модули и файлы:
@@ -436,7 +436,7 @@ Definition of done:
 - `tests/cli_dump.rs`
 - `tests/fixtures/...`
 - `README.md`
-- `examples/application.yaml`
+- `examples/v8project.yaml`
 
 Definition of done:
 
@@ -595,7 +595,7 @@ Definition of done:
 
 Волна 1 считается завершенной, если:
 
-- есть один бинарь `v8-test-runner`;
+- есть один бинарь `v8-runner`;
 - команда `build` работает для `DESIGNER`;
 - команды `test all` и `test module` работают и возвращают структурированный output;
 - `dump`, `syntax designer-config`, `syntax designer-modules`, `launch` доступны;

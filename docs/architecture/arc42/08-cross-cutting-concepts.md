@@ -2,7 +2,7 @@
 
 ### 8.1 Модель конфигурации
 
-- `application.yaml` — главный входной контракт.
+- `v8project.yaml` — главный входной контракт.
 - Валидация конфигурации заранее отклоняет неподдерживаемые комбинации.
 - `source-set` — базовая единица оркестрации.
 - `ExecutionContext` дополняет конфигурацию invocation-метаданными: команда, transport, correlation metadata и transport-specific flags.

@@ -1,6 +1,6 @@
 # Возможности
 
-Публичный справочник по тому, что `v8-test-runner` поддерживает на текущий момент.
+Публичный справочник по тому, что `v8-runner` поддерживает на текущий момент.
 
 Последняя факт-проверка: `2026-03-25` по свежей локальной сборке `cargo build`, актуальному CLI `--help`, `src/config/model.rs` и реальной MCP-поверхности запросов в `src/mcp/request.rs` / `src/mcp/service.rs`.
 
@@ -33,7 +33,7 @@
 
 | Опция | Значение |
 | --- | --- |
-| `--config <CONFIG>` | Путь к YAML-конфигу; также доступен через `V8TR_CONFIG` |
+| `--config <CONFIG>` | Путь к YAML-конфигу; по умолчанию `./v8project.yaml`, также доступен через `V8TR_CONFIG` |
 | `--output <OUTPUT>` | `text` или `json` |
 | `--log-level <LOG_LEVEL>` | `error`, `warn`, `info`, `debug`, `trace` |
 | `--clean-before-execution` | Очистить лог-файлы перед запуском команды |
@@ -43,7 +43,7 @@
 ## Команда `build`
 
 ```bash
-v8-test-runner build [--full-rebuild]
+v8-runner build [--full-rebuild]
 ```
 
 Поведение:
@@ -68,7 +68,7 @@ v8-test-runner build [--full-rebuild]
 ## Команда `init`
 
 ```bash
-v8-test-runner init
+v8-runner init
 ```
 
 Поведение:
@@ -85,7 +85,7 @@ v8-test-runner init
 ## Команда `extensions`
 
 ```bash
-v8-test-runner extensions [--name <SOURCE_SET>...]
+v8-runner extensions [--name <SOURCE_SET>...]
 ```
 
 Поведение:
@@ -99,9 +99,9 @@ v8-test-runner extensions [--name <SOURCE_SET>...]
 ## Команда `test`
 
 ```bash
-v8-test-runner test yaxunit [--full] all
-v8-test-runner test yaxunit [--full] module <NAME>
-v8-test-runner test va
+v8-runner test yaxunit [--full] all
+v8-runner test yaxunit [--full] module <NAME>
+v8-runner test va
 ```
 
 Поведение:
@@ -129,7 +129,7 @@ v8-test-runner test va
 ## Команда `dump`
 
 ```bash
-v8-test-runner dump --mode <full|incremental|partial> [--source-set <NAME>] [--extension <EXTENSION>] [--object <TYPE:NAME>...]
+v8-runner dump --mode <full|incremental|partial> [--source-set <NAME>] [--extension <EXTENSION>] [--object <TYPE:NAME>...]
 ```
 
 Поведение:
@@ -148,9 +148,9 @@ v8-test-runner dump --mode <full|incremental|partial> [--source-set <NAME>] [--e
 ## Команда `syntax`
 
 ```bash
-v8-test-runner syntax designer-config [FLAGS]
-v8-test-runner syntax designer-modules [FLAGS]
-v8-test-runner syntax edt [--project <PROJECT>...]
+v8-runner syntax designer-config [FLAGS]
+v8-runner syntax designer-modules [FLAGS]
+v8-runner syntax edt [--project <PROJECT>...]
 ```
 
 ### `syntax designer-config`
@@ -198,7 +198,7 @@ v8-test-runner syntax edt [--project <PROJECT>...]
 ## Команда `launch`
 
 ```bash
-v8-test-runner launch --mode <designer|thin|thick>
+v8-runner launch --mode <designer|thin|thick>
 ```
 
 Поведение:
@@ -211,8 +211,8 @@ v8-test-runner launch --mode <designer|thin|thick>
 ## MCP
 
 ```bash
-v8-test-runner mcp serve stdio
-v8-test-runner mcp serve http
+v8-runner mcp serve stdio
+v8-runner mcp serve http
 ```
 
 Общее поведение транспортов:
@@ -260,7 +260,7 @@ v8-test-runner mcp serve http
 
 ## Конфигурация
 
-Полный справочник по всем ключам `application.yaml` вынесен в [CONFIGURATION.md](CONFIGURATION.md), чтобы не дублировать его здесь.
+Полный справочник по всем ключам `v8project.yaml` вынесен в [CONFIGURATION.md](CONFIGURATION.md), чтобы не дублировать его здесь.
 
 Чаще всего при чтении этого файла нужны только такие опорные ключи:
 

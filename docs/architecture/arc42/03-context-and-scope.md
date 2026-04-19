@@ -6,8 +6,8 @@
 
 ```mermaid
 flowchart LR
-    Developer["Разработчик 1С"] --> CLI["CLI v8-test-runner"]
-    Assistant["AI-ассистент / MCP-клиент"] --> MCP["MCP-сервер v8-test-runner"]
+    Developer["Разработчик 1С"] --> CLI["CLI v8-runner"]
+    Assistant["AI-ассистент / MCP-клиент"] --> MCP["MCP-сервер v8-runner"]
     CLI --> Core["Оркестрация use case"]
     MCP --> Core
     Core --> Sources["Исходники проекта\nDESIGNER или EDT"]

@@ -152,7 +152,7 @@ fn setup_project_with_additional_launch_keys(
     let base_path = dir.path().join("project");
     let work_path = dir.path().join(work_dir_name);
     let install_dir = dir.path().join("platform");
-    let config_path = dir.path().join("application.yaml");
+    let config_path = dir.path().join("v8project.yaml");
     let build_calls = dir.path().join("build.calls.log");
     let test_calls = dir.path().join("test.calls.log");
     let captured_config = dir.path().join("captured-config.json");
@@ -199,7 +199,7 @@ fn setup_va_project(
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let install_dir = dir.path().join("platform");
-    let config_path = dir.path().join("application.yaml");
+    let config_path = dir.path().join("v8project.yaml");
     let build_calls = dir.path().join("build.calls.log");
     let test_calls = dir.path().join("test.calls.log");
     let captured_params = dir.path().join("captured-va-params.json");
@@ -283,7 +283,7 @@ fn test_all_full_json_runs_build_first_and_returns_report() {
         None,
     );
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -336,7 +336,7 @@ fn test_run_appends_enterprise_additional_launch_keys() {
             &["/TESTMANAGER", "/TCUser", "ci-user"],
         );
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -384,7 +384,7 @@ fn test_accepts_explicit_client_mode_for_vanessa_and_yaxunit() {
         ),
     );
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -416,7 +416,7 @@ fn test_rejects_c_and_execute_on_test_surface() {
     let (_dir, config_path, _build_calls, test_calls, _captured_config) =
         setup_project("work", JUNIT_SMOKE_REPORT_FIXTURE, "", 0, false, 5, None);
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -442,7 +442,7 @@ fn test_va_builds_vanessa_command_and_overlay() {
         &["/TESTMANAGER", "/VAUSER", "ci-user"],
     );
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -502,7 +502,7 @@ fn test_module_build_failure_prevents_enterprise_launch() {
     let (_dir, config_path, _build_calls, test_calls, _captured_config) =
         setup_project("work", JUNIT_SMOKE_REPORT_FIXTURE, "", 0, true, 5, None);
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -542,7 +542,7 @@ stack trace line 2</failure>
     let (_dir, config_path, _build_calls, _test_calls, captured_config) =
         setup_project("work", report, YAXUNIT_LOG_FIXTURE, 0, false, 5, None);
 
-    let compact = std::process::Command::cargo_bin("v8-test-runner")
+    let compact = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -582,7 +582,7 @@ stack trace line 2</failure>
         .expect("captured config")
         .contains("Foo"));
 
-    let full = std::process::Command::cargo_bin("v8-test-runner")
+    let full = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -620,7 +620,7 @@ fn test_timeout_retains_artifacts() {
     let (_dir, config_path, _build_calls, _test_calls, _captured_config) =
         setup_project("work", JUNIT_SMOKE_REPORT_FIXTURE, "", 0, false, 1, Some(2));
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",

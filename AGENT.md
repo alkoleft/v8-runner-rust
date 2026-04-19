@@ -1,4 +1,4 @@
-# Agent Rules for v8-test-runner-rust
+# Agent Rules for v8-runner
 
 ## Task Workflow
 

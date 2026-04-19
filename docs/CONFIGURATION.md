@@ -1,6 +1,6 @@
 # Конфигурация
 
-Этот документ описывает все поддержанные ключи `application.yaml`, их текущий статус и ограничения реализации.
+Этот документ описывает все поддержанные ключи `v8project.yaml`, их текущий статус и ограничения реализации.
 
 Цель документа:
 
@@ -12,7 +12,7 @@
 
 ```yaml
 basePath: /path/to/project
-workPath: /tmp/v8-test-runner/project
+workPath: /tmp/v8-runner/project
 format: EDT
 builder: DESIGNER
 connection: "File=/path/to/ib"

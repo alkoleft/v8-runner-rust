@@ -1,0 +1,89 @@
+# Example configuration for v8-runner
+# Copy to v8project.yaml and adjust paths for your project
+
+# Root path of the project sources (Designer format)
+basePath: /path/to/project/sources
+
+# Working directory for temp files and hash storages
+workPath: /tmp/v8-runner/my-project
+
+# Source format: DESIGNER or EDT
+format: DESIGNER
+
+# Builder backend: DESIGNER or IBCMD
+builder: DESIGNER
+
+# 1C infobase connection string
+connection: "File=/path/to/infobase"
+
+# Source sets: list of configurations and extensions
+source-set:
+  - name: main
+    purpose: CONFIGURATION
+    path: .  # relative to basePath
+
+  # Uncomment to add an extension:
+  # - name: my-extension
+  #   purpose: EXTENSION
+  #   path: extensions/my-extension
+
+# Build pipeline settings (optional)
+build:
+  # Switch to full load when the expanded partial file list grows beyond this number.
+  partialLoadThreshold: 20
+
+# Platform tools configuration (optional)
+tools:
+  platform:
+    # Installation hint can point either to a binary:
+    # path: /opt/1cv8/x86_64/8.3.25.1234/1cv8
+    #
+    # ...or to an installation root with versioned subdirectories:
+    # path: /opt/1cv8/x86_64
+    #
+    # ...or you can omit path and use exact version for auto-discovery:
+    version: "8.3.27.1859"
+
+  edt_cli:
+    # Path can point to the binary directly:
+    # path: /opt/1C/1CE/components/1c-edt-2025.2.3+30-x86_64/1cedt/1cedtcli
+    #
+    # ...or it can be a version-like discovery hint:
+    path: 2025.2.3
+    # version: 2025.2.3
+    interactive-mode: false
+    auto-start: false
+    startup_timeout_ms: 300000
+    command_timeout_ms: 300000
+
+  enterprise:
+    additional-launch-keys:
+      - /TESTMANAGER
+
+tests:
+  execution_timeout_seconds: 300
+  yaxunit:
+    timeouts:
+      total_ms: 300000
+  va:
+    epf_path: /path/to/vanessa.epf
+    params_path: /path/to/va-params.json
+    profile: smoke
+    fail_fast: true
+    timeouts:
+      total_ms: 300000
+    profiles:
+      smoke:
+        feature_path: /path/to/features
+
+# MCP transport defaults (parsed and validated now; transport wiring comes later)
+mcp:
+  http:
+    bind_address: 127.0.0.1:3000
+    path: /mcp
+    stateful_sessions: true
+    max_sessions: 64
+    idle_ttl_secs: 900
+  execution:
+    max_concurrent_calls: 1
+    shutdown_grace_period_secs: 30

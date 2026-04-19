@@ -7,7 +7,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CONFIG_PATH="${V8TR_REAL_CONFIG:-}"
 SMOKE_MODULE="${V8TR_SMOKE_MODULE:-ЮТДымовыеТесты}"
 ENABLE_LAUNCH="${V8TR_ENABLE_LAUNCH:-0}"
-BIN_PATH="${V8TR_BIN:-$ROOT_DIR/target/debug/v8-test-runner}"
+BIN_PATH="${V8TR_BIN:-$ROOT_DIR/target/debug/v8-runner}"
 
 if [[ -z "$CONFIG_PATH" ]]; then
     echo "V8TR_REAL_CONFIG is not set." >&2
@@ -22,8 +22,8 @@ if [[ ! -f "$CONFIG_PATH" ]]; then
 fi
 
 if [[ ! -x "$BIN_PATH" ]]; then
-    echo "Building v8-test-runner binary..." >&2
-    (cd "$ROOT_DIR" && cargo build --locked --bin v8-test-runner >/dev/null)
+    echo "Building v8-runner binary..." >&2
+    (cd "$ROOT_DIR" && cargo build --locked --bin v8-runner >/dev/null)
 fi
 
 run_cli() {

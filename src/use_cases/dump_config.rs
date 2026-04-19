@@ -19,8 +19,9 @@ use crate::platform::result::PlatformCommandResult;
 use crate::platform::utilities::PlatformUtilities;
 use crate::support::error::AppError;
 use crate::support::fs::{
-    acquire_advisory_lock, ensure_dir, metadata_sidecar_path, read_temp_dir_metadata,
-    remove_path_if_exists, replace_dir_atomically, write_temp_dir_metadata, TempDirKind,
+    acquire_advisory_lock, ensure_dir, is_known_tool_name, metadata_sidecar_path,
+    read_temp_dir_metadata, remove_path_if_exists, replace_dir_atomically, write_temp_dir_metadata,
+    TempDirKind,
 };
 use crate::support::path::{
     hashed_lock_path, is_filesystem_root, nearest_existing_canonical_path, stable_path_identity,
@@ -881,7 +882,8 @@ fn cleanup_orphan_dirs(resolved: &ResolvedDumpTarget) -> Result<(), AppError> {
         let Ok(metadata) = read_temp_dir_metadata(&path) else {
             continue;
         };
-        if metadata.tool != "v8-test-runner" || metadata.target_identity != resolved.target_identity
+        if !is_known_tool_name(&metadata.tool)
+            || metadata.target_identity != resolved.target_identity
         {
             continue;
         }

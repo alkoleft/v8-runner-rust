@@ -61,7 +61,7 @@ fn setup_project() -> (
     let dir = tempdir().expect("tempdir");
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
-    let config_path = dir.path().join("application.yaml");
+    let config_path = dir.path().join("v8project.yaml");
     let binary_path = dir.path().join("ibcmd");
     let calls_log = dir.path().join("calls.log");
 
@@ -86,7 +86,7 @@ fn setup_project() -> (
 fn dump_ibcmd_full_json_success() {
     let (_dir, config_path, _binary_path, _work_path, base_path, calls_log) = setup_project();
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -115,7 +115,7 @@ fn dump_ibcmd_incremental_json_success() {
     let (_dir, config_path, _binary_path, _work_path, base_path, calls_log) = setup_project();
     fs::remove_dir_all(base_path.join("main")).expect("remove target");
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -143,7 +143,7 @@ fn dump_ibcmd_incremental_json_success() {
 fn dump_ibcmd_partial_json_success_uses_degraded_fallback() {
     let (_dir, config_path, _binary_path, _work_path, _base_path, calls_log) = setup_project();
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -179,7 +179,7 @@ fn dump_ibcmd_partial_failure_keeps_partial_mode_and_warning() {
     let (_dir, config_path, binary_path, _work_path, _base_path, calls_log) = setup_project();
     write_ibcmd_script(&binary_path, &calls_log, Some("--sync"));
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",

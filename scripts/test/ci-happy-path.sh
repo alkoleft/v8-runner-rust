@@ -4,8 +4,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TARGET_OS_LABEL="${V8TR_CI_TARGET_OS:-$(uname -s | tr '[:upper:]' '[:lower:]')}"
-BIN_PATH_UNIX="$ROOT_DIR/target/debug/v8-test-runner"
-BIN_PATH_WINDOWS="$ROOT_DIR/target/debug/v8-test-runner.exe"
+BIN_PATH_UNIX="$ROOT_DIR/target/debug/v8-runner"
+BIN_PATH_WINDOWS="$ROOT_DIR/target/debug/v8-runner.exe"
 
 stage() {
     echo
@@ -31,7 +31,7 @@ detect_bin_path() {
 cd "$ROOT_DIR"
 
 stage "build cargo binary"
-cargo build --locked --bin v8-test-runner
+cargo build --locked --bin v8-runner
 
 stage "syntax/check cargo workspace"
 cargo check --locked --all-targets

@@ -90,7 +90,7 @@ fn setup_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
     let dir = tempdir().expect("tempdir");
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
-    let config_path = dir.path().join("application.yaml");
+    let config_path = dir.path().join("v8project.yaml");
     let binary_path = dir.path().join("1cv8");
 
     fs::create_dir_all(base_path.join("main").join("Catalogs.Items")).expect("main");
@@ -138,7 +138,7 @@ fn setup_ibcmd_project() -> (
     let dir = tempdir().expect("tempdir");
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
-    let config_path = dir.path().join("application.yaml");
+    let config_path = dir.path().join("v8project.yaml");
     let binary_path = dir.path().join("ibcmd");
     let calls_log = dir.path().join("calls.log");
 
@@ -195,7 +195,7 @@ fn build_json_failure_returns_step_payload() {
     let (_dir, config_path, binary_path, _work_path) = setup_project();
     write_build_script(&binary_path, Some("/UpdateDBCfg -Extension ext"));
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -230,7 +230,7 @@ fn build_ibcmd_json_failure_reports_operation_target_and_exit_code() {
     let (_dir, config_path, binary_path, _work_path, _base_path, calls_log) = setup_ibcmd_project();
     write_ibcmd_script(&binary_path, &calls_log, Some("config apply"));
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -258,7 +258,7 @@ fn build_text_failure_does_not_print_success_footer() {
     let (_dir, config_path, binary_path, _work_path) = setup_project();
     write_build_script(&binary_path, Some("/UpdateDBCfg -Extension ext"));
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -279,7 +279,7 @@ fn build_text_failure_does_not_print_success_footer() {
 fn build_text_stdout_includes_action_logs() {
     let (_dir, config_path, _binary_path, _work_path) = setup_project();
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args(["--config", &config_path.display().to_string(), "build"])
         .output()
@@ -298,7 +298,7 @@ fn build_text_stdout_includes_action_logs() {
 fn build_json_writes_action_log_file_without_polluting_stdout() {
     let (_dir, config_path, _binary_path, work_path) = setup_project();
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -325,7 +325,7 @@ fn build_ibcmd_full_rebuild_invokes_import_and_apply() {
     let (_dir, config_path, _binary_path, _work_path, _base_path, calls_log) =
         setup_ibcmd_project();
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -346,7 +346,7 @@ fn build_ibcmd_full_rebuild_invokes_import_and_apply() {
 fn build_ibcmd_partial_uses_relative_positional_args_and_base_dir() {
     let (_dir, config_path, _binary_path, _work_path, base_path, calls_log) = setup_ibcmd_project();
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -364,7 +364,7 @@ fn build_ibcmd_partial_uses_relative_positional_args_and_base_dir() {
         .join("ObjectModule.bsl");
     fs::write(&changed_file, "procedure Test() // changed endprocedure").expect("change");
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args(["--config", &config_path.display().to_string(), "build"])
         .output()
@@ -390,7 +390,7 @@ fn build_ibcmd_server_connection_fails_at_config_load() {
         "Srvr=server;Ref=main",
     );
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args(["--config", &config_path.display().to_string(), "build"])
         .output()
@@ -412,7 +412,7 @@ fn build_ibcmd_accepts_raw_f_connection() {
         "/F /tmp/ib",
     );
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",

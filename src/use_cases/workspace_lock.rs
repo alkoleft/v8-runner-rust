@@ -14,8 +14,8 @@ use crate::support::fs::{
 };
 use crate::support::path::nearest_existing_canonical_path;
 
-const WORKSPACE_LOCK_FILE_NAME: &str = ".v8-test-runner.workspace.lock";
-const WORKSPACE_LOCK_SIDECAR_FILE_NAME: &str = ".v8-test-runner.workspace.lock.json";
+const WORKSPACE_LOCK_FILE_NAME: &str = ".v8-runner.workspace.lock";
+const WORKSPACE_LOCK_SIDECAR_FILE_NAME: &str = ".v8-runner.workspace.lock.json";
 
 #[derive(Debug)]
 pub(crate) struct WorkspaceLockGuard {
@@ -295,7 +295,7 @@ mod tests {
         fs::create_dir_all(&work).expect("work dir");
         let config = sample_config(&work);
         let canonical_work = std::fs::canonicalize(&work).expect("canonical");
-        let sidecar = canonical_work.join(".v8-test-runner.workspace.lock.json");
+        let sidecar = canonical_work.join(".v8-runner.workspace.lock.json");
 
         let guard = hold_lock(&config, "build");
         assert!(workspace_lock_path(&canonical_work).exists());

@@ -23,8 +23,8 @@ use crate::platform::result::PlatformCommandResult;
 use crate::platform::utilities::PlatformUtilities;
 use crate::support::error::AppError;
 use crate::support::fs::{
-    acquire_advisory_lock, ensure_dir, metadata_sidecar_path, read_temp_dir_metadata,
-    remove_path_if_exists, replace_dir_atomically, replace_file_atomically,
+    acquire_advisory_lock, ensure_dir, is_known_tool_name, metadata_sidecar_path,
+    read_temp_dir_metadata, remove_path_if_exists, replace_dir_atomically, replace_file_atomically,
     write_temp_dir_metadata, TempDirKind,
 };
 use crate::support::path::{
@@ -908,7 +908,7 @@ fn cleanup_orphan_files(resolved: &ResolvedArtifactsTarget) -> Result<(), AppErr
             let Ok(metadata) = read_temp_dir_metadata(&path) else {
                 continue;
             };
-            if metadata.tool != "v8-test-runner"
+            if !is_known_tool_name(&metadata.tool)
                 || metadata.target_identity != resolved.target_identity
             {
                 continue;
@@ -1327,7 +1327,7 @@ mod tests {
         let script = dir.path().join("1cv8");
         write_script(
             &script,
-            "out=''\nprev=''\nload_state=0\ndump_state=0\nname=''\nfor arg in \"$@\"; do\n  if [ \"$prev\" = '/LoadExternalDataProcessorOrReportFromFiles' ]; then load_state=1; prev=\"$arg\"; continue; fi\n  if [ \"$load_state\" = 1 ]; then printf 'external' > \"$arg\"; load_state=0; fi\n  if [ \"$prev\" = '/DumpExternalDataProcessorOrReportToFiles' ]; then dump_state=1; prev=\"$arg\"; continue; fi\n  if [ \"$dump_state\" = 1 ]; then case \"$arg\" in *Alpha.xml) name='Alpha' ;; *Beta.xml) name='Beta' ;; *) name='Unknown' ;; esac; printf '<ExternalDataProcessor><Properties><Name>%s</Name></Properties></ExternalDataProcessor>' \"$name\" > \"$arg\"; dump_state=0; fi\n  if [ \"$prev\" = '/Out' ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$out\" ]; then printf 'designer log' > \"$out\"; fi\nexit 0",
+            "out=''\nprev=''\nload_state=0\ndump_state=0\nname=''\nfor arg in \"$@\"; do\n  if [ \"$prev\" = '/LoadExternalDataProcessorOrReportFromFiles' ]; then load_state=1; prev=\"$arg\"; continue; fi\n  if [ \"$load_state\" = 1 ]; then printf 'external' > \"$arg\"; load_state=0; fi\n  if [ \"$prev\" = '/DumpExternalDataProcessorOrReportToFiles' ]; then dump_state=1; fi\n  if [ \"$dump_state\" = 1 ]; then case \"$arg\" in *Alpha.xml) name='Alpha' ;; *Beta.xml) name='Beta' ;; *) name='Unknown' ;; esac; printf '<ExternalDataProcessor><Properties><Name>%s</Name></Properties></ExternalDataProcessor>' \"$name\" > \"$arg\"; dump_state=0; fi\n  if [ \"$prev\" = '/Out' ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$out\" ]; then printf 'designer log' > \"$out\"; fi\nexit 0",
         );
         let base = dir.path().join("base");
         let work = dir.path().join("work");
@@ -1382,7 +1382,7 @@ mod tests {
         let script = dir.path().join("1cv8");
         write_script(
             &script,
-            "out=''\nprev=''\nload_state=0\ndump_state=0\nname=''\nfor arg in \"$@\"; do\n  if [ \"$prev\" = '/LoadExternalDataProcessorOrReportFromFiles' ]; then load_state=1; prev=\"$arg\"; continue; fi\n  if [ \"$load_state\" = 1 ]; then printf 'external' > \"$arg\"; load_state=0; fi\n  if [ \"$prev\" = '/DumpExternalDataProcessorOrReportToFiles' ]; then dump_state=1; prev=\"$arg\"; continue; fi\n  if [ \"$dump_state\" = 1 ]; then case \"$arg\" in *Alpha.xml) name='Alpha' ;; *) name='Unknown' ;; esac; printf '<ExternalDataProcessor><Properties><Name>%s</Name></Properties></ExternalDataProcessor>' \"$name\" > \"$arg\"; dump_state=0; fi\n  if [ \"$prev\" = '/Out' ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$out\" ]; then printf 'designer log' > \"$out\"; fi\nexit 0",
+            "out=''\nprev=''\nload_state=0\ndump_state=0\nname=''\nfor arg in \"$@\"; do\n  if [ \"$prev\" = '/LoadExternalDataProcessorOrReportFromFiles' ]; then load_state=1; prev=\"$arg\"; continue; fi\n  if [ \"$load_state\" = 1 ]; then printf 'external' > \"$arg\"; load_state=0; fi\n  if [ \"$prev\" = '/DumpExternalDataProcessorOrReportToFiles' ]; then dump_state=1; fi\n  if [ \"$dump_state\" = 1 ]; then case \"$arg\" in *Alpha.xml) name='Alpha' ;; *) name='Unknown' ;; esac; printf '<ExternalDataProcessor><Properties><Name>%s</Name></Properties></ExternalDataProcessor>' \"$name\" > \"$arg\"; dump_state=0; fi\n  if [ \"$prev\" = '/Out' ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$out\" ]; then printf 'designer log' > \"$out\"; fi\nexit 0",
         );
         let base = dir.path().join("base");
         let work = dir.path().join("work");

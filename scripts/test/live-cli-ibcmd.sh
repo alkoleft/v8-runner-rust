@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 IBCMD_CONFIG_PATH="${V8TR_IBCMD_REAL_CONFIG:-}"
-BIN_PATH="${V8TR_BIN:-$ROOT_DIR/target/debug/v8-test-runner}"
+BIN_PATH="${V8TR_BIN:-$ROOT_DIR/target/debug/v8-runner}"
 
 if [[ -z "$IBCMD_CONFIG_PATH" ]]; then
     echo "SKIPPED: V8TR_IBCMD_REAL_CONFIG is not set."
@@ -34,8 +34,8 @@ if ! rg -q "^connection:\s*['\"]?(File=|/F[[:space:]]+)" "$IBCMD_CONFIG_PATH"; t
 fi
 
 if [[ ! -x "$BIN_PATH" ]]; then
-    echo "Building v8-test-runner binary..." >&2
-    (cd "$ROOT_DIR" && cargo build --locked --bin v8-test-runner >/dev/null)
+    echo "Building v8-runner binary..." >&2
+    (cd "$ROOT_DIR" && cargo build --locked --bin v8-runner >/dev/null)
 fi
 
 run_cli() {

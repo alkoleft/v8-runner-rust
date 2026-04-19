@@ -2,7 +2,7 @@
 
 ## Summary
 
-- Добавить в текущий бинарь отдельные режимы `v8-test-runner mcp serve stdio` и `v8-test-runner mcp serve http`.
+- Добавить в текущий бинарь отдельные режимы `v8-runner mcp serve stdio` и `v8-runner mcp serve http`.
 - Реализовать MCP поверх `rmcp`, сохранив 8 tool-методов и входную семантику из `kotlin-example/.../McpServer.kt`.
 - Не переиспользовать CLI `Envelope` и `clap`-типы в MCP. Ввести transport-neutral request/service слой и отдельные MCP result structs.
 - Включить в MCP-этап недостающий функциональный gap: `dump_config` в режиме `PARTIAL`.
@@ -34,7 +34,7 @@
 
 ## Stage 2. MCP stdio MVP
 
-- [x] 2026-03-20: Добавить `v8-test-runner mcp serve stdio`.
+- [x] 2026-03-20: Добавить `v8-runner mcp serve stdio`.
   - CLI surface расширен nested-командой `mcp serve stdio`, а `app.rs` получил отдельный bootstrap path без CLI presenter/json envelope.
   - MCP bootstrap errors теперь печатаются в `stderr`, а обычный CLI bootstrap остался без изменений.
 - [x] 2026-03-20: Поднять `rmcp` tool server только с tools-capability, без resources и prompts.
@@ -84,14 +84,14 @@
 
 ## Stage 4. HTTP Transport
 
-- [x] 2026-03-20: Добавить `v8-test-runner mcp serve http`.
+- [x] 2026-03-20: Добавить `v8-runner mcp serve http`.
   - CLI surface расширен nested-командой `mcp serve http`, а `app.rs` получил общий MCP bootstrap path для stdio/HTTP без CLI presenter/json envelope.
   - MCP HTTP bootstrap errors, как и stdio path, печатаются в `stderr`, а action logging остаётся file-only в `workPath/logs/mcp/actions.log`.
 - [x] 2026-03-20: Поднять `axum` + `rmcp` streamable HTTP transport.
   - `src/mcp/server.rs` теперь содержит transport-aware `McpToolServer`, который используется и для stdio, и для HTTP, сохраняя общий `McpService`, global semaphore и shared `EdtSessionManager`.
   - Поверх `rmcp::transport::StreamableHttpService` добавлен thin HTTP wrapper, который перехватывает только transport-level admission cases: `stateful` non-`initialize` POST без `Mcp-Session-Id` возвращает deterministic `400`, а переполнение `max_sessions` на новом `initialize` возвращает `503 Service Unavailable`.
 - [x] 2026-03-20: Явно зафиксировать HTTP defaults.
-  - Defaults остаются источником правды для live HTTP transport и задокументированы в typed config/model validation, `examples/application.yaml` и `README.md`.
+  - Defaults остаются источником правды для live HTTP transport и задокументированы в typed config/model validation, `examples/v8project.yaml` и `README.md`.
   - `bind_address=127.0.0.1:3000`
   - `path=/mcp`
   - `stateful_sessions=true`
@@ -127,8 +127,8 @@
 ## Public Changes
 
 - Новый CLI surface:
-  - `v8-test-runner mcp serve stdio`
-  - `v8-test-runner mcp serve http`
+  - `v8-runner mcp serve stdio`
+  - `v8-runner mcp serve http`
 - Новые config keys в `mcp.*` и `tools.edt_cli.*`.
 - Новый внутренний transport-neutral API между CLI/MCP и use case-слоем.
 - Новый shared EDT actor только для MCP path.

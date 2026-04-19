@@ -25,7 +25,7 @@ fn setup_extensions_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) 
     let dir = tempdir().expect("tempdir");
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
-    let config_path = dir.path().join("application.yaml");
+    let config_path = dir.path().join("v8project.yaml");
     let ibcmd_path = dir.path().join("ibcmd");
     let calls_log = dir.path().join("ibcmd.calls.log");
 
@@ -64,7 +64,7 @@ fn setup_extensions_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) 
 fn extensions_command_updates_all_extension_properties() {
     let (_dir, config_path, calls_log, _ibcmd_path) = setup_extensions_project();
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -93,7 +93,7 @@ fn extensions_command_updates_all_extension_properties() {
 fn extensions_command_filters_by_requested_source_set_names() {
     let (_dir, config_path, calls_log, _ibcmd_path) = setup_extensions_project();
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
@@ -117,7 +117,7 @@ fn extensions_command_json_failure_reports_operation_target_and_exit_code() {
     let (_dir, config_path, _calls_log, ibcmd_path) = setup_extensions_project();
     write_script(&ibcmd_path, "echo 'cannot update extension' >&2\nexit 17");
 
-    let output = std::process::Command::cargo_bin("v8-test-runner")
+    let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
             "--config",
