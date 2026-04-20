@@ -40,7 +40,5 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 
 [profile.release]
 opt-level = "z"
-lto = true
-codegen-units = 1
 panic = "abort"
 strip = "symbols"
