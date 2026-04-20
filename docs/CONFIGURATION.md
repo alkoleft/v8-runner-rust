@@ -173,7 +173,8 @@ tests:
 
 Ограничения:
 
-- `format=EDT` сейчас требует `builder=DESIGNER`.
+- `builder=IBCMD` требует файловую строку подключения и остаётся ограниченным backend для сценариев `init`, `build`, `dump`, `extensions`.
+- Для `format=EDT` команда `build` сначала экспортирует EDT-проект в Designer-файлы под `workPath/designer/<name>`, затем загружает результат выбранным backend.
 
 ## Опциональные секции
 

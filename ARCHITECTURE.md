@@ -83,7 +83,7 @@ Important staging note:
 `build` and `dump` use cases dispatch by `builder`:
 
 - `builder=DESIGNER` uses the existing `DesignerDsl`.
-- `builder=IBCMD` uses `IbcmdDsl` with `config import/apply` for build and `config export` for dump.
+- `builder=IBCMD` uses `IbcmdDsl` with `config import/apply` for build and `config export` for dump; for EDT build, the EDT export step still produces Designer-format files first.
 
 Constraints to keep in mind:
 

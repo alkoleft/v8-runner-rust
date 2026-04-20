@@ -104,9 +104,9 @@ tests:
 | Сценарий | Текущая поддержка |
 | --- | --- |
 | `config init` | Создание `v8project.yaml` в текущем каталоге; автопоиск Designer/EDT source-set; `--force` для перезаписи |
-| `init` | `format=DESIGNER` с `builder=DESIGNER` или `IBCMD`; `format=EDT` с `builder=DESIGNER` |
+| `init` | `format=DESIGNER` или `format=EDT` с `builder=DESIGNER` или `IBCMD`; для `IBCMD` только файловая ИБ |
 | `extensions` | Обновление свойств расширений для EDT и Designer-проектов по настроенным extension `source-set`; только файловая ИБ |
-| `build` | `format=DESIGNER` с `builder=DESIGNER` или `IBCMD`; `format=EDT` с `builder=DESIGNER` |
+| `build` | `format=DESIGNER` или `format=EDT` с `builder=DESIGNER` или `IBCMD`; EDT сначала экспортируется в Designer-файлы |
 | `load` | `.cf` и `.cfe` артефакты; только `format=DESIGNER` с `builder=DESIGNER`; `--mode load` и `--mode merge` |
 | `test yaxunit` | Следует матрице `build` и всегда сначала запускает `build` |
 | `test va` | `tests.va` с выбранным профилем, `epf_path` и `params_path`; всегда сначала запускает `build` |

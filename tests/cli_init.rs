@@ -168,6 +168,37 @@ fn init_ibcmd_creates_infobase_and_imports_edt_projects_in_order() {
 }
 
 #[test]
+fn init_edt_with_ibcmd_creates_infobase_and_imports_projects_in_order() {
+    let (_dir, config_path, work_path, base_path, _platform_path, edt_calls_log) =
+        setup_edt_init_project("EDT", "IBCMD", "__AUTO_FILE__");
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args(["--config", &config_path.display().to_string(), "init"])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let config = fs::read_to_string(&config_path).expect("config");
+    let connection_line = config
+        .lines()
+        .find(|line| line.starts_with("connection:"))
+        .expect("connection line");
+    let infobase_dir = connection_line
+        .split("File=")
+        .nth(1)
+        .expect("file path")
+        .trim_matches('\'');
+    assert!(Path::new(infobase_dir).join("1Cv8.1CD").exists());
+    assert!(work_path.join("edt-workspace").exists());
+    let calls = fs::read_to_string(edt_calls_log).expect("calls");
+    let lines: Vec<_> = calls.lines().collect();
+    assert_eq!(lines.len(), 2);
+    assert!(lines[0].contains(&base_path.join("main").display().to_string()));
+    assert!(lines[1].contains(&base_path.join("ext").display().to_string()));
+}
+
+#[test]
 fn init_edt_imports_projects_in_configuration_then_extension_order() {
     let (_dir, config_path, work_path, base_path, _platform_path, edt_calls_log) =
         setup_edt_init_project("EDT", "DESIGNER", "__AUTO_FILE__");

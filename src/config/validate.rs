@@ -47,9 +47,6 @@ pub enum ConfigValidationError {
     #[error("IBCMD builder requires a file-based connection string (File=... or /F <path>)")]
     IbcmdRequiresFileConnection,
 
-    #[error("EDT format requires builder=DESIGNER")]
-    EdtRequiresDesignerBuilder,
-
     #[error("format EDT requires at least one source-set with a valid EDT project path")]
     EdtNoProjects,
 
@@ -331,11 +328,7 @@ fn is_reserved_workdir_name(name: &str) -> bool {
     )
 }
 
-fn validate_matrix(config: &AppConfig) -> Result<(), ConfigValidationError> {
-    if config.format == SourceFormat::Edt && config.builder == BuilderBackend::Ibcmd {
-        return Err(ConfigValidationError::EdtRequiresDesignerBuilder);
-    }
-
+fn validate_matrix(_config: &AppConfig) -> Result<(), ConfigValidationError> {
     Ok(())
 }
 
@@ -728,7 +721,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_edt_with_ibcmd_builder() {
+    fn allows_edt_with_ibcmd_builder_for_file_connection() {
         let base = tempdir().expect("base");
         let work = tempdir().expect("work");
         let source_dir = base.path().join("edt-main");
@@ -755,11 +748,7 @@ mod tests {
             tests: TestsConfig::default(),
         };
 
-        let err = validate(&config).expect_err("expected invalid edt+ibcmd matrix");
-        assert!(matches!(
-            err,
-            ConfigValidationError::EdtRequiresDesignerBuilder
-        ));
+        validate(&config).expect("EDT+IBCMD with file connection should be valid");
     }
 
     #[test]
@@ -979,10 +968,10 @@ mod tests {
             tests: TestsConfig::default(),
         };
 
-        let err = validate(&config).expect_err("expected EDT matrix validation error");
+        let err = validate(&config).expect_err("expected IBCMD connection validation error");
         assert!(matches!(
             err,
-            ConfigValidationError::EdtRequiresDesignerBuilder
+            ConfigValidationError::IbcmdRequiresFileConnection
         ));
     }
 
@@ -1022,7 +1011,7 @@ mod tests {
     }
 
     #[test]
-    fn edt_ibcmd_matrix_error_has_priority_over_source_set_path_validation() {
+    fn edt_ibcmd_still_validates_source_set_paths() {
         let base = tempdir().expect("base");
         let work = tempdir().expect("work");
 
@@ -1044,10 +1033,10 @@ mod tests {
             tests: TestsConfig::default(),
         };
 
-        let err = validate(&config).expect_err("expected EDT matrix error");
+        let err = validate(&config).expect_err("expected source-set path error");
         assert!(matches!(
             err,
-            ConfigValidationError::EdtRequiresDesignerBuilder
+            ConfigValidationError::SourceSetPathInvalid { .. }
         ));
     }
 

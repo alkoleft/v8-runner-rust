@@ -15,11 +15,11 @@
 | `config init` | Работает без существующего конфига | Создаёт `v8project.yaml`, ищет Designer/EDT-исходники и пишет `source-set[].type` |
 | `init` | `format=DESIGNER` + `builder=DESIGNER` | Создаёт файловую ИБ через `1cv8 CREATEINFOBASE`, если отсутствует |
 | `init` | `format=DESIGNER` + `builder=IBCMD` | Создаёт файловую ИБ через `ibcmd infobase create`, если отсутствует |
-| `init` | `format=EDT` + `builder=DESIGNER` | Создаёт файловую ИБ и, если workspace отсутствует, импортирует все EDT `source-set` в `workPath/edt-workspace` |
+| `init` | `format=EDT` + `builder=DESIGNER` или `IBCMD` | Создаёт файловую ИБ и, если workspace отсутствует, импортирует все EDT `source-set` в `workPath/edt-workspace`; при `IBCMD` только файловая ИБ |
 | `extensions` | `format=DESIGNER` или `format=EDT` | Обновляет свойства расширений для extension `source-set`, указанных в конфиге; только файловая ИБ |
 | `build` | `format=DESIGNER` + `builder=DESIGNER` | Инкрементальная или полная загрузка через Designer |
 | `build` | `format=DESIGNER` + `builder=IBCMD` | Использует `ibcmd config import` + `config apply`; только файловая ИБ |
-| `build` | `format=EDT` + `builder=DESIGNER` | Определяет EDT-изменения, экспортирует затронутые `source-set`, затем загружает Designer-вывод |
+| `build` | `format=EDT` + `builder=DESIGNER` или `IBCMD` | Определяет EDT-изменения, экспортирует затронутые `source-set`, затем загружает Designer-вывод выбранным backend |
 | `test` | Та же матрица, что и у `build` | Всегда сначала запускает `build`, затем YaXUnit через Enterprise |
 | `dump` | `format=DESIGNER` + `builder=DESIGNER` | Полная, инкрементальная или точечная частичная выгрузка объектов |
 | `dump` | `format=DESIGNER` + `builder=IBCMD` | Полная и инкрементальная выгрузка; запрос `partial` деградирует в инкрементальную выгрузку с предупреждением |
@@ -73,6 +73,7 @@ v8-runner build [--full-rebuild]
 - `format=DESIGNER`, `builder=DESIGNER`: загружает изменённые Designer-исходники напрямую через бэкенд Designer.
 - `format=DESIGNER`, `builder=IBCMD`: загружает исходники в Designer-формате через `ibcmd`.
 - `format=EDT`, `builder=DESIGNER`: экспортирует изменённые EDT `source-set` во временные Designer-файлы под `workPath/designer`, затем запускает обычный конвейер Designer.
+- `format=EDT`, `builder=IBCMD`: экспортирует изменённые EDT `source-set` во временные Designer-файлы под `workPath/designer`, затем загружает их через `ibcmd`; только файловая ИБ.
 
 Важные детали:
 

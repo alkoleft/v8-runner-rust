@@ -36,7 +36,7 @@ const BUILD_COMMAND: &str = crate::use_cases::context::CommandName::Build.as_str
 const SUPPORTED_DESIGNER_BUILD_ERROR: &str =
     "build currently supports only builder=DESIGNER or IBCMD with format=DESIGNER";
 const SUPPORTED_EDT_BUILD_ERROR: &str =
-    "build with format=EDT currently supports only builder=DESIGNER";
+    "build with format=EDT currently supports only builder=DESIGNER or IBCMD";
 
 pub fn execute(
     context: &ExecutionContext,
@@ -594,6 +594,7 @@ fn run_build_ibcmd(
                     utilities.runner_for(UtilityType::Ibcmd),
                     source_set,
                     &context,
+                    &context,
                     partial_paths.as_deref(),
                     &commit,
                 ) {
@@ -647,7 +648,12 @@ fn validate_designer_supported_matrix(config: &AppConfig) -> Option<AppError> {
 }
 
 fn validate_edt_supported_matrix(config: &AppConfig) -> Option<AppError> {
-    if config.builder == BuilderBackend::Designer && config.format == SourceFormat::Edt {
+    if config.format == SourceFormat::Edt
+        && matches!(
+            config.builder,
+            BuilderBackend::Designer | BuilderBackend::Ibcmd
+        )
+    {
         None
     } else {
         Some(AppError::Validation(SUPPORTED_EDT_BUILD_ERROR.to_owned()))
@@ -695,6 +701,7 @@ fn run_build_edt(
 
     let mut utilities = PlatformUtilities::from_config(config);
     let mut designer_binary: Option<PathBuf> = None;
+    let mut ibcmd_binary: Option<PathBuf> = None;
     let mut edt_binary: Option<PathBuf> = None;
     let mut interactive_edt = None;
     let mut steps = Vec::new();
@@ -1063,47 +1070,91 @@ fn run_build_edt(
                     duration_ms: export_started.elapsed().as_millis() as u64,
                 });
 
-                let designer = match designer_binary.clone() {
-                    Some(path) => path,
-                    None => {
-                        let location = match utilities.locate(UtilityType::V8) {
-                            Ok(location) => location,
-                            Err(error) => {
-                                let result = fail_with_remaining_steps(
-                                    started,
-                                    steps,
-                                    ordered_source_sets
-                                        .iter()
-                                        .skip(index)
-                                        .copied()
-                                        .collect::<Vec<_>>(),
-                                    source_set,
-                                    mode.clone(),
-                                    error.to_string(),
-                                );
-                                return Err(BuildExecutionFailure::with_payload(
-                                    AppError::Platform(error.to_string()),
-                                    result,
-                                ));
+                let load_started = Instant::now();
+                let load_result = match config.builder {
+                    BuilderBackend::Designer => {
+                        let designer = match designer_binary.clone() {
+                            Some(path) => path,
+                            None => {
+                                let location = match utilities.locate(UtilityType::V8) {
+                                    Ok(location) => location,
+                                    Err(error) => {
+                                        let result = fail_with_remaining_steps(
+                                            started,
+                                            steps,
+                                            ordered_source_sets
+                                                .iter()
+                                                .skip(index)
+                                                .copied()
+                                                .collect::<Vec<_>>(),
+                                            source_set,
+                                            mode.clone(),
+                                            error.to_string(),
+                                        );
+                                        return Err(BuildExecutionFailure::with_payload(
+                                            AppError::Platform(error.to_string()),
+                                            result,
+                                        ));
+                                    }
+                                };
+                                designer_binary = Some(location.path.clone());
+                                location.path
                             }
                         };
-                        designer_binary = Some(location.path.clone());
-                        location.path
+                        execute_source_set_step(
+                            config,
+                            &designer,
+                            utilities.runner_for(UtilityType::V8),
+                            source_set,
+                            &designer_context,
+                            &edt_context,
+                            index,
+                            None,
+                            &commit,
+                        )
+                    }
+                    BuilderBackend::Ibcmd => {
+                        let ibcmd = match ibcmd_binary.clone() {
+                            Some(path) => path,
+                            None => {
+                                let location = match utilities.locate(UtilityType::Ibcmd) {
+                                    Ok(location) => location,
+                                    Err(error) => {
+                                        let result = fail_with_remaining_steps(
+                                            started,
+                                            steps,
+                                            ordered_source_sets
+                                                .iter()
+                                                .skip(index)
+                                                .copied()
+                                                .collect::<Vec<_>>(),
+                                            source_set,
+                                            mode.clone(),
+                                            error.to_string(),
+                                        );
+                                        return Err(BuildExecutionFailure::with_payload(
+                                            AppError::Platform(error.to_string()),
+                                            result,
+                                        ));
+                                    }
+                                };
+                                ibcmd_binary = Some(location.path.clone());
+                                location.path
+                            }
+                        };
+                        execute_source_set_step_ibcmd(
+                            config,
+                            &ibcmd,
+                            utilities.runner_for(UtilityType::Ibcmd),
+                            source_set,
+                            &designer_context,
+                            &edt_context,
+                            None,
+                            &commit,
+                        )
                     }
                 };
-
-                let load_started = Instant::now();
-                match execute_source_set_step(
-                    config,
-                    &designer,
-                    utilities.runner_for(UtilityType::V8),
-                    source_set,
-                    &designer_context,
-                    &edt_context,
-                    index,
-                    None,
-                    &commit,
-                ) {
+                match load_result {
                     Ok(()) => steps.push(BuildStep {
                         source_set: source_set.name.clone(),
                         mode,
@@ -1297,7 +1348,8 @@ fn execute_source_set_step_ibcmd(
     binary: &Path,
     runner: &dyn ProcessRunner,
     source_set: &SourceSetConfig,
-    context: &SourceSetContext,
+    load_context: &SourceSetContext,
+    commit_context: &SourceSetContext,
     partial_paths: Option<&[PathBuf]>,
     commit: &StepCommit,
 ) -> Result<(), AppError> {
@@ -1310,13 +1362,14 @@ fn execute_source_set_step_ibcmd(
     let dsl = build_ibcmd_dsl(config, binary, runner)?;
     let extension = extension_name(source_set);
     let load_result = if let Some(paths) = partial_paths {
-        let rel_paths = partial_load::relative_paths(paths, context.path()).map_err(|error| {
-            AppError::Runtime(format!("failed to convert partial paths: {error}"))
-        })?;
-        dsl.config_import_partial(context.path(), &rel_paths, extension)
+        let rel_paths =
+            partial_load::relative_paths(paths, load_context.path()).map_err(|error| {
+                AppError::Runtime(format!("failed to convert partial paths: {error}"))
+            })?;
+        dsl.config_import_partial(load_context.path(), &rel_paths, extension)
             .map_err(map_ibcmd_error)?
     } else {
-        dsl.config_import_full(context.path(), extension)
+        dsl.config_import_full(load_context.path(), extension)
             .map_err(map_ibcmd_error)?
     };
     ensure_platform_success("load", source_set, &load_result)?;
@@ -1336,7 +1389,7 @@ fn execute_source_set_step_ibcmd(
                 source_set = source_set.name.as_str(),
                 "committing prepared change-detection state"
             );
-            analyzer::commit_success(context, &config.work_path, prepared)
+            analyzer::commit_success(commit_context, &config.work_path, prepared)
                 .map_err(|error| AppError::Runtime(error.to_string()))
         }
         StepCommit::RescanFull { recover_storage } => {
@@ -1344,7 +1397,7 @@ fn execute_source_set_step_ibcmd(
                 source_set = source_set.name.as_str(),
                 recover_storage, "rescanning source-set state after full build"
             );
-            commit_full_rescan(context, &config.work_path, *recover_storage)
+            commit_full_rescan(commit_context, &config.work_path, *recover_storage)
         }
     }
 }
@@ -1500,7 +1553,7 @@ fn fail_with_remaining_steps(
 
 #[cfg(test)]
 mod tests {
-    use super::{run_build, BUILD_COMMAND, SUPPORTED_EDT_BUILD_ERROR};
+    use super::{run_build, BUILD_COMMAND};
     use crate::change_detection::hash_storage::HashStorage;
     use crate::change_detection::source_sets::SourceSetsService;
     use crate::config::model::{
@@ -1799,34 +1852,6 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn rejects_unsupported_matrix_early() {
-        let dir = tempdir().expect("tempdir");
-        let script = dir.path().join("1cv8");
-        let calls = dir.path().join("calls.log");
-        write_designer_script(&script, &calls, None);
-        let config = build_config(
-            dir.path(),
-            dir.path().join("work").as_path(),
-            &script,
-            20,
-            SourceFormat::Edt,
-            BuilderBackend::Ibcmd,
-        );
-
-        let failure = run_build(
-            &config,
-            &BuildArgs {
-                full_rebuild: false,
-            },
-        )
-        .expect_err("failure");
-        assert_eq!(failure.error.kind(), UseCaseErrorKind::Validation);
-        assert_eq!(failure.error.message(), SUPPORTED_EDT_BUILD_ERROR);
-        assert!(!calls.exists());
-    }
-
-    #[cfg(unix)]
-    #[test]
     fn ibcmd_build_dispatch_uses_ibcmd_utility() {
         let dir = tempdir().expect("tempdir");
         let base = dir.path().join("base");
@@ -1937,6 +1962,59 @@ mod tests {
         assert!(edt_calls_text.contains("export --project-name main"));
         assert!(designer_calls_text.contains("/LoadConfigFromFiles"));
         assert!(designer_calls_text.contains(
+            work.join("designer")
+                .join("main")
+                .display()
+                .to_string()
+                .as_str()
+        ));
+        assert_eq!(edt_storage_generation(&config, "main"), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn edt_build_with_ibcmd_exports_then_imports_via_ibcmd() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let ibcmd_script = dir.path().join("ibcmd");
+        let edt_script = dir.path().join("edt").join("1cedtcli");
+        let ibcmd_calls = dir.path().join("ibcmd-calls.log");
+        let edt_calls = dir.path().join("edt-calls.log");
+        create_source_tree(&base);
+        write_ibcmd_script(&ibcmd_script, &ibcmd_calls, None);
+        write_edt_script(&edt_script, &edt_calls, None);
+        let mut config = build_edt_config(&base, &work, &ibcmd_script, &edt_script);
+        config.builder = BuilderBackend::Ibcmd;
+        prime_edt_snapshots(&config);
+
+        fs::write(
+            base.join("main")
+                .join("Catalogs.Items")
+                .join("ObjectModule.bsl"),
+            "procedure Test()\n  // changed in edt\nendprocedure",
+        )
+        .expect("modify edt main");
+
+        let result = run_build(
+            &config,
+            &BuildArgs {
+                full_rebuild: false,
+            },
+        )
+        .expect("build");
+        let edt_calls_text = fs::read_to_string(&edt_calls).expect("edt calls");
+        let ibcmd_calls_text = fs::read_to_string(&ibcmd_calls).expect("ibcmd calls");
+
+        assert!(result.ok);
+        assert!(result
+            .steps
+            .iter()
+            .any(|step| matches!(step.mode, BuildMode::EdtExport) && step.ok));
+        assert!(edt_calls_text.contains("export --project-name main"));
+        assert!(ibcmd_calls_text.contains("infobase config import"));
+        assert!(ibcmd_calls_text.contains("infobase config apply"));
+        assert!(ibcmd_calls_text.contains(
             work.join("designer")
                 .join("main")
                 .display()
