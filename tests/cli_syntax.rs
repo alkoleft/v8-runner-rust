@@ -34,7 +34,7 @@ fn write_config(
         .map(|path| format!("  edt-cli:\n    path: '{}'\n", path.display()))
         .unwrap_or_default();
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: {}\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: .\ntools:\n  platform:\n    path: '{}'\n{}",
+        "basePath: '{}'\nworkPath: '{}'\nformat: {}\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\ntools:\n  platform:\n    path: '{}'\n{}",
         base_path.display(),
         work_path.display(),
         format,

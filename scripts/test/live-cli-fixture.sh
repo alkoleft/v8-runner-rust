@@ -10,7 +10,6 @@ DESIGNER_SMOKE_PROFILE="${V8TR_DESIGNER_SMOKE_PROFILE:-mandatory}"
 DESIGNER_TEST_MODE="${V8TR_DESIGNER_TEST_MODE:-none}"
 DESIGNER_TEST_MODULE="${V8TR_DESIGNER_TEST_MODULE:-}"
 DESIGNER_LAUNCH_SMOKE="${V8TR_DESIGNER_LAUNCH_SMOKE:-0}"
-PLATFORM_PATH_OVERRIDE="${V8TR_PLATFORM_PATH:-}"
 BIN_PATH="${V8TR_BIN:-$ROOT_DIR/target/debug/v8-runner}"
 OUTPUT_ROOT="${V8TR_LIVE_CLI_OUTPUT_ROOT:-$ROOT_DIR/target/manual-tests/live-cli-designer}"
 FIXTURE_BASE_PATH="$ROOT_DIR/tests/fixtures/designer"
@@ -87,20 +86,6 @@ extract_yaml_scalar() {
     ' "$DESIGNER_CONFIG_PATH" | trim_yaml_scalar
 }
 
-extract_platform_path() {
-    awk '
-        /^[[:space:]]*tools:[[:space:]]*$/ { in_tools=1; next }
-        in_tools && /^[^[:space:]]/ { in_tools=0 }
-        in_tools && /^[[:space:]]{2}platform:[[:space:]]*$/ { in_platform=1; next }
-        in_platform && /^[[:space:]]{2}[^[:space:]]/ { in_platform=0 }
-        in_platform && /^[[:space:]]{4}path:[[:space:]]*/ {
-            sub(/^[[:space:]]{4}path:[[:space:]]*/, "", $0)
-            print
-            exit
-        }
-    ' "$DESIGNER_CONFIG_PATH" | trim_yaml_scalar
-}
-
 config_matches() {
     local pattern="$1"
     local path="$2"
@@ -111,58 +96,6 @@ config_matches() {
     fi
 
     grep -Eq "$pattern" "$path"
-}
-
-detect_platform_path() {
-    local configured_path="${1:-}"
-    local candidate="${PLATFORM_PATH_OVERRIDE:-$configured_path}"
-
-    if [[ -n "$candidate" && "$candidate" != "AUTO_PLATFORM" && -e "$candidate" ]]; then
-        printf '%s\n' "$candidate"
-        return 0
-    fi
-
-    if command -v 1cv8 >/dev/null 2>&1; then
-        command -v 1cv8
-        return 0
-    fi
-
-    if command -v 1cv8.exe >/dev/null 2>&1; then
-        command -v 1cv8.exe
-        return 0
-    fi
-
-    python3 - <<'PY'
-import os
-import pathlib
-import sys
-
-candidate_roots = [
-    pathlib.Path("/opt/1cv8"),
-    pathlib.Path("/c/Program Files/1cv8"),
-    pathlib.Path("/c/Program Files (x86)/1cv8"),
-    pathlib.Path("C:/Program Files/1cv8"),
-    pathlib.Path("C:/Program Files (x86)/1cv8"),
-]
-
-for env_name in ("ProgramFiles", "ProgramFiles(x86)"):
-    env_value = os.environ.get(env_name)
-    if env_value:
-        candidate_roots.append(pathlib.Path(env_value) / "1cv8")
-
-patterns = ("**/1cv8", "**/1cv8.exe")
-
-for root in candidate_roots:
-    if not root.exists():
-        continue
-    for pattern in patterns:
-        for path in sorted(root.glob(pattern), reverse=True):
-            if path.is_file():
-                print(path)
-                raise SystemExit(0)
-
-raise SystemExit(1)
-PY
 }
 
 extract_source_sets() {
@@ -198,7 +131,7 @@ for line in lines:
         current = {"name": clean(name_match.group(1))}
         continue
 
-    field_match = re.match(r"^\s+(purpose|path):\s*(.+?)\s*$", line)
+    field_match = re.match(r"^\s+(type|path):\s*(.+?)\s*$", line)
     if field_match and current is not None:
         current[field_match.group(1)] = clean(field_match.group(2))
 
@@ -210,7 +143,7 @@ for item in items:
         "\t".join(
             [
                 item.get("name", ""),
-                item.get("purpose", ""),
+                item.get("type", ""),
                 item.get("path", ""),
             ]
         )
@@ -386,11 +319,10 @@ PY
 materialize_live_config() {
     local source_config="$1"
     local target_config="$2"
-    local platform_path="$3"
-    local output_root="$4"
-    local work_base_path="$5"
+    local output_root="$3"
+    local work_base_path="$4"
 
-    python3 - "$source_config" "$target_config" "$ROOT_DIR" "$output_root" "$work_base_path" "$platform_path" "$VANESSA_EPF_PATH" "$VANESSA_PARAMS_TEMPLATE_PATH" "$VANESSA_FEATURE_PATH" <<'PY'
+    python3 - "$source_config" "$target_config" "$ROOT_DIR" "$output_root" "$work_base_path" "$VANESSA_EPF_PATH" "$VANESSA_PARAMS_TEMPLATE_PATH" "$VANESSA_FEATURE_PATH" <<'PY'
 import pathlib
 import re
 import sys
@@ -400,16 +332,14 @@ target = pathlib.Path(sys.argv[2])
 root_dir = pathlib.Path(sys.argv[3])
 output_root = pathlib.Path(sys.argv[4])
 work_base_path = pathlib.Path(sys.argv[5])
-platform_path = sys.argv[6]
-vanessa_epf = pathlib.Path(sys.argv[7])
-vanessa_params_template = pathlib.Path(sys.argv[8])
-vanessa_feature_path = pathlib.Path(sys.argv[9])
+vanessa_epf = pathlib.Path(sys.argv[6])
+vanessa_params_template = pathlib.Path(sys.argv[7])
+vanessa_feature_path = pathlib.Path(sys.argv[8])
 text = source.read_text(encoding="utf-8")
 
 replacements = {
     "__ROOT_DIR__": root_dir.as_posix(),
     "__OUTPUT_ROOT__": output_root.as_posix(),
-    "AUTO_PLATFORM": platform_path,
     "__VANESSA_EPF__": vanessa_epf.as_posix(),
     "__VANESSA_PARAMS_TEMPLATE__": vanessa_params_template.as_posix(),
     "__VANESSA_FEATURE_PATH__": vanessa_feature_path.as_posix(),
@@ -560,74 +490,57 @@ if ! config_matches "^connection:[[:space:]]*['\"]?(File=|/F[[:space:]]+)" "$DES
     die "Live Designer config must use a file-based connection ('File=...' or raw '/F ...'): $DESIGNER_CONFIG_PATH"
 fi
 
-declare -A SOURCE_SET_NAME_BY_PURPOSE=()
-declare -A SOURCE_SET_PATH_BY_PURPOSE=()
-required_purposes=(
+declare -A SOURCE_SET_NAME_BY_TYPE=()
+declare -A SOURCE_SET_PATH_BY_TYPE=()
+required_types=(
     CONFIGURATION
     EXTENSION
 )
 if [[ "$BUILDER_BACKEND" == "DESIGNER" ]]; then
-    required_purposes+=(
+    required_types+=(
         EXTERNAL_DATA_PROCESSORS
         EXTERNAL_REPORTS
     )
 fi
 
-while IFS=$'\t' read -r source_set_name source_set_purpose source_set_path; do
+while IFS=$'\t' read -r source_set_name source_set_type source_set_path; do
     source_set_name="$(strip_shell_quotes "$source_set_name")"
-    source_set_purpose="$(strip_shell_quotes "$source_set_purpose")"
+    source_set_type="$(strip_shell_quotes "$source_set_type")"
     source_set_path="$(strip_shell_quotes "$source_set_path")"
 
-    if [[ -z "$source_set_name" || -z "$source_set_purpose" || -z "$source_set_path" ]]; then
-        die "Each source-set must define name, purpose, and path: $DESIGNER_CONFIG_PATH"
+    if [[ -z "$source_set_name" || -z "$source_set_type" || -z "$source_set_path" ]]; then
+        die "Each source-set must define name, type, and path: $DESIGNER_CONFIG_PATH"
     fi
 
-    if [[ -n "${SOURCE_SET_NAME_BY_PURPOSE[$source_set_purpose]:-}" ]]; then
-        die "Live Designer config must define only one source-set with purpose '$source_set_purpose': $DESIGNER_CONFIG_PATH"
+    if [[ -n "${SOURCE_SET_NAME_BY_TYPE[$source_set_type]:-}" ]]; then
+        die "Live Designer config must define only one source-set with type '$source_set_type': $DESIGNER_CONFIG_PATH"
     fi
 
-    SOURCE_SET_NAME_BY_PURPOSE["$source_set_purpose"]="$source_set_name"
-    SOURCE_SET_PATH_BY_PURPOSE["$source_set_purpose"]="$source_set_path"
+    SOURCE_SET_NAME_BY_TYPE["$source_set_type"]="$source_set_name"
+    SOURCE_SET_PATH_BY_TYPE["$source_set_type"]="$source_set_path"
 done < <(extract_source_sets)
 
-for purpose in "${required_purposes[@]}"; do
-    if [[ -z "${SOURCE_SET_NAME_BY_PURPOSE[$purpose]:-}" ]]; then
-        die "Live Designer config must declare a source-set with purpose '$purpose': $DESIGNER_CONFIG_PATH"
+for source_set_type in "${required_types[@]}"; do
+    if [[ -z "${SOURCE_SET_NAME_BY_TYPE[$source_set_type]:-}" ]]; then
+        die "Live Designer config must declare a source-set with type '$source_set_type': $DESIGNER_CONFIG_PATH"
     fi
 done
 
-base_path="$(extract_yaml_scalar "basePath")"
-if [[ -z "$base_path" ]]; then
-    die "Live Designer config must define basePath: $DESIGNER_CONFIG_PATH"
-fi
-
-resolved_base_path="${base_path//__ROOT_DIR__/$ROOT_DIR}"
-resolved_base_path="${resolved_base_path//__OUTPUT_ROOT__/$OUTPUT_ROOT}"
-
-fixture_base_real="$(realpath "$FIXTURE_BASE_PATH")"
-config_base_real="$(realpath "$resolved_base_path" 2>/dev/null || true)"
-if [[ "$config_base_real" != "$fixture_base_real" ]]; then
-    die "Live Designer config must point basePath to '$fixture_base_real', got '${base_path}'"
-fi
-
-platform_path="$(extract_platform_path)"
-if [[ -z "$platform_path" && -z "$PLATFORM_PATH_OVERRIDE" ]]; then
-    die "Live Designer config must define tools.platform.path or provide V8TR_PLATFORM_PATH"
-fi
-
-platform_path="$(detect_platform_path "$platform_path")" || die "Unable to detect 1cv8 platform binary automatically"
-
-CONFIGURATION_SOURCE_SET_NAME="${SOURCE_SET_NAME_BY_PURPOSE[CONFIGURATION]}"
-CONFIGURATION_SOURCE_SET_PATH="${SOURCE_SET_PATH_BY_PURPOSE[CONFIGURATION]}"
-EXTENSION_SOURCE_SET_NAME="${SOURCE_SET_NAME_BY_PURPOSE[EXTENSION]}"
-EXTENSION_SOURCE_SET_PATH="${SOURCE_SET_PATH_BY_PURPOSE[EXTENSION]}"
-EXTERNAL_PROCESSOR_SOURCE_SET_NAME="${SOURCE_SET_NAME_BY_PURPOSE[EXTERNAL_DATA_PROCESSORS]:-}"
-EXTERNAL_PROCESSOR_SOURCE_SET_PATH="${SOURCE_SET_PATH_BY_PURPOSE[EXTERNAL_DATA_PROCESSORS]:-}"
-EXTERNAL_REPORT_SOURCE_SET_NAME="${SOURCE_SET_NAME_BY_PURPOSE[EXTERNAL_REPORTS]:-}"
-EXTERNAL_REPORT_SOURCE_SET_PATH="${SOURCE_SET_PATH_BY_PURPOSE[EXTERNAL_REPORTS]:-}"
+CONFIGURATION_SOURCE_SET_NAME="${SOURCE_SET_NAME_BY_TYPE[CONFIGURATION]}"
+CONFIGURATION_SOURCE_SET_PATH="${SOURCE_SET_PATH_BY_TYPE[CONFIGURATION]}"
+EXTENSION_SOURCE_SET_NAME="${SOURCE_SET_NAME_BY_TYPE[EXTENSION]}"
+EXTENSION_SOURCE_SET_PATH="${SOURCE_SET_PATH_BY_TYPE[EXTENSION]}"
+EXTERNAL_PROCESSOR_SOURCE_SET_NAME="${SOURCE_SET_NAME_BY_TYPE[EXTERNAL_DATA_PROCESSORS]:-}"
+EXTERNAL_PROCESSOR_SOURCE_SET_PATH="${SOURCE_SET_PATH_BY_TYPE[EXTERNAL_DATA_PROCESSORS]:-}"
+EXTERNAL_REPORT_SOURCE_SET_NAME="${SOURCE_SET_NAME_BY_TYPE[EXTERNAL_REPORTS]:-}"
+EXTERNAL_REPORT_SOURCE_SET_PATH="${SOURCE_SET_PATH_BY_TYPE[EXTERNAL_REPORTS]:-}"
 
 WORK_BASE_PATH="$OUTPUT_ROOT/workspace/basePath"
 WORK_CONFIG_PATH="$OUTPUT_ROOT/json/live-designer.config.yaml"
+
+if [[ ! -d "$FIXTURE_BASE_PATH" ]]; then
+    die "Fixture source directory not found: $FIXTURE_BASE_PATH"
+fi
 
 if [[ ! -x "$BIN_PATH" ]]; then
     echo "Building v8-runner binary..." >&2
@@ -643,12 +556,12 @@ mkdir -p \
     "$OUTPUT_ROOT/launch"
 
 cp -R "$FIXTURE_BASE_PATH/." "$WORK_BASE_PATH/"
-materialize_live_config "$DESIGNER_CONFIG_PATH" "$WORK_CONFIG_PATH" "$platform_path" "$OUTPUT_ROOT" "$WORK_BASE_PATH"
+materialize_live_config "$DESIGNER_CONFIG_PATH" "$WORK_CONFIG_PATH" "$OUTPUT_ROOT" "$WORK_BASE_PATH"
 
 DESIGNER_CONFIG_PATH="$WORK_CONFIG_PATH"
 
-for purpose in "${required_purposes[@]}"; do
-    source_set_path="${SOURCE_SET_PATH_BY_PURPOSE[$purpose]}"
+for source_set_type in "${required_types[@]}"; do
+    source_set_path="${SOURCE_SET_PATH_BY_TYPE[$source_set_type]}"
     if [[ ! -d "$WORK_BASE_PATH/$source_set_path" ]]; then
         die "Configured source-set path does not exist under fixture basePath: $source_set_path"
     fi

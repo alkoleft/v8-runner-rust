@@ -104,7 +104,7 @@ fn write_http_designer_config(
     idle_ttl_secs: u64,
 ) {
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: .\nmcp:\n  http:\n    bind_address: {}\n    path: /mcp\n    stateful_sessions: {}\n    max_sessions: {}\n    idle_ttl_secs: {}\ntools:\n  platform:\n    path: '{}'\n",
+        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\nmcp:\n  http:\n    bind_address: {}\n    path: /mcp\n    stateful_sessions: {}\n    max_sessions: {}\n    idle_ttl_secs: {}\ntools:\n  platform:\n    path: '{}'\n",
         base_path.display(),
         work_path.display(),
         bind_address,
@@ -126,7 +126,7 @@ fn write_http_ibcmd_config(
     idle_ttl_secs: u64,
 ) {
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: IBCMD\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: main\nmcp:\n  http:\n    bind_address: {}\n    path: /mcp\n    stateful_sessions: true\n    max_sessions: {}\n    idle_ttl_secs: {}\ntools:\n  platform:\n    path: '{}'\n",
+        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: IBCMD\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\nmcp:\n  http:\n    bind_address: {}\n    path: /mcp\n    stateful_sessions: true\n    max_sessions: {}\n    idle_ttl_secs: {}\ntools:\n  platform:\n    path: '{}'\n",
         base_path.display(),
         work_path.display(),
         bind_address,
@@ -166,7 +166,7 @@ fn write_http_edt_config(
     command_timeout_ms: u64,
 ) {
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: EDT\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: main-edt\nmcp:\n  http:\n    bind_address: {}\n    path: /mcp\n    stateful_sessions: true\n    max_sessions: {}\n    idle_ttl_secs: {}\n  execution:\n    max_concurrent_calls: {}\ntools:\n  edt_cli:\n    path: '{}'\n    interactive-mode: true\n    command_timeout_ms: {}\n",
+        "basePath: '{}'\nworkPath: '{}'\nformat: EDT\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main-edt\nmcp:\n  http:\n    bind_address: {}\n    path: /mcp\n    stateful_sessions: true\n    max_sessions: {}\n    idle_ttl_secs: {}\n  execution:\n    max_concurrent_calls: {}\ntools:\n  edt_cli:\n    path: '{}'\n    interactive-mode: true\n    command_timeout_ms: {}\n",
         base_path.display(),
         work_path.display(),
         bind_address,

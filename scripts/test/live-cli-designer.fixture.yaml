@@ -1,7 +1,7 @@
 # Default live smoke config for scripts/test/live-cli-fixture.sh.
-# The script resolves __ROOT_DIR__, __OUTPUT_ROOT__, and AUTO_PLATFORM automatically.
+# The script resolves __ROOT_DIR__ and __OUTPUT_ROOT__ into an isolated workspace.
 
-basePath: __ROOT_DIR__/tests/fixtures/designer
+basePath: __OUTPUT_ROOT__/workspace/basePath
 workPath: __OUTPUT_ROOT__/work
 format: DESIGNER
 builder: DESIGNER
@@ -22,18 +22,21 @@ tests:
 
 source-set:
   - name: configuration
-    purpose: CONFIGURATION
+    type: CONFIGURATION
     path: configuration
+
   - name: Расширение1
-    purpose: EXTENSION
+    type: EXTENSION
     path: extension
+
   - name: external-processor
-    purpose: EXTERNAL_DATA_PROCESSORS
+    type: EXTERNAL_DATA_PROCESSORS
     path: external/processor
+
   - name: external-report
-    purpose: EXTERNAL_REPORTS
+    type: EXTERNAL_REPORTS
     path: external/report
 
 tools:
   platform:
-    path: AUTO_PLATFORM
+    version: 8.3.27

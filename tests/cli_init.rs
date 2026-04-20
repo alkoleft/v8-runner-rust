@@ -42,7 +42,7 @@ fn setup_designer_init_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBu
     );
 
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: 'File={}'\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n",
+        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: 'File={}'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n",
         base_path.display(),
         work_path.display(),
         infobase_path.display(),
@@ -101,7 +101,7 @@ fn setup_edt_init_project(
     );
 
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: {}\nbuilder: {}\nconnection: '{}'\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: main\n  - name: ext\n    purpose: EXTENSION\n    path: ext\ntools:\n  platform:\n    path: '{}'\n  edt_cli:\n    path: '{}'\n",
+        "basePath: '{}'\nworkPath: '{}'\nformat: {}\nbuilder: {}\nconnection: '{}'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\n  - name: ext\n    type: EXTENSION\n    path: ext\ntools:\n  platform:\n    path: '{}'\n  edt_cli:\n    path: '{}'\n",
         base_path.display(),
         work_path.display(),
         format,

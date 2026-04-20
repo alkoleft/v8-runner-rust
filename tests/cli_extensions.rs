@@ -49,7 +49,7 @@ fn setup_extensions_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) 
     );
 
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: EDT\nbuilder: DESIGNER\nconnection: 'File={}'\nsource-set:\n  - name: configuration\n    purpose: CONFIGURATION\n    path: configuration\n  - name: client_mcp\n    purpose: EXTENSION\n    path: exts/client-mcp\n  - name: tests\n    purpose: EXTENSION\n    path: tests\ntools:\n  platform:\n    path: '{}'\n",
+        "basePath: '{}'\nworkPath: '{}'\nformat: EDT\nbuilder: DESIGNER\nconnection: 'File={}'\nsource-set:\n  - name: configuration\n    type: CONFIGURATION\n    path: configuration\n  - name: client_mcp\n    type: EXTENSION\n    path: exts/client-mcp\n  - name: tests\n    type: EXTENSION\n    path: tests\ntools:\n  platform:\n    path: '{}'\n",
         base_path.display(),
         work_path.display(),
         dir.path().join("ib").display(),
@@ -137,9 +137,7 @@ fn extensions_command_json_failure_reports_operation_target_and_exit_code() {
     assert!(payload["data"]["steps"][0]["message"]
         .as_str()
         .expect("message")
-        .contains(
-            "extension update failed for extension 'client_mcp' with exit code 17"
-        ));
+        .contains("extension update failed for extension 'client_mcp' with exit code 17"));
     assert!(payload["data"]["steps"][0]["message"]
         .as_str()
         .expect("message")

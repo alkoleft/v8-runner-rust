@@ -75,7 +75,7 @@ fn write_config_with_builder(
     connection: &str,
 ) {
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: {}\nconnection: '{}'\nbuild:\n  partialLoadThreshold: 20\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: main\n  - name: ext\n    purpose: EXTENSION\n    path: ext\ntools:\n  platform:\n    path: '{}'\n",
+        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: {}\nconnection: '{}'\nbuild:\n  partialLoadThreshold: 20\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\n  - name: ext\n    type: EXTENSION\n    path: ext\ntools:\n  platform:\n    path: '{}'\n",
         base_path.display(),
         work_path.display(),
         builder,
@@ -346,7 +346,7 @@ fn build_ibcmd_full_rebuild_invokes_import_and_apply() {
 fn build_ibcmd_passes_credentials_to_import_and_apply() {
     let (dir, config_path, binary_path, work_path, base_path, calls_log) = setup_ibcmd_project();
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: IBCMD\nconnection: 'File=/tmp/ib'\ncredentials:\n  user: Admin\n  password: secret\nbuild:\n  partialLoadThreshold: 20\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n",
+        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: IBCMD\nconnection: 'File=/tmp/ib'\ncredentials:\n  user: Admin\n  password: secret\nbuild:\n  partialLoadThreshold: 20\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n",
         base_path.display(),
         work_path.display(),
         binary_path.display(),

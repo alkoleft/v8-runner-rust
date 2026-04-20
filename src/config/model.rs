@@ -93,7 +93,7 @@ pub struct SourceSetConfig {
     pub name: String,
 
     /// YAML `type`: CONFIGURATION, EXTENSION, EXTERNAL_DATA_PROCESSORS, or EXTERNAL_REPORTS.
-    #[serde(rename = "type", alias = "purpose")]
+    #[serde(rename = "type")]
     pub purpose: SourceSetPurpose,
 
     /// Path relative to basePath (for DESIGNER) or EDT project path

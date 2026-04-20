@@ -57,7 +57,7 @@ fn default_config_path_uses_v8project_yaml_from_current_dir() {
     fs::write(
         &config_path,
         format!(
-            "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: .\n",
+            "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\n",
             base_path.display(),
             work_path.display()
         ),
@@ -88,7 +88,7 @@ fn mcp_rejects_clean_before_execution_flag() {
     fs::write(
         &config_path,
         format!(
-            "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: .\n",
+            "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\n",
             base_path.display(),
             work_path.display()
         ),
