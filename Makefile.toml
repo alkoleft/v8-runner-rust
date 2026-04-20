@@ -90,7 +90,19 @@ run_task = { name = [
     "build-release-macos-arm64",
 ], parallel = true }
 
-[tasks.release]
+[tasks.release.linux]
+run_task = { name = [
+    "release-linux",
+    "release-windows",
+], parallel = true }
+
+[tasks.release.mac]
+dependencies = ["release-macos"]
+
+[tasks.release.windows]
+dependencies = ["release-windows"]
+
+[tasks.release-all]
 run_task = { name = [
     "release-linux",
     "release-windows",
@@ -99,7 +111,7 @@ run_task = { name = [
 
 [tasks.pack-to-out.linux]
 script = '''
-set -euo pipefail
+set -eu
 
 mkdir -p "$OUT_DIR"
 VERSION="$(cargo pkgid | sed -E 's/^.*@([^ ]+)$/\1/')"
@@ -123,7 +135,7 @@ copy_artifact "target/aarch64-apple-darwin/release/$BINARY_NAME" "$BINARY_NAME-m
 
 [tasks.pack-to-out.mac]
 script = '''
-set -euo pipefail
+set -eu
 
 mkdir -p "$OUT_DIR"
 VERSION="$(cargo pkgid | sed -E 's/^.*@([^ ]+)$/\1/')"

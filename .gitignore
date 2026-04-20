@@ -1,5 +1,6 @@
 # Rust build artifacts
 /target/
+/out/
 **/*.rs.bk
 
 # Coverage and profiling outputs
