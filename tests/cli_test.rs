@@ -267,6 +267,9 @@ fn scrub_snapshot(value: &mut Value) {
     if let Some(steps) = value["steps"].as_array_mut() {
         for step in steps {
             step["duration_ms"] = Value::String("<duration>".to_owned());
+            if step["name"] == "prepare_artifacts" {
+                step["message"] = Value::String("created <run_dir>".to_owned());
+            }
         }
     }
 }
@@ -362,6 +365,57 @@ fn test_run_appends_enterprise_additional_launch_keys() {
     assert!(calls.contains("/TESTMANAGER"));
     assert!(calls.contains("/TCUser"));
     assert!(calls.contains("ci-user"));
+}
+
+#[test]
+fn test_text_output_splits_pipeline_into_timeline_stages() {
+    let (_dir, config_path, _build_calls, _test_calls, _captured_config) = setup_project(
+        "work",
+        JUNIT_SMOKE_REPORT_FIXTURE,
+        "12:00:00.000 [INF] ok",
+        0,
+        false,
+        5,
+        None,
+    );
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--no-color",
+            "test",
+            "yaxunit",
+            "all",
+        ])
+        .output()
+        .expect("run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(stdout.contains("● Tests: target"));
+    assert!(stdout.contains("│   all"));
+    assert!(stdout.contains("● Tests: build prerequisite"));
+    assert!(stdout.contains("│   build completed"));
+    assert!(stdout.contains("● Tests: prepare artifacts"));
+    assert!(stdout.contains("│   created "));
+    assert!(stdout.contains("● Tests: prepare runner"));
+    assert!(stdout.contains("│   YaXUnit config written"));
+    assert!(stdout.contains("● Tests: enterprise run"));
+    assert!(stdout.contains("│   enterprise exit code 0"));
+    assert!(stdout.contains("● Tests: parse JUnit report"));
+    assert!(stdout.contains("│   parsed 1 test cases"));
+    assert!(stdout.contains("● Tests: parse runner log"));
+    assert!(stdout.contains("● Tests completed successfully"));
+    assert!(stdout.contains("│   total=1, passed=1, failed=0, skipped=0, errors=0"));
+    assert!(!stdout.contains("Test target: all"));
+    assert!(!stdout.contains("Summary: total="));
+    assert!(!stdout.contains("starting test run"));
+    assert!(!stdout.contains("preparing test run artifacts"));
+    assert!(!stdout.contains("launching enterprise test run"));
+    assert!(!stdout.contains("parsing JUnit report"));
 }
 
 #[test]

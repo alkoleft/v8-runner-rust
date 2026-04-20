@@ -44,7 +44,7 @@ pub fn init_action_logging(
             .with_timer(UtcTimer)
             .with_ansi(ansi_enabled)
             .with_target(false)
-            .event_format(CliEventFormatter)
+            .event_format(CliEventFormatter::default())
             .try_init()
             .map_err(|error| LoggingInitError::Install(error.to_string()))?;
     } else {
@@ -109,7 +109,21 @@ struct ActionLogWriter {
 }
 
 struct UtcTimer;
-struct CliEventFormatter;
+#[derive(Default)]
+struct CliEventFormatter {
+    timeline: Arc<Mutex<TimelineRenderState>>,
+}
+
+#[derive(Default)]
+struct TimelineRenderState {
+    started: bool,
+    last_label: Option<String>,
+}
+
+struct TimelineRender {
+    new_node: bool,
+    connector_before: bool,
+}
 #[derive(Default)]
 struct EventFieldVisitor {
     message: Option<String>,
@@ -155,26 +169,12 @@ where
         event.record(&mut visitor);
 
         if let Some(label) = visitor.timeline_label.as_deref() {
-            write_timeline_node(
+            return self.format_timeline_event(
                 &mut writer,
+                label,
                 visitor.timeline_status.as_deref().unwrap_or("succeeded"),
-            )?;
-            write!(writer, " {label}")?;
-
-            if let Some(detail) = visitor
-                .timeline_detail
-                .as_deref()
-                .filter(|value| !value.is_empty())
-            {
-                writeln!(writer)?;
-                for line in detail.lines() {
-                    write_timeline_pipe(&mut writer)?;
-                    writeln!(writer, "   {line}")?;
-                }
-                return Ok(());
-            }
-
-            return writeln!(writer);
+                visitor.timeline_detail.as_deref(),
+            );
         }
 
         write_timeline_pipe(&mut writer)?;
@@ -195,6 +195,51 @@ where
     }
 }
 
+impl CliEventFormatter {
+    fn format_timeline_event(
+        &self,
+        writer: &mut Writer<'_>,
+        label: &str,
+        status: &str,
+        detail: Option<&str>,
+    ) -> std::fmt::Result {
+        let render = {
+            let mut state = self.timeline.lock().map_err(|_| std::fmt::Error)?;
+            let same_label = state.last_label.as_deref() == Some(label);
+            let render = TimelineRender {
+                new_node: !same_label,
+                connector_before: state.started && !same_label,
+            };
+            state.started = true;
+            state.last_label = Some(label.to_owned());
+            render
+        };
+
+        if render.connector_before {
+            write_timeline_pipe(writer)?;
+            writeln!(writer)?;
+        }
+
+        if render.new_node {
+            write_timeline_node(writer, status)?;
+            write!(writer, " ")?;
+            write_timeline_label(writer, label)?;
+            writeln!(writer)?;
+        }
+
+        if let Some(detail) = detail.filter(|value| !value.trim().is_empty()) {
+            for line in detail.lines() {
+                write_timeline_pipe(writer)?;
+                write!(writer, "   ")?;
+                write_timeline_detail(writer, line.trim())?;
+                writeln!(writer)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
 fn write_timeline_pipe(writer: &mut Writer<'_>) -> std::fmt::Result {
     if writer.has_ansi_escapes() {
         write!(writer, "\x1b[34m│\x1b[0m")
@@ -207,13 +252,72 @@ fn write_timeline_node(writer: &mut Writer<'_>, status: &str) -> std::fmt::Resul
     if writer.has_ansi_escapes() {
         let color = match status {
             "failed" => "31",
-            "skipped" => "34",
+            "running" => "36",
+            "skipped" => "90",
             _ => "32",
         };
         write!(writer, "\x1b[{color}m●\x1b[0m")
     } else {
         write!(writer, "●")
     }
+}
+
+fn write_timeline_label(writer: &mut Writer<'_>, label: &str) -> std::fmt::Result {
+    if !writer.has_ansi_escapes() {
+        return write!(writer, "{label}");
+    }
+
+    let Some(prefix_end) = label.find(':') else {
+        return write!(writer, "{label}");
+    };
+    let (source_set, rest) = label.split_at(prefix_end);
+    if source_set.is_empty() {
+        return write!(writer, "{label}");
+    }
+
+    write_highlighted_label(writer, source_set, "1")?;
+    write!(writer, "{rest}")
+}
+
+fn write_timeline_detail(writer: &mut Writer<'_>, detail: &str) -> std::fmt::Result {
+    if !writer.has_ansi_escapes() {
+        return write!(writer, "{detail}");
+    }
+
+    if let Some((prefix, rest)) = bracketed_prefix(detail) {
+        write!(writer, "\x1b[1;34m{prefix}\x1b[0m")?;
+        return write!(writer, "{rest}");
+    }
+
+    if let Some(rest) = detail.strip_prefix("Изменения:") {
+        write_highlighted_label(writer, "Изменения", "1;34")?;
+        return write!(writer, ":{rest}");
+    }
+
+    if let Some(rest) = detail.strip_prefix("✓ ") {
+        write_highlighted_label(writer, "✓", "1;32")?;
+        return write!(writer, " {rest}");
+    }
+
+    if let Some(rest) = detail.strip_prefix("✗ ") {
+        write_highlighted_label(writer, "✗", "1;31")?;
+        return write!(writer, " {rest}");
+    }
+
+    if let Some(rest) = detail.strip_prefix("○ ") {
+        write_highlighted_label(writer, "○", "90")?;
+        return write!(writer, " {rest}");
+    }
+
+    write!(writer, "{detail}")
+}
+
+fn bracketed_prefix(value: &str) -> Option<(&str, &str)> {
+    if !value.starts_with('[') {
+        return None;
+    }
+    let prefix_end = value.find(']')? + 1;
+    Some(value.split_at(prefix_end))
 }
 
 impl tracing::field::Visit for EventFieldVisitor {
@@ -339,7 +443,9 @@ fn write_highlighted_label(
 impl IoWrite for ActionLogWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         if self.stdout_enabled {
-            io::stdout().write_all(buf)?;
+            let mut stdout = io::stdout();
+            stdout.write_all(buf)?;
+            stdout.flush()?;
         }
 
         if let Some(file) = &self.file {
@@ -347,6 +453,7 @@ impl IoWrite for ActionLogWriter {
                 .lock()
                 .map_err(|_| io::Error::other("action log mutex poisoned"))?;
             file.write_all(buf)?;
+            file.flush()?;
         }
 
         Ok(buf.len())

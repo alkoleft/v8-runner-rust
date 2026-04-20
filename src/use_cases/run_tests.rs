@@ -32,7 +32,7 @@ use crate::use_cases::request::{
     BuildRequest as BuildArgs, TestRequest as TestArgs, TestScopeRequest as TestScope,
 };
 use crate::use_cases::result::{UseCaseFailure, UseCaseResult};
-use tracing::info;
+use tracing::debug;
 
 const STACK_TRACE_LIMIT: usize = 500;
 
@@ -41,7 +41,7 @@ pub fn execute(
     config: &AppConfig,
     args: &TestArgs,
 ) -> UseCaseResult<TestRunResult> {
-    info!(
+    debug!(
         command = context.command().as_str(),
         transport = ?context.transport(),
         "executing test use case"
@@ -111,7 +111,7 @@ fn make_test_result(
 fn run_tests(config: &AppConfig, args: &TestArgs) -> UseCaseResult<TestRunResult> {
     let started = Instant::now();
     let runner_kind = args.execution.profile.kind.clone();
-    info!(
+    debug!(
         full = args.full,
         scope = ?args.scope,
         runner = ?runner_kind,
@@ -162,7 +162,7 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> UseCaseResult<TestRunResult
         }
     };
 
-    info!("running build prerequisite for tests");
+    debug!("running build prerequisite for tests");
     let build_started = Instant::now();
     let build_result = match build_project::run_build_unlocked(
         config,
@@ -207,12 +207,19 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> UseCaseResult<TestRunResult
         message: Some(build_summary(&build_result)),
     });
 
-    info!("preparing test run artifacts");
+    debug!("preparing test run artifacts");
+    let prepare_artifacts_started = Instant::now();
     let mut artifacts = match create_run_artifacts(config, &runner_id) {
         Ok(artifacts) => artifacts,
         Err(error) => {
             let app_error =
                 AppError::Runtime(format!("failed to prepare test run directory: {error}"));
+            steps.push(StepResult {
+                name: "prepare_artifacts".to_owned(),
+                ok: false,
+                duration_ms: prepare_artifacts_started.elapsed().as_millis() as u64,
+                message: Some(app_error.to_string()),
+            });
             let outcome = ExecutionOutcome::new(ExecutionStatus::Failed)
                 .with_diagnostics(vec![app_error.to_string()])
                 .with_errors(vec![test_execution_error(
@@ -230,10 +237,31 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> UseCaseResult<TestRunResult
             return Err(TestExecutionFailure::with_payload(app_error, result));
         }
     };
+    steps.push(StepResult {
+        name: "prepare_artifacts".to_owned(),
+        ok: true,
+        duration_ms: prepare_artifacts_started.elapsed().as_millis() as u64,
+        message: Some(format!("created {}", artifacts.run_dir.display())),
+    });
 
+    let prepare_runner_started = Instant::now();
     let prepared_run = match prepare_runner_artifacts(config, args, &target, &mut artifacts) {
-        Ok(prepared_run) => prepared_run,
+        Ok(prepared_run) => {
+            steps.push(StepResult {
+                name: "prepare_runner".to_owned(),
+                ok: true,
+                duration_ms: prepare_runner_started.elapsed().as_millis() as u64,
+                message: Some(prepared_run_summary(&prepared_run)),
+            });
+            prepared_run
+        }
         Err(error) => {
+            steps.push(StepResult {
+                name: "prepare_runner".to_owned(),
+                ok: false,
+                duration_ms: prepare_runner_started.elapsed().as_millis() as u64,
+                message: Some(error.to_string()),
+            });
             let retained_paths = retain_run_artifacts(config, &artifacts).ok();
             let mut outcome = ExecutionOutcome::new(ExecutionStatus::Failed)
                 .with_diagnostics(vec![error.to_string()])
@@ -256,7 +284,7 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> UseCaseResult<TestRunResult
         }
     };
 
-    info!(path = %artifacts.run_dir.display(), "launching enterprise test run");
+    debug!(path = %artifacts.run_dir.display(), "launching enterprise test run");
     let run_started = Instant::now();
     let enterprise_runner = crate::platform::process::ProcessExecutor;
     let enterprise = match build_enterprise_dsl(
@@ -270,6 +298,12 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> UseCaseResult<TestRunResult
     ) {
         Ok(dsl) => dsl,
         Err(error) => {
+            steps.push(StepResult {
+                name: "run".to_owned(),
+                ok: false,
+                duration_ms: run_started.elapsed().as_millis() as u64,
+                message: Some(error.to_string()),
+            });
             let retained_paths = retain_run_artifacts(config, &artifacts).ok();
             let mut outcome = ExecutionOutcome::new(ExecutionStatus::Failed)
                 .with_diagnostics(vec![error.to_string()])
@@ -339,7 +373,7 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> UseCaseResult<TestRunResult
         }
     }
 
-    info!(path = %artifacts.junit_xml.display(), "parsing JUnit report");
+    debug!(path = %artifacts.junit_xml.display(), "parsing JUnit report");
     let parse_junit_started = Instant::now();
     let junit_parse = parse_junit_report(&artifacts);
     let mut report = match junit_parse.payload {
@@ -409,7 +443,7 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> UseCaseResult<TestRunResult
     let diagnostics = collect_diagnostics(&platform_result, Vec::new(), config);
 
     if process_failed || has_test_failures {
-        info!(
+        debug!(
             process_failed,
             has_test_failures, "retaining failed test artifacts"
         );
@@ -458,7 +492,7 @@ fn run_tests(config: &AppConfig, args: &TestArgs) -> UseCaseResult<TestRunResult
         ));
     }
 
-    info!(path = %artifacts.run_dir.display(), "cleaning successful test run directory");
+    debug!(path = %artifacts.run_dir.display(), "cleaning successful test run directory");
     cleanup_run_dir(&artifacts);
     Ok(make_test_result(
         target,
@@ -502,6 +536,13 @@ fn build_summary(result: &crate::domain::build::BuildResult) -> String {
     }
 }
 
+fn prepared_run_summary(prepared_run: &PreparedRun) -> String {
+    match prepared_run {
+        PreparedRun::YaXUnit => "YaXUnit config written".to_owned(),
+        PreparedRun::Vanessa { .. } => "Vanessa Automation params written".to_owned(),
+    }
+}
+
 fn validate_target(runner_kind: &RunnerKind, scope: &TestScope) -> Result<TestTarget, AppError> {
     match scope {
         TestScope::All => Ok(TestTarget::All),
@@ -532,7 +573,7 @@ fn prepare_runner_artifacts(
 ) -> Result<PreparedRun, AppError> {
     match args.execution.profile.kind {
         RunnerKind::YaXUnit => {
-            info!(path = %artifacts.config_json.display(), "writing YaXUnit configuration");
+            debug!(path = %artifacts.config_json.display(), "writing YaXUnit configuration");
             let config_payload = build_yaxunit_config(target, artifacts);
             write_json_file(&artifacts.config_json, &config_payload).map_err(|error| {
                 AppError::Runtime(format!("failed to write YaXUnit config: {error}"))
@@ -582,7 +623,7 @@ fn build_enterprise_dsl<'a>(
     let location = utilities
         .locate(utility)
         .map_err(|error| AppError::Platform(error.to_string()))?;
-    tracing::info!(
+    debug!(
         additional_launch_keys = ?config.tools.enterprise.additional_launch_keys,
         "resolved enterprise additional launch keys"
     );
@@ -612,7 +653,7 @@ fn create_run_artifacts(config: &AppConfig, runner_id: &str) -> std::io::Result<
         .join(runner_id)
         .join("runs")
         .join(&run_id);
-    info!(path = %run_dir.display(), "creating test artifact directory");
+    debug!(path = %run_dir.display(), "creating test artifact directory");
     fs::create_dir_all(&run_dir)?;
     set_dir_permissions(&run_dir)?;
 

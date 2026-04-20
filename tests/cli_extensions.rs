@@ -1,8 +1,12 @@
 #![cfg(unix)]
 
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use assert_cmd::prelude::*;
 use tempfile::tempdir;
@@ -77,12 +81,14 @@ fn extensions_command_updates_all_extension_properties() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("● client_mcp: disable_safety"));
     assert!(stdout.contains("│"));
+    assert!(stdout.contains("● client_mcp: disable_safety"));
+    assert!(stdout.contains("│   updating extension properties"));
+    assert!(stdout.contains("│   безопасный режим"));
+    assert!(stdout.contains("● tests: disable_safety"));
     assert!(stdout.contains("● Extension properties updated successfully"));
-    assert!(stdout.contains("client_mcp: disable_safety"));
-    assert!(stdout.contains("tests: disable_safety"));
-    assert!(stdout.contains("Extension properties updated successfully"));
+    assert_eq!(stdout.matches("● client_mcp: disable_safety").count(), 1);
+    assert!(!stdout.contains("[Расширения]"));
 
     let calls = fs::read_to_string(calls_log).expect("calls");
     assert!(calls.contains("extension update"));
@@ -90,6 +96,59 @@ fn extensions_command_updates_all_extension_properties() {
     assert!(calls.contains("--name tests"));
     assert!(calls.contains("--safe-mode no"));
     assert!(calls.contains("--unsafe-action-protection no"));
+}
+
+#[test]
+fn extensions_command_streams_stage_before_pipeline_finishes() {
+    let (_dir, config_path, _calls_log, ibcmd_path) = setup_extensions_project();
+    write_script(
+        &ibcmd_path,
+        "case \"$*\" in\n  *\"--name tests\"*) sleep 2 ;;\nesac\nexit 0",
+    );
+
+    let mut command = std::process::Command::cargo_bin("v8-runner").expect("binary");
+    command
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--no-color",
+            "extensions",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut child = command.spawn().expect("spawn command");
+    let stdout = child.stdout.take().expect("stdout");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let mut saw_first_stage = false;
+    while Instant::now() < deadline {
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(line) if line.contains("● client_mcp: disable_safety") => {
+                saw_first_stage = true;
+                break;
+            }
+            Ok(_) => {}
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+
+    assert!(saw_first_stage, "first extension stage was not streamed");
+    assert!(
+        child.try_wait().expect("try wait").is_none(),
+        "process finished before the delayed second extension"
+    );
+
+    let status = child.wait().expect("wait");
+    assert!(status.success());
 }
 
 #[test]

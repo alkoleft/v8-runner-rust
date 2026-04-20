@@ -13,6 +13,8 @@ use crate::use_cases::result::{UseCaseFailure, UseCaseResult};
 use tracing::{debug, info};
 
 const DISABLE_SAFETY_ACTION: &str = "disable_safety";
+const EXTENSIONS_SUCCESS_LABEL: &str = "Extension properties updated successfully";
+const EXTENSIONS_FAILURE_LABEL: &str = "Extension property update failed";
 
 pub fn execute(
     context: &ExecutionContext,
@@ -55,15 +57,30 @@ pub fn execute(
     let mut steps = Vec::new();
     for target in targets {
         let step_started = Instant::now();
-        info!("[Расширения] Снятие ограничений: {}", target);
+        debug!(
+            target = target.as_str(),
+            "configuring extension safety flags"
+        );
+        log_extension_progress(
+            &target,
+            DISABLE_SAFETY_ACTION,
+            "running",
+            "updating extension properties",
+        );
         match dsl.infobase_extension_update_properties(&target, false, false) {
-            Ok(result) if result.process.exit_code == 0 => steps.push(ExtensionsStep {
-                target,
-                action: DISABLE_SAFETY_ACTION.to_owned(),
-                ok: true,
-                message: Some("безопасный режим и защита от опасных действий отключены".to_owned()),
-                duration_ms: step_started.elapsed().as_millis() as u64,
-            }),
+            Ok(result) if result.process.exit_code == 0 => {
+                let step = ExtensionsStep {
+                    target,
+                    action: DISABLE_SAFETY_ACTION.to_owned(),
+                    ok: true,
+                    message: Some(
+                        "безопасный режим и защита от опасных действий отключены".to_owned(),
+                    ),
+                    duration_ms: step_started.elapsed().as_millis() as u64,
+                };
+                log_extension_step(&step);
+                steps.push(step);
+            }
             Ok(result) => {
                 let message = format_ibcmd_failure_details(
                     "extension update",
@@ -75,13 +92,16 @@ pub fn execute(
                     None,
                     None,
                 );
-                steps.push(ExtensionsStep {
+                let step = ExtensionsStep {
                     target: target.clone(),
                     action: DISABLE_SAFETY_ACTION.to_owned(),
                     ok: false,
                     message: Some(message.clone()),
                     duration_ms: step_started.elapsed().as_millis() as u64,
-                });
+                };
+                log_extension_step(&step);
+                steps.push(step);
+                log_extensions_summary(false);
                 let payload = ExtensionsResult {
                     ok: false,
                     steps,
@@ -95,13 +115,16 @@ pub fn execute(
             Err(error) => {
                 let message =
                     format!("ibcmd extension update failed for extension '{target}': {error}");
-                steps.push(ExtensionsStep {
+                let step = ExtensionsStep {
                     target: target.clone(),
                     action: DISABLE_SAFETY_ACTION.to_owned(),
                     ok: false,
                     message: Some(message.clone()),
                     duration_ms: step_started.elapsed().as_millis() as u64,
-                });
+                };
+                log_extension_step(&step);
+                steps.push(step);
+                log_extensions_summary(false);
                 let payload = ExtensionsResult {
                     ok: false,
                     steps,
@@ -115,11 +138,41 @@ pub fn execute(
         }
     }
 
+    log_extensions_summary(true);
     Ok(ExtensionsResult {
         ok: true,
         steps,
         duration_ms: started.elapsed().as_millis() as u64,
     })
+}
+
+fn log_extension_step(step: &ExtensionsStep) {
+    log_extension_progress(
+        &step.target,
+        &step.action,
+        if step.ok { "succeeded" } else { "failed" },
+        step.message.as_deref().unwrap_or("ok"),
+    );
+}
+
+fn log_extension_progress(target: &str, action: &str, status: &str, detail: &str) {
+    let label = format!("{target}: {action}");
+    info!(
+        timeline_status = status,
+        timeline_label = label.as_str(),
+        timeline_detail = detail
+    );
+}
+
+fn log_extensions_summary(ok: bool) {
+    info!(
+        timeline_status = if ok { "succeeded" } else { "failed" },
+        timeline_label = if ok {
+            EXTENSIONS_SUCCESS_LABEL
+        } else {
+            EXTENSIONS_FAILURE_LABEL
+        },
+    );
 }
 
 fn resolve_targets(

@@ -73,6 +73,7 @@ enum StepPlan {
 
 #[derive(Clone, Copy)]
 enum TimelineStageStatus {
+    Running,
     Succeeded,
     Failed,
     Skipped,
@@ -81,6 +82,7 @@ enum TimelineStageStatus {
 impl TimelineStageStatus {
     const fn as_str(self) -> &'static str {
         match self {
+            Self::Running => "running",
             Self::Succeeded => "succeeded",
             Self::Failed => "failed",
             Self::Skipped => "skipped",
@@ -211,12 +213,6 @@ fn run_build_designer(
                         source_set = source_set.name.as_str(),
                         found_changes = 0,
                         "change analysis result: found 0 change(s)"
-                    );
-                    log_timeline_stage(
-                        &source_set.name,
-                        "changes",
-                        "no changes",
-                        TimelineStageStatus::Succeeded,
                     );
                     StepPlan::Skip {
                         message: "no changes".to_owned(),
@@ -420,14 +416,13 @@ fn log_change_analysis(source_set_name: &str, changes: &[analyzer::FileChange]) 
         }
     }
 
-    info!(
-        "[Изменения] {source_set_name}: найдено {} (новых {added}, изменено {modified}, удалено {deleted})",
-        changes.len()
-    );
     log_timeline_stage(
         source_set_name,
         "changes",
-        &format!("found {} change(s)", changes.len()),
+        &format!(
+            "Изменения: найдено {} (новых {added}, изменено {modified}, удалено {deleted})",
+            changes.len()
+        ),
         TimelineStageStatus::Succeeded,
     );
 }
@@ -452,6 +447,13 @@ fn push_build_step(
 }
 
 fn log_build_step_timeline(step: &BuildStep) {
+    if step.ok
+        && matches!(step.mode, BuildMode::Skipped)
+        && step.message.as_deref() == Some("no changes")
+    {
+        return;
+    }
+
     let status = if !step.ok {
         TimelineStageStatus::Failed
     } else if matches!(step.mode, BuildMode::Skipped) {
@@ -465,27 +467,43 @@ fn log_build_step_timeline(step: &BuildStep) {
         .map(first_message_line)
         .filter(|value| !value.is_empty())
         .unwrap_or("ok");
+    let detail = build_step_completion_detail(step, status, message);
     log_timeline_stage(
         &step.source_set,
         &build_mode_label(&step.mode),
-        message,
+        &detail,
         status,
     );
 }
 
+fn build_step_completion_detail(
+    step: &BuildStep,
+    status: TimelineStageStatus,
+    message: &str,
+) -> String {
+    match status {
+        TimelineStageStatus::Succeeded => match step.mode {
+            BuildMode::EdtExport => "✓ completed".to_owned(),
+            _ => format!("✓ {message}"),
+        },
+        TimelineStageStatus::Failed => format!("✗ {message}"),
+        TimelineStageStatus::Skipped => format!("○ {message}"),
+        TimelineStageStatus::Running => message.to_owned(),
+    }
+}
+
 fn log_timeline_stage(
     source_set_name: &str,
-    stage: &str,
+    _stage: &str,
     message: &str,
     status: TimelineStageStatus,
 ) {
-    let label = format!(
-        "{source_set_name}: {stage} - {}",
-        first_message_line(message)
-    );
+    let label = format!("{source_set_name}:");
+    let detail = first_message_line(message);
     info!(
         timeline_status = status.as_str(),
-        timeline_label = label.as_str()
+        timeline_label = label.as_str(),
+        timeline_detail = detail
     );
 }
 
@@ -555,16 +573,10 @@ fn run_build_ibcmd(
                 .expect("every source-set must have an analysis result")
             {
                 Ok(AnalysisOutcome::NoChanges) => {
-                    info!(
+                    debug!(
                         source_set = source_set.name.as_str(),
                         found_changes = 0,
                         "change analysis result: found 0 change(s)"
-                    );
-                    log_timeline_stage(
-                        &source_set.name,
-                        "changes",
-                        "no changes",
-                        TimelineStageStatus::Succeeded,
                     );
                     StepPlan::Skip {
                         message: "no changes".to_owned(),
@@ -572,7 +584,7 @@ fn run_build_ibcmd(
                     }
                 }
                 Ok(AnalysisOutcome::Fallback) => {
-                    info!(
+                    debug!(
                         source_set = source_set.name.as_str(),
                         "change analysis result: fallback to full load after recoverable issue"
                     );
@@ -600,7 +612,7 @@ fn run_build_ibcmd(
                         config.build.partial_load_threshold,
                     ) {
                         LoadDecision::Partial(paths) => {
-                            info!(
+                            debug!(
                                 source_set = source_set.name.as_str(),
                                 partial_file_count = paths.len(),
                                 threshold = config.build.partial_load_threshold,
@@ -616,7 +628,7 @@ fn run_build_ibcmd(
                             }
                         }
                         LoadDecision::Full => {
-                            info!(
+                            debug!(
                                 source_set = source_set.name.as_str(),
                                 threshold = config.build.partial_load_threshold,
                                 "change analysis decision: full load"
@@ -653,7 +665,7 @@ fn run_build_ibcmd(
 
         match plan {
             StepPlan::Skip { message, ok } => {
-                info!(
+                debug!(
                     source_set = source_set.name.as_str(),
                     message = message.as_str(),
                     "skipping build step"
@@ -673,7 +685,7 @@ fn run_build_ibcmd(
                 partial_paths,
                 commit,
             } => {
-                info!(
+                debug!(
                     source_set = source_set.name.as_str(),
                     mode = ?mode,
                     message = message.as_str(),
@@ -858,12 +870,6 @@ fn run_build_edt(
                         source_set = source_set.name.as_str(),
                         found_changes = 0,
                         "edt change analysis result: found 0 change(s)"
-                    );
-                    log_timeline_stage(
-                        &source_set.name,
-                        "changes",
-                        "no changes",
-                        TimelineStageStatus::Succeeded,
                     );
                     StepPlan::Skip {
                         message: "no changes".to_owned(),
@@ -1126,9 +1132,11 @@ fn run_build_edt(
                 };
 
                 let export_started = Instant::now();
-                info!(
-                    "[EDT] Конвертация в файлы конфигуратора: {}",
-                    source_set.name
+                log_timeline_stage(
+                    &source_set.name,
+                    "edt_export",
+                    "[EDT] Конвертация в файлы конфигуратора",
+                    TimelineStageStatus::Running,
                 );
                 let export_result = if config.tools.edt_cli.interactive_mode {
                     if interactive_edt.is_none() {
@@ -1417,13 +1425,22 @@ fn execute_source_set_step(
     partial_paths: Option<&[PathBuf]>,
     commit: &StepCommit,
 ) -> Result<(), AppError> {
-    if partial_paths.is_some() {
-        info!(
-            "[Конфигуратор] Загрузка изменений в базу: {}",
-            source_set.name
+    if let Some(paths) = partial_paths {
+        log_timeline_stage(
+            &source_set.name,
+            &build_mode_label(&BuildMode::Partial {
+                file_count: paths.len(),
+            }),
+            "[Конфигуратор] Загрузка изменений в базу",
+            TimelineStageStatus::Running,
         );
     } else {
-        info!("[Конфигуратор] Загрузка в базу: {}", source_set.name);
+        log_timeline_stage(
+            &source_set.name,
+            "full",
+            "[Конфигуратор] Загрузка в базу",
+            TimelineStageStatus::Running,
+        );
     }
     let load_result = if let Some(paths) = partial_paths {
         let list_file = partial_list_file(&config.work_path).map_err(|error| {
@@ -1492,9 +1509,15 @@ fn execute_source_set_step_ibcmd(
     commit: &StepCommit,
 ) -> Result<(), AppError> {
     if partial_paths.is_some() {
-        info!("[ibcmd] Загрузка изменений в базу: {}", source_set.name);
+        debug!(
+            source_set = source_set.name.as_str(),
+            "loading partial changes into infobase with ibcmd"
+        );
     } else {
-        info!("[ibcmd] Загрузка в базу: {}", source_set.name);
+        debug!(
+            source_set = source_set.name.as_str(),
+            "loading source set into infobase with ibcmd"
+        );
     }
 
     let dsl = build_ibcmd_dsl(config, binary, runner)?;
@@ -1507,8 +1530,8 @@ fn execute_source_set_step_ibcmd(
         log_timeline_stage(
             &source_set.name,
             "ibcmd_import",
-            "launching ibcmd partial import",
-            TimelineStageStatus::Succeeded,
+            "[ibcmd] Загрузка изменений в базу",
+            TimelineStageStatus::Running,
         );
         dsl.config_import_partial(load_context.path(), &rel_paths, extension)
             .map_err(map_ibcmd_error)?
@@ -1516,8 +1539,8 @@ fn execute_source_set_step_ibcmd(
         log_timeline_stage(
             &source_set.name,
             "ibcmd_import",
-            "launching ibcmd full import",
-            TimelineStageStatus::Succeeded,
+            "[ibcmd] Загрузка в базу",
+            TimelineStageStatus::Running,
         );
         dsl.config_import_full(load_context.path(), extension)
             .map_err(map_ibcmd_error)?
@@ -1531,8 +1554,8 @@ fn execute_source_set_step_ibcmd(
     log_timeline_stage(
         &source_set.name,
         "ibcmd_apply",
-        "launching ibcmd apply",
-        TimelineStageStatus::Succeeded,
+        "[ibcmd] Применение изменений",
+        TimelineStageStatus::Running,
     );
     let apply_result = dsl
         .config_apply(extension, DynamicUpdateMode::Auto)

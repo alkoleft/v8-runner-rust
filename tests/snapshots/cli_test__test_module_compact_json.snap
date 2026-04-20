@@ -64,6 +64,18 @@ Object {
         },
         Object {
             "duration_ms": String("<duration>"),
+            "message": String("created <run_dir>"),
+            "name": String("prepare_artifacts"),
+            "ok": Bool(true),
+        },
+        Object {
+            "duration_ms": String("<duration>"),
+            "message": String("YaXUnit config written"),
+            "name": String("prepare_runner"),
+            "ok": Bool(true),
+        },
+        Object {
+            "duration_ms": String("<duration>"),
             "message": String("enterprise exit code 0"),
             "name": String("run"),
             "ok": Bool(true),

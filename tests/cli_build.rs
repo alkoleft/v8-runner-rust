@@ -94,6 +94,36 @@ fn write_config_with_builder(
     fs::write(path, config).expect("config");
 }
 
+fn write_live_workspace_lock(work_path: &Path, command: &str) {
+    let canonical_work = fs::canonicalize(work_path).expect("canonical work");
+    let lock_owner = "integration-test-lock-owner";
+    let started_at = chrono::Utc::now().to_rfc3339();
+
+    fs::write(
+        canonical_work.join(".v8-runner.workspace.lock"),
+        serde_json::json!({
+            "tool": "v8-runner",
+            "pid": std::process::id(),
+            "owner_id": lock_owner,
+            "created_at": started_at,
+        })
+        .to_string(),
+    )
+    .expect("workspace lock");
+    fs::write(
+        canonical_work.join(".v8-runner.workspace.lock.json"),
+        serde_json::json!({
+            "pid": std::process::id(),
+            "lock_owner": lock_owner,
+            "command": command,
+            "started_at": started_at,
+            "canonical_work_path": canonical_work,
+        })
+        .to_string(),
+    )
+    .expect("workspace lock sidecar");
+}
+
 fn setup_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
     let dir = tempdir().expect("tempdir");
     let base_path = dir.path().join("project");
@@ -341,16 +371,127 @@ fn build_text_stdout_includes_action_logs() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout
-        .lines()
-        .any(|line| line.contains("│") && line.contains("[Изменения]")));
-    assert!(stdout.contains("[Изменения]"));
-    assert!(stdout.contains("● main: changes - found"));
-    assert!(stdout.contains("● main: partial"));
+    assert!(stdout.contains("● main:"));
+    assert!(stdout.contains("│   Изменения: найдено"));
+    assert!(stdout.contains("изменено"));
+    assert!(stdout.contains("│   [Конфигуратор] Загрузка изменений в базу"));
+    assert!(stdout.contains("│   ✓ partial load"));
+    assert_eq!(stdout.matches("● main").count(), 1);
     assert!(stdout.contains("main"));
-    assert!(stdout.contains("[Конфигуратор]"));
-    assert!(stdout.contains("Загрузка изменений в базу:"));
     assert!(stdout.contains("Build completed successfully"));
+}
+
+#[test]
+fn build_text_highlights_timeline_detail_prefixes() {
+    let (_dir, config_path, _binary_path, _work_path) = setup_project();
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args(["--config", &config_path.display().to_string(), "build"])
+        .output()
+        .expect("run designer build");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\x1b[1mmain\x1b[0m:"));
+    assert!(stdout.contains("\x1b[1;34mИзменения\x1b[0m:"));
+    assert!(stdout.contains("\x1b[1;34m[Конфигуратор]\x1b[0m"));
+    assert!(stdout.contains("\x1b[1;32m✓\x1b[0m partial load"));
+
+    let (_dir, config_path, _ibcmd_calls_log, _edt_calls_log) = setup_edt_ibcmd_project();
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args(["--config", &config_path.display().to_string(), "build"])
+        .output()
+        .expect("run edt build");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\x1b[1;34m[EDT]\x1b[0m"));
+    assert!(stdout.contains("\x1b[1;34m[ibcmd]\x1b[0m"));
+}
+
+#[test]
+fn build_text_workspace_lock_conflict_prints_single_error() {
+    let (_dir, config_path, _binary_path, work_path) = setup_project();
+    write_live_workspace_lock(&work_path, "build");
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args([
+            "--no-color",
+            "--config",
+            &config_path.display().to_string(),
+            "build",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(3));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let error_prefix = "runtime error: cannot start build";
+    let combined = format!("{stdout}{stderr}");
+
+    assert_eq!(
+        combined.matches(error_prefix).count(),
+        1,
+        "stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("ERROR: runtime error: cannot start build"),
+        "stderr:\n{stderr}"
+    );
+    assert!(
+        !stdout.contains(error_prefix),
+        "stdout should not contain duplicate error log:\n{stdout}"
+    );
+}
+
+#[test]
+fn build_text_no_changes_collapses_per_source_set_noise() {
+    let (_dir, config_path, _binary_path, _work_path) = setup_project();
+
+    let first = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args([
+            "--no-color",
+            "--config",
+            &config_path.display().to_string(),
+            "build",
+        ])
+        .output()
+        .expect("first build");
+    assert!(first.status.success());
+
+    let second = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args([
+            "--no-color",
+            "--config",
+            &config_path.display().to_string(),
+            "build",
+        ])
+        .output()
+        .expect("second build");
+
+    assert!(second.status.success());
+    let stdout = String::from_utf8_lossy(&second.stdout);
+
+    assert!(
+        stdout.contains("Build completed: no changes"),
+        "stdout:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("changes - no changes"),
+        "stdout:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("skipped - no changes"),
+        "stdout:\n{stdout}"
+    );
 }
 
 #[test]
@@ -371,20 +512,19 @@ fn build_edt_text_interleaves_export_stage_after_edt_log() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     let lines = stdout.lines().collect::<Vec<_>>();
-    let edt_log_index = lines
+    let source_set_stage_index = lines
         .iter()
-        .position(|line| line.contains("[EDT] Конвертация в файлы конфигуратора: configuration"))
-        .expect("EDT log line");
-    assert_eq!(
-        lines.get(edt_log_index + 1).copied(),
-        Some("● configuration: edt_export - EDT export completed")
-    );
-    assert!(stdout.contains("● configuration: changes - found"));
-    assert!(stdout.contains("● configuration: ibcmd_import - launching ibcmd full import"));
-    assert!(stdout.contains("● configuration: ibcmd_apply - launching ibcmd apply"));
-    assert!(
-        stdout.contains("● configuration: full - full load from EDT export after change detection")
-    );
+        .position(|line| *line == "● configuration:")
+        .expect("source-set timeline stage");
+    assert!(lines
+        .iter()
+        .skip(source_set_stage_index + 1)
+        .any(|line| *line == "│   [EDT] Конвертация в файлы конфигуратора"));
+    assert!(stdout.contains("│   ✓ completed"));
+    assert!(stdout.contains("│   [ibcmd] Загрузка в базу"));
+    assert!(stdout.contains("│   [ibcmd] Применение изменений"));
+    assert!(stdout.contains("│   ✓ full load from EDT export after change detection"));
+    assert_eq!(stdout.matches("● configuration").count(), 1);
 
     let ibcmd_calls = fs::read_to_string(ibcmd_calls_log).expect("ibcmd calls");
     let edt_calls = fs::read_to_string(edt_calls_log).expect("edt calls");
@@ -414,9 +554,10 @@ fn build_json_writes_action_log_file_without_polluting_stdout() {
 
     let action_log = work_path.join("logs").join("mcp").join("actions.log");
     let contents = fs::read_to_string(action_log).expect("action log");
-    assert!(contents.contains("[Изменения]"));
-    assert!(contents.contains("[Конфигуратор]"));
-    assert!(contents.contains("Загрузка изменений в базу:"));
+    assert!(contents.contains("main:"));
+    assert!(contents.contains("Изменения: найдено"));
+    assert!(contents.contains("[Конфигуратор] Загрузка изменений в базу"));
+    assert!(contents.contains("✓ partial load"));
 }
 
 #[test]
@@ -438,8 +579,10 @@ fn build_ibcmd_full_rebuild_invokes_import_and_apply() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("● main: ibcmd_import - launching ibcmd full import"));
-    assert!(stdout.contains("● main: ibcmd_apply - launching ibcmd apply"));
+    assert!(stdout.contains("● main:"));
+    assert!(stdout.contains("│   [ibcmd] Загрузка в базу"));
+    assert!(stdout.contains("│   [ibcmd] Применение изменений"));
+    assert_eq!(stdout.matches("● main").count(), 1);
     let calls = fs::read_to_string(calls_log).expect("calls");
     assert!(calls.contains("config import"));
     assert!(calls.contains("config apply"));

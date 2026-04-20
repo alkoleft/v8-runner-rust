@@ -12,7 +12,6 @@ use crate::domain::artifacts::{ArtifactBuildMode, ArtifactsResult};
 use crate::domain::build::{BuildMode, BuildResult};
 use crate::domain::dump::{DumpMode, DumpResult};
 use crate::domain::execution::ExecutionTimeouts;
-use crate::domain::extensions::ExtensionsResult;
 use crate::domain::init::{InitResult, InitStep, InitStepStatus};
 use crate::domain::issue::{Issue, IssueSeverity};
 use crate::domain::load::{LoadMode, LoadResult};
@@ -113,8 +112,6 @@ fn execute_extensions(
                         result.duration_ms,
                         result,
                     ));
-                } else {
-                    render_extensions_text(&result, presenter, true);
                 }
                 Ok(())
             }
@@ -129,9 +126,6 @@ fn execute_extensions(
                         ));
                     }
                 } else {
-                    if let Some(result) = failure.payload.as_ref() {
-                        render_extensions_text(result, presenter, false);
-                    }
                     presenter.print_error(&error.to_string());
                 }
                 Err(error)
@@ -1005,33 +999,6 @@ fn render_load_text(result: &LoadResult, presenter: &Presenter, succeeded: bool)
     presenter.print_timeline(&timeline);
 }
 
-fn render_extensions_text(result: &ExtensionsResult, presenter: &Presenter, succeeded: bool) {
-    let mut timeline = Vec::new();
-    for step in &result.steps {
-        let line = format!(
-            "{}: {} - {}",
-            step.target,
-            step.action,
-            step.message.as_deref().unwrap_or("ok")
-        );
-        if step.ok {
-            timeline.push(TimelineItem::new(TimelineStatus::Succeeded, line));
-        } else {
-            timeline.push(TimelineItem::new(TimelineStatus::Failed, line));
-        }
-    }
-
-    timeline.push(if succeeded {
-        TimelineItem::new(
-            TimelineStatus::Succeeded,
-            "Extension properties updated successfully",
-        )
-    } else {
-        TimelineItem::new(TimelineStatus::Failed, "Extension property update failed")
-    });
-    presenter.print_timeline(&timeline);
-}
-
 fn render_init_text(result: &InitResult, presenter: &Presenter) {
     let mut timeline = Vec::new();
     for step in &result.steps {
@@ -1189,46 +1156,50 @@ fn render_syntax_text(result: &SyntaxCheckResult, presenter: &Presenter) {
 }
 
 fn render_test_text(result: &TestRunResult, presenter: &Presenter) {
-    let target = match &result.target {
-        TestTarget::All => "all".to_owned(),
-        TestTarget::Module { name } => format!("module {name}"),
-    };
-    presenter.print_info(&format!("Test target: {target}"));
+    let target = render_test_target(&result.target);
+    let mut timeline =
+        vec![TimelineItem::new(TimelineStatus::Succeeded, "Tests: target").with_detail(target)];
 
-    let mut timeline = result
-        .steps
-        .iter()
-        .map(|step| {
-            let status = if step.ok {
-                TimelineStatus::Succeeded
-            } else {
-                TimelineStatus::Failed
-            };
-            let mut label = step.name.clone();
-            if let Some(message) = step.message.as_deref() {
-                label.push_str(" - ");
-                label.push_str(message);
-            }
-            TimelineItem::new(status, label)
-        })
-        .collect::<Vec<_>>();
-    timeline.push(if result.ok {
-        TimelineItem::new(TimelineStatus::Succeeded, "Tests completed successfully")
+    timeline.extend(result.steps.iter().map(|step| {
+        let status = if step.ok {
+            TimelineStatus::Succeeded
+        } else {
+            TimelineStatus::Failed
+        };
+        let mut item = TimelineItem::new(status, render_test_step_label(&step.name));
+        if let Some(message) = step.message.as_deref().filter(|value| !value.is_empty()) {
+            item = item.with_detail(message.to_owned());
+        }
+        item
+    }));
+
+    let status = if result.ok {
+        TimelineStatus::Succeeded
     } else {
-        TimelineItem::new(TimelineStatus::Failed, "Tests failed")
-    });
-    presenter.print_timeline(&timeline);
-
+        TimelineStatus::Failed
+    };
+    let mut summary = TimelineItem::new(
+        status,
+        if result.ok {
+            "Tests completed successfully"
+        } else {
+            "Tests failed"
+        },
+    );
     if let Some(report) = &result.report {
-        presenter.print_info(&format!(
-            "Summary: total={}, passed={}, failed={}, skipped={}, errors={}",
+        summary = summary.with_detail(format!(
+            "total={}, passed={}, failed={}, skipped={}, errors={}",
             report.summary.total,
             report.summary.passed,
             report.summary.failed,
             report.summary.skipped,
             report.summary.errors
         ));
+    }
+    timeline.push(summary);
+    presenter.print_timeline(&timeline);
 
+    if let Some(report) = &result.report {
         for suite in &report.suites {
             presenter.print_info(&format!("Suite: {}", suite.name));
             for case in &suite.cases {
@@ -1248,6 +1219,25 @@ fn render_test_text(result: &TestRunResult, presenter: &Presenter) {
     }
     for warning in &result.warnings {
         presenter.print_info(&format!("Warning: {warning}"));
+    }
+}
+
+fn render_test_target(target: &TestTarget) -> String {
+    match target {
+        TestTarget::All => "all".to_owned(),
+        TestTarget::Module { name } => format!("module {name}"),
+    }
+}
+
+fn render_test_step_label(name: &str) -> String {
+    match name {
+        "build" => "Tests: build prerequisite".to_owned(),
+        "prepare_artifacts" => "Tests: prepare artifacts".to_owned(),
+        "prepare_runner" => "Tests: prepare runner".to_owned(),
+        "run" => "Tests: enterprise run".to_owned(),
+        "parse_junit" => "Tests: parse JUnit report".to_owned(),
+        "parse_log" => "Tests: parse runner log".to_owned(),
+        other => format!("Tests: {other}"),
     }
 }
 

@@ -88,7 +88,11 @@ pub fn run() -> i32 {
             0
         }
         Err(e) => {
-            error!("{e}");
+            // Text command adapters have already rendered the error; text action logs
+            // go to stdout, so logging here would duplicate user-facing output.
+            if presenter.is_json() {
+                error!("{e}");
+            }
             e.exit_code()
         }
     }

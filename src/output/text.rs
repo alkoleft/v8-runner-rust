@@ -66,13 +66,9 @@ impl TextPresenter {
             println!("{} {}", self.timeline_node(item.status), item.label);
 
             if let Some(detail) = item.detail.as_deref().filter(|value| !value.is_empty()) {
-                let prefix = if last {
-                    self.timeline_tail()
-                } else {
-                    self.timeline_pipe()
-                };
+                let prefix = self.timeline_pipe();
                 for line in detail.lines() {
-                    println!("{prefix}   {line}");
+                    println!("{prefix}   {}", self.timeline_detail(line));
                 }
             }
 
@@ -90,7 +86,7 @@ impl TextPresenter {
             let color = match status {
                 TimelineStatus::Succeeded => "32",
                 TimelineStatus::Failed => "31",
-                TimelineStatus::Skipped => "34",
+                TimelineStatus::Skipped => "90",
             };
             format!("\x1b[{color}m{glyph}\x1b[0m")
         }
@@ -104,9 +100,41 @@ impl TextPresenter {
         }
     }
 
-    fn timeline_tail(&self) -> String {
-        " ".to_owned()
+    fn timeline_detail(&self, detail: &str) -> String {
+        if self.no_color {
+            return detail.to_owned();
+        }
+
+        if let Some((prefix, rest)) = bracketed_prefix(detail) {
+            return format!("\x1b[1;34m{prefix}\x1b[0m{rest}");
+        }
+
+        if let Some(rest) = detail.strip_prefix("Изменения:") {
+            return format!("\x1b[1;34mИзменения\x1b[0m:{rest}");
+        }
+
+        if let Some(rest) = detail.strip_prefix("✓ ") {
+            return format!("\x1b[1;32m✓\x1b[0m {rest}");
+        }
+
+        if let Some(rest) = detail.strip_prefix("✗ ") {
+            return format!("\x1b[1;31m✗\x1b[0m {rest}");
+        }
+
+        if let Some(rest) = detail.strip_prefix("○ ") {
+            return format!("\x1b[90m○\x1b[0m {rest}");
+        }
+
+        detail.to_owned()
     }
+}
+
+fn bracketed_prefix(value: &str) -> Option<(&str, &str)> {
+    if !value.starts_with('[') {
+        return None;
+    }
+    let prefix_end = value.find(']')? + 1;
+    Some(value.split_at(prefix_end))
 }
 
 pub struct JsonPresenter;
@@ -117,5 +145,35 @@ impl JsonPresenter {
             Ok(s) => println!("{s}"),
             Err(e) => eprintln!("JSON serialization error: {e}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TextPresenter;
+
+    #[test]
+    fn timeline_detail_highlights_status_markers() {
+        let presenter = TextPresenter { no_color: false };
+
+        assert_eq!(
+            presenter.timeline_detail("✓ completed"),
+            "\x1b[1;32m✓\x1b[0m completed"
+        );
+        assert_eq!(
+            presenter.timeline_detail("✗ failed"),
+            "\x1b[1;31m✗\x1b[0m failed"
+        );
+        assert_eq!(
+            presenter.timeline_detail("○ skipped"),
+            "\x1b[90m○\x1b[0m skipped"
+        );
+    }
+
+    #[test]
+    fn timeline_detail_keeps_no_color_plain() {
+        let presenter = TextPresenter { no_color: true };
+
+        assert_eq!(presenter.timeline_detail("✓ completed"), "✓ completed");
     }
 }
