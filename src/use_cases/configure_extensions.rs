@@ -66,7 +66,7 @@ pub fn execute(
             }),
             Ok(result) => {
                 let message = format_ibcmd_failure_details(
-                    "infobase extensions update",
+                    "extension update",
                     "extension",
                     &target,
                     result.process.exit_code,
@@ -94,7 +94,7 @@ pub fn execute(
             }
             Err(error) => {
                 let message = format!(
-                    "ibcmd infobase extensions update failed for extension '{target}': {error}"
+                    "ibcmd extension update failed for extension '{target}': {error}"
                 );
                 steps.push(ExtensionsStep {
                     target: target.clone(),
@@ -288,7 +288,7 @@ mod tests {
 
         assert!(result.ok);
         let calls_text = fs::read_to_string(calls).expect("calls");
-        assert!(calls_text.contains("infobase extensions update"));
+        assert!(calls_text.contains("extension update"));
         assert!(calls_text.contains("--name=client_mcp"));
         assert!(calls_text.contains("--safe-mode=no"));
         assert!(calls_text.contains("--unsafe-action-protection=no"));
@@ -317,7 +317,7 @@ mod tests {
 
         assert_eq!(failure.error.kind(), UseCaseErrorKind::Platform);
         assert!(failure.error.message().contains(
-            "infobase extensions update failed for extension 'client_mcp' with exit code 17"
+            "extension update failed for extension 'client_mcp' with exit code 17"
         ));
         assert!(failure
             .error

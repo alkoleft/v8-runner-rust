@@ -54,7 +54,7 @@ sequenceDiagram
     CLI->>UC: ConfigureExtensionsRequest
     UC->>UC: выбрать extension source-set
     UC->>PF: обновить свойства расширений
-    PF->>IB: infobase extensions update
+    PF->>IB: extension update
     IB-->>PF: результат платформы
     PF-->>UC: шаги и диагностика
     UC-->>CLI: ExtensionsResult

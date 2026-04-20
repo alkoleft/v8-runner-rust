@@ -82,7 +82,7 @@ fn extensions_command_updates_all_extension_properties() {
     assert!(stdout.contains("Extension properties updated successfully"));
 
     let calls = fs::read_to_string(calls_log).expect("calls");
-    assert!(calls.contains("infobase extensions update"));
+    assert!(calls.contains("extension update"));
     assert!(calls.contains("--name=client_mcp"));
     assert!(calls.contains("--name=tests"));
     assert!(calls.contains("--safe-mode=no"));
@@ -138,7 +138,7 @@ fn extensions_command_json_failure_reports_operation_target_and_exit_code() {
         .as_str()
         .expect("message")
         .contains(
-            "infobase extensions update failed for extension 'client_mcp' with exit code 17"
+            "extension update failed for extension 'client_mcp' with exit code 17"
         ));
     assert!(payload["data"]["steps"][0]["message"]
         .as_str()

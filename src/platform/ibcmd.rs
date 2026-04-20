@@ -108,11 +108,7 @@ impl<'a> IbcmdDsl<'a> {
         safe_mode: bool,
         unsafe_action_protection: bool,
     ) -> Result<PlatformCommandResult, IbcmdError> {
-        let mut args = vec![
-            "infobase".to_owned(),
-            "extensions".to_owned(),
-            "update".to_owned(),
-        ];
+        let mut args = vec!["extension".to_owned(), "update".to_owned()];
         args.extend(self.base_args());
         args.push(format!("--name={name}"));
         args.push(format!(
@@ -505,8 +501,7 @@ mod tests {
             .expect("update");
 
         let args = fs::read_to_string(args_log).expect("args");
-        assert!(args.contains("infobase"));
-        assert!(args.contains("extensions"));
+        assert!(args.contains("extension"));
         assert!(args.contains("update"));
         assert!(args.contains("--name=client_mcp"));
         assert!(args.contains("--safe-mode=no"));

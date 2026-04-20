@@ -8,7 +8,7 @@
 
 1. `build`
 2. `syntax/check`
-3. `test`
+3. `test` Rust/CLI/MCP-контракта
 4. `package`
 5. `deploy-ready artifacts`
 
@@ -21,13 +21,13 @@
 
 Ни `load`, ни обратное `apply` в mandatory happy-path не входят.
 
-Default mandatory `test` stage uses `V8TR_DESIGNER_TEST_MODE=va`, so the canonical happy-path also requires these Vanessa Automation assets to be present:
+Default mandatory `live-cli-designer` не запускает интерактивный 1С test runner: в фикстурной ИБ репозитория нет надежного headless раннера, который обязан завершаться на всех ОС. Реальная 1С test-stage остается явным opt-in через `V8TR_DESIGNER_TEST_MODE=va|yaxunit-all|module`.
 
-- `tests/fixtures/vanessa-automation-single.epf`
-- `scripts/test/live-cli-designer.va-params.json`
-- `scripts/test/features/live-cli-designer`
+Для `V8TR_DESIGNER_TEST_MODE=va` дополнительно нужны:
 
-These are hard prerequisites of the default contract, not optional extras. If they are not intended, the canonical `test` path must be switched to `module` explicitly.
+- `tests/fixtures/vanessa-automation-single.epf` или `V8TR_VA_EPF`
+- `scripts/test/live-cli-designer.va-params.json` или `V8TR_VA_PARAMS_TEMPLATE`
+- `scripts/test/features/live-cli-designer` или `V8TR_VA_FEATURE_PATH`
 
 ## Контуры
 
@@ -115,7 +115,7 @@ bash scripts/test/live-cli-designer.sh
 - `V8TR_BIN` - путь к бинарю `v8-runner`
 - `V8TR_PLATFORM_PATH` - явный override пути до `1cv8`/`1cv8.exe`
 - `V8TR_DESIGNER_SMOKE_PROFILE=mandatory|extended` - mandatory по умолчанию; `extended` включает dump-only хвост
-- `V8TR_DESIGNER_TEST_MODE=va|module` - конкретизация текущего test-stage helper-а
+- `V8TR_DESIGNER_TEST_MODE=none|va|yaxunit-all|module` - явный запуск 1С test-stage helper-а; `none` по умолчанию
 - `V8TR_DESIGNER_TEST_MODULE` - обязателен при `V8TR_DESIGNER_TEST_MODE=module`
 - `V8TR_DESIGNER_ALLOW_MISSING_CONFIG=1` - разрешить `SKIPPED` вместо hard failure только для non-blocking/soft-skip контекстов
 
@@ -176,7 +176,7 @@ Windows runner contract for this helper layer is explicit:
 | Контур | Linux | Windows | Blocking | Build | Syntax/check | Test | Package | Deploy-ready artifacts |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `ci-rust contract` | yes | yes | yes | Rust | Rust | Rust | no | no |
-| `ci-rust happy-path` | yes | yes | yes on trusted | Rust + real 1C | real | real | real | real |
+| `ci-rust happy-path` | yes | yes | yes on trusted | Rust + real 1C | real | Rust by default; real 1C opt-in | real | real |
 | `live-mcp-http` | optional | optional | no | real via MCP | real via MCP | real via MCP | n/a | n/a |
 | `live-cli-ibcmd` | optional | optional | no | real (`IBCMD`) | n/a | n/a | diagnostic dump/export only | n/a |
 | `live-cli` | optional | optional | no | real | real | real | n/a | n/a |
@@ -185,7 +185,6 @@ Windows runner contract for this helper layer is explicit:
 
 - В репозитории пока нет новых `.github/workflows/*.yml`; здесь зафиксированы только matrix/contract/TODO hooks.
 - Установка 1С, bootstrap файловой ИБ через `ibsrv`, artifact upload и branch/fork gating остаются внешним workflow wiring.
-- `live-cli-designer` по умолчанию использует текущий helper test-stage (`va`), но canonical contract формулируется как stage `test`, а не как жёстко зафиксированная конкретная команда.
-- Default `va`-path additionally requires the Vanessa Automation EPF, params template, and feature directory listed above.
+- `live-cli-designer` по умолчанию не запускает 1С test-stage; `va`, `yaxunit-all` и `module` остаются opt-in режимами для стендов, где установлен и проверен соответствующий headless runner.
 - `live-mcp-http` и `live-cli-ibcmd` остаются отдельными non-blocking контурами.
 - Mandatory designer smoke requires `V8TR_DESIGNER_REAL_CONFIG`; `V8TR_DESIGNER_ALLOW_MISSING_CONFIG=1` is reserved for fork/non-blocking soft-skip contexts.

@@ -4,10 +4,10 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-DESIGNER_CONFIG_PATH="${V8TR_DESIGNER_REAL_CONFIG:-$ROOT_DIR/scripts/test/live-cli-designer.fixture.yaml}"
+DESIGNER_CONFIG_PATH="${V8TR_DESIGNER_REAL_CONFIG:-}"
 ALLOW_MISSING_CONFIG="${V8TR_DESIGNER_ALLOW_MISSING_CONFIG:-0}"
 DESIGNER_SMOKE_PROFILE="${V8TR_DESIGNER_SMOKE_PROFILE:-mandatory}"
-DESIGNER_TEST_MODE="${V8TR_DESIGNER_TEST_MODE:-va}"
+DESIGNER_TEST_MODE="${V8TR_DESIGNER_TEST_MODE:-none}"
 DESIGNER_TEST_MODULE="${V8TR_DESIGNER_TEST_MODULE:-}"
 DESIGNER_LAUNCH_SMOKE="${V8TR_DESIGNER_LAUNCH_SMOKE:-0}"
 PLATFORM_PATH_OVERRIDE="${V8TR_PLATFORM_PATH:-}"
@@ -450,6 +450,9 @@ run_test_stage() {
     local json_path="$OUTPUT_ROOT/json/test-stage.json"
 
     case "$DESIGNER_TEST_MODE" in
+        none)
+            echo "SKIPPED: live test runner is disabled. Set V8TR_DESIGNER_TEST_MODE=va|yaxunit-all|module to run a real 1C test stage."
+            ;;
         va)
             [[ -f "$VANESSA_EPF_PATH" ]] || die "Vanessa Automation EPF not found: $VANESSA_EPF_PATH"
             [[ -f "$VANESSA_PARAMS_TEMPLATE_PATH" ]] || die "Vanessa params template not found: $VANESSA_PARAMS_TEMPLATE_PATH"
@@ -697,11 +700,6 @@ run_cli make \
     --output "$OUTPUT_ROOT/artifacts/external-report" \
     --source-set "$EXTERNAL_REPORT_SOURCE_SET_NAME"
 assert_file_nonempty "$OUTPUT_ROOT/artifacts/external-report/${EXTERNAL_REPORT_ARTIFACT_NAME}.erf"
-
-load_json="$OUTPUT_ROOT/json/load-configuration.json"
-print_stage "load packaged configuration"
-run_cli_json_to_file "$load_json" load --path "$OUTPUT_ROOT/artifacts/configuration.cf"
-assert_json_command_ok "$load_json" "load"
 
 print_stage "deploy-ready artifact validation"
 for artifact in \
