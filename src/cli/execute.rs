@@ -24,6 +24,7 @@ use crate::domain::syntax::{SyntaxCheckResult, SyntaxCheckStatus};
 use crate::domain::test::{TestRunResult, TestStatus, TestTarget};
 use crate::output::json::Envelope;
 use crate::output::presenter::Presenter;
+use crate::output::text::{TimelineItem, TimelineStatus};
 use crate::support::error::AppError;
 use crate::support::fs::clean_dir;
 use crate::support::path::is_safe_path_segment;
@@ -943,6 +944,7 @@ fn build_test_envelope(result: TestRunResult, ok: bool) -> Envelope<TestRunResul
 }
 
 fn render_build_text(result: &BuildResult, presenter: &Presenter, succeeded: bool) {
+    let mut timeline = Vec::new();
     for step in &result.steps {
         let line = match &step.mode {
             BuildMode::EdtExport => format!(
@@ -967,24 +969,29 @@ fn render_build_text(result: &BuildResult, presenter: &Presenter, succeeded: boo
             ),
         };
 
-        if step.ok {
-            presenter.print_success_item(&line);
+        let status = if matches!(step.mode, BuildMode::Skipped) && step.ok {
+            TimelineStatus::Skipped
+        } else if step.ok {
+            TimelineStatus::Succeeded
         } else {
-            presenter.print_failure_item(&line);
-        }
+            TimelineStatus::Failed
+        };
+        timeline.push(TimelineItem::new(status, line));
     }
 
-    if !succeeded {
-        presenter.print_failure_item("Build failed");
+    let summary = if !succeeded {
+        TimelineItem::new(TimelineStatus::Failed, "Build failed")
     } else if result
         .steps
         .iter()
         .all(|step| matches!(step.mode, BuildMode::Skipped) && step.ok)
     {
-        presenter.print_success_item("Build completed: no changes");
+        TimelineItem::new(TimelineStatus::Succeeded, "Build completed: no changes")
     } else {
-        presenter.print_success_item("Build completed successfully");
-    }
+        TimelineItem::new(TimelineStatus::Succeeded, "Build completed successfully")
+    };
+    timeline.push(summary);
+    presenter.print_timeline(&timeline);
 }
 
 fn render_load_text(result: &LoadResult, presenter: &Presenter, succeeded: bool) {
@@ -1012,22 +1019,30 @@ fn render_load_text(result: &LoadResult, presenter: &Presenter, succeeded: bool)
         "{target}: {mode} {artifact_type} <- {}",
         result.artifact_path.display()
     );
-    if succeeded {
-        presenter.print_success_item(&summary);
+    let mut timeline = Vec::new();
+    let status = if succeeded {
+        TimelineStatus::Succeeded
     } else {
-        presenter.print_failure_item(&summary);
-    }
+        TimelineStatus::Failed
+    };
+    let mut item = TimelineItem::new(status, summary);
     if let Some(message) = result.message.as_deref() {
-        presenter.print_info(message);
+        item = item.with_detail(message);
     }
-    if succeeded {
-        presenter.print_success_item("Artifact load completed successfully");
+    timeline.push(item);
+    timeline.push(if succeeded {
+        TimelineItem::new(
+            TimelineStatus::Succeeded,
+            "Artifact load completed successfully",
+        )
     } else {
-        presenter.print_failure_item("Artifact load failed");
-    }
+        TimelineItem::new(TimelineStatus::Failed, "Artifact load failed")
+    });
+    presenter.print_timeline(&timeline);
 }
 
 fn render_extensions_text(result: &ExtensionsResult, presenter: &Presenter, succeeded: bool) {
+    let mut timeline = Vec::new();
     for step in &result.steps {
         let line = format!(
             "{}: {} - {}",
@@ -1036,20 +1051,25 @@ fn render_extensions_text(result: &ExtensionsResult, presenter: &Presenter, succ
             step.message.as_deref().unwrap_or("ok")
         );
         if step.ok {
-            presenter.print_success_item(&line);
+            timeline.push(TimelineItem::new(TimelineStatus::Succeeded, line));
         } else {
-            presenter.print_failure_item(&line);
+            timeline.push(TimelineItem::new(TimelineStatus::Failed, line));
         }
     }
 
-    if succeeded {
-        presenter.print_success_item("Extension properties updated successfully");
+    timeline.push(if succeeded {
+        TimelineItem::new(
+            TimelineStatus::Succeeded,
+            "Extension properties updated successfully",
+        )
     } else {
-        presenter.print_failure_item("Extension property update failed");
-    }
+        TimelineItem::new(TimelineStatus::Failed, "Extension property update failed")
+    });
+    presenter.print_timeline(&timeline);
 }
 
 fn render_init_text(result: &InitResult, presenter: &Presenter) {
+    let mut timeline = Vec::new();
     for step in &result.steps {
         let line = format!(
             "{}: {} - {}",
@@ -1058,20 +1078,30 @@ fn render_init_text(result: &InitResult, presenter: &Presenter) {
             step.message.as_deref().unwrap_or("ok")
         );
         match step.status {
-            InitStepStatus::Ok | InitStepStatus::Skipped => presenter.print_success_item(&line),
-            InitStepStatus::Failed => presenter.print_failure_item(&line),
+            InitStepStatus::Ok => {
+                timeline.push(TimelineItem::new(TimelineStatus::Succeeded, line));
+            }
+            InitStepStatus::Skipped => {
+                timeline.push(TimelineItem::new(TimelineStatus::Skipped, line));
+            }
+            InitStepStatus::Failed => {
+                timeline.push(TimelineItem::new(TimelineStatus::Failed, line));
+            }
         }
     }
 
-    if result
-        .steps
-        .iter()
-        .all(|step| matches!(step.status, InitStepStatus::Ok | InitStepStatus::Skipped))
-    {
-        presenter.print_success_item("Init completed successfully");
-    } else {
-        presenter.print_failure_item("Init failed");
-    }
+    timeline.push(
+        if result
+            .steps
+            .iter()
+            .all(|step| matches!(step.status, InitStepStatus::Ok | InitStepStatus::Skipped))
+        {
+            TimelineItem::new(TimelineStatus::Succeeded, "Init completed successfully")
+        } else {
+            TimelineItem::new(TimelineStatus::Failed, "Init failed")
+        },
+    );
+    presenter.print_timeline(&timeline);
 }
 
 fn render_dump_text(result: &DumpResult, presenter: &Presenter, succeeded: bool) {
@@ -1082,20 +1112,24 @@ fn render_dump_text(result: &DumpResult, presenter: &Presenter, succeeded: bool)
     };
     let source_set = result.source_set.as_deref().unwrap_or("<unresolved>");
     let summary = format!("{source_set}: {mode} -> {}", result.target_path.display());
-    if succeeded {
-        presenter.print_success_item(&summary);
+    let status = if succeeded {
+        TimelineStatus::Succeeded
     } else {
-        presenter.print_failure_item(&summary);
-    }
+        TimelineStatus::Failed
+    };
+    let mut timeline = Vec::new();
+    let mut item = TimelineItem::new(status, summary);
     if let Some(message) = result.message.as_deref() {
-        presenter.print_info(message);
+        item = item.with_detail(message);
     }
+    timeline.push(item);
 
-    if succeeded {
-        presenter.print_success_item("Dump completed successfully");
+    timeline.push(if succeeded {
+        TimelineItem::new(TimelineStatus::Succeeded, "Dump completed successfully")
     } else {
-        presenter.print_failure_item("Dump failed");
-    }
+        TimelineItem::new(TimelineStatus::Failed, "Dump failed")
+    });
+    presenter.print_timeline(&timeline);
 }
 
 fn render_artifacts_text(result: &ArtifactsResult, presenter: &Presenter, succeeded: bool) {
@@ -1120,19 +1154,26 @@ fn render_artifacts_text(result: &ArtifactsResult, presenter: &Presenter, succee
     if published_count > 1 {
         summary.push_str(&format!(" ({published_count} files)"));
     }
-    if succeeded {
-        presenter.print_success_item(&summary);
+    let status = if succeeded {
+        TimelineStatus::Succeeded
     } else {
-        presenter.print_failure_item(&summary);
-    }
+        TimelineStatus::Failed
+    };
+    let mut timeline = Vec::new();
+    let mut item = TimelineItem::new(status, summary);
     if let Some(message) = result.message.as_deref() {
-        presenter.print_info(message);
+        item = item.with_detail(message);
     }
-    if succeeded {
-        presenter.print_success_item("Artifacts export completed successfully");
+    timeline.push(item);
+    timeline.push(if succeeded {
+        TimelineItem::new(
+            TimelineStatus::Succeeded,
+            "Artifacts export completed successfully",
+        )
     } else {
-        presenter.print_failure_item("Artifacts export failed");
-    }
+        TimelineItem::new(TimelineStatus::Failed, "Artifacts export failed")
+    });
+    presenter.print_timeline(&timeline);
 }
 
 fn render_syntax_text(result: &SyntaxCheckResult, presenter: &Presenter) {
@@ -1176,6 +1217,30 @@ fn render_test_text(result: &TestRunResult, presenter: &Presenter) {
     };
     presenter.print_info(&format!("Test target: {target}"));
 
+    let mut timeline = result
+        .steps
+        .iter()
+        .map(|step| {
+            let status = if step.ok {
+                TimelineStatus::Succeeded
+            } else {
+                TimelineStatus::Failed
+            };
+            let mut label = step.name.clone();
+            if let Some(message) = step.message.as_deref() {
+                label.push_str(" - ");
+                label.push_str(message);
+            }
+            TimelineItem::new(status, label)
+        })
+        .collect::<Vec<_>>();
+    timeline.push(if result.ok {
+        TimelineItem::new(TimelineStatus::Succeeded, "Tests completed successfully")
+    } else {
+        TimelineItem::new(TimelineStatus::Failed, "Tests failed")
+    });
+    presenter.print_timeline(&timeline);
+
     if let Some(report) = &result.report {
         presenter.print_info(&format!(
             "Summary: total={}, passed={}, failed={}, skipped={}, errors={}",
@@ -1205,12 +1270,6 @@ fn render_test_text(result: &TestRunResult, presenter: &Presenter) {
     }
     for warning in &result.warnings {
         presenter.print_info(&format!("Warning: {warning}"));
-    }
-
-    if result.ok {
-        presenter.print_success_item("Tests completed successfully");
-    } else {
-        presenter.print_failure_item("Tests failed");
     }
 }
 

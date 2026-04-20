@@ -1,5 +1,5 @@
 use crate::output::json::Envelope;
-use crate::output::text::{JsonPresenter, TextPresenter};
+use crate::output::text::{JsonPresenter, TextPresenter, TimelineItem};
 use serde::Serialize;
 
 pub enum ColorMode {
@@ -55,9 +55,9 @@ impl Presenter {
         }
     }
 
-    pub fn print_failure_item(&self, msg: &str) {
+    pub fn print_timeline(&self, items: &[TimelineItem]) {
         if !self.is_json() {
-            self.text.print_failure_item(msg);
+            self.text.print_timeline(items);
         }
     }
 
