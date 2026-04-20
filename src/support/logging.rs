@@ -114,6 +114,9 @@ struct CliEventFormatter;
 struct EventFieldVisitor {
     message: Option<String>,
     fields: Vec<String>,
+    timeline_label: Option<String>,
+    timeline_status: Option<String>,
+    timeline_detail: Option<String>,
 }
 
 impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for ActionLogMakeWriter {
@@ -151,6 +154,31 @@ where
         let mut visitor = EventFieldVisitor::default();
         event.record(&mut visitor);
 
+        if let Some(label) = visitor.timeline_label.as_deref() {
+            write_timeline_node(
+                &mut writer,
+                visitor.timeline_status.as_deref().unwrap_or("succeeded"),
+            )?;
+            write!(writer, " {label}")?;
+
+            if let Some(detail) = visitor
+                .timeline_detail
+                .as_deref()
+                .filter(|value| !value.is_empty())
+            {
+                writeln!(writer)?;
+                for line in detail.lines() {
+                    write_timeline_pipe(&mut writer)?;
+                    writeln!(writer, "   {line}")?;
+                }
+                return Ok(());
+            }
+
+            return writeln!(writer);
+        }
+
+        write_timeline_pipe(&mut writer)?;
+        write!(writer, " ")?;
         write!(writer, "{}  ", Utc::now().format("%H:%M:%S%.3f"))?;
         write_level(&mut writer, meta.level())?;
 
@@ -167,11 +195,32 @@ where
     }
 }
 
+fn write_timeline_pipe(writer: &mut Writer<'_>) -> std::fmt::Result {
+    if writer.has_ansi_escapes() {
+        write!(writer, "\x1b[34m│\x1b[0m")
+    } else {
+        write!(writer, "│")
+    }
+}
+
+fn write_timeline_node(writer: &mut Writer<'_>, status: &str) -> std::fmt::Result {
+    if writer.has_ansi_escapes() {
+        let color = match status {
+            "failed" => "31",
+            "skipped" => "34",
+            _ => "32",
+        };
+        write!(writer, "\x1b[{color}m●\x1b[0m")
+    } else {
+        write!(writer, "●")
+    }
+}
+
 impl tracing::field::Visit for EventFieldVisitor {
     fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
         if field.name() == "message" {
             self.message = Some(value.to_owned());
-        } else {
+        } else if !self.record_timeline_field(field.name(), value.to_owned()) {
             self.fields.push(format!(r#"{}="{}""#, field.name(), value));
         }
     }
@@ -179,10 +228,31 @@ impl tracing::field::Visit for EventFieldVisitor {
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
         if field.name() == "message" {
             self.message = Some(format!("{value:?}"));
-        } else {
+        } else if !self.record_timeline_field(field.name(), normalize_debug_value(value)) {
             self.fields.push(format!("{}={value:?}", field.name()));
         }
     }
+}
+
+impl EventFieldVisitor {
+    fn record_timeline_field(&mut self, name: &str, value: String) -> bool {
+        match name {
+            "timeline_label" => self.timeline_label = Some(value),
+            "timeline_status" => self.timeline_status = Some(value),
+            "timeline_detail" => self.timeline_detail = Some(value),
+            _ => return false,
+        }
+        true
+    }
+}
+
+fn normalize_debug_value(value: &dyn std::fmt::Debug) -> String {
+    let rendered = format!("{value:?}");
+    rendered
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .unwrap_or(&rendered)
+        .to_owned()
 }
 
 fn write_level(writer: &mut Writer<'_>, level: &Level) -> std::fmt::Result {

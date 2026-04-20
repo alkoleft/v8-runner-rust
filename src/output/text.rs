@@ -36,11 +36,10 @@ pub struct TextPresenter {
 
 impl TextPresenter {
     pub fn print_ok(&self, msg: &str) {
-        if self.no_color {
-            println!("OK: {msg}");
-        } else {
-            println!("\x1b[32mOK\x1b[0m: {msg}");
-        }
+        println!(
+            "{} OK: {msg}",
+            self.timeline_node(TimelineStatus::Succeeded)
+        );
     }
 
     pub fn print_error(&self, msg: &str) {
@@ -52,15 +51,13 @@ impl TextPresenter {
     }
 
     pub fn print_info(&self, msg: &str) {
-        println!("{msg}");
+        for line in msg.lines() {
+            println!("{} {line}", self.timeline_pipe());
+        }
     }
 
     pub fn print_success_item(&self, msg: &str) {
-        if self.no_color {
-            println!("✓ {msg}");
-        } else {
-            println!("\x1b[32m✓\x1b[0m {msg}");
-        }
+        println!("{} {msg}", self.timeline_node(TimelineStatus::Succeeded));
     }
 
     pub fn print_timeline(&self, items: &[TimelineItem]) {
@@ -86,10 +83,7 @@ impl TextPresenter {
     }
 
     fn timeline_node(&self, status: TimelineStatus) -> String {
-        let glyph = match status {
-            TimelineStatus::Skipped => "○",
-            TimelineStatus::Succeeded | TimelineStatus::Failed => "●",
-        };
+        let glyph = "●";
         if self.no_color {
             glyph.to_owned()
         } else {

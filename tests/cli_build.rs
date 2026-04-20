@@ -55,6 +55,14 @@ fn write_ibcmd_script(path: &Path, calls_log: &Path, fail_pattern: Option<&str>)
     write_script(path, &body);
 }
 
+fn write_edt_script(path: &Path, calls_log: &Path) {
+    let body = format!(
+        "args=\"$*\"\nprintf '%s\\n' \"$args\" >> \"{}\"\nexit 0",
+        calls_log.display()
+    );
+    write_script(path, &body);
+}
+
 fn write_config(path: &Path, base_path: &Path, work_path: &Path, platform_path: &Path) {
     write_config_with_builder(
         path,
@@ -190,6 +198,47 @@ fn setup_ibcmd_project() -> (
     )
 }
 
+fn setup_edt_ibcmd_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
+    let dir = tempdir().expect("tempdir");
+    let base_path = dir.path().join("project");
+    let work_path = dir.path().join("work");
+    let config_path = dir.path().join("v8project.yaml");
+    let ibcmd_path = dir.path().join("ibcmd");
+    let edt_cli_path = dir.path().join("edt").join("1cedtcli");
+    let ibcmd_calls_log = dir.path().join("ibcmd-calls.log");
+    let edt_calls_log = dir.path().join("edt-calls.log");
+
+    fs::create_dir_all(base_path.join("configuration").join("Catalogs.Items")).expect("base");
+    fs::create_dir_all(&work_path).expect("work");
+    fs::write(
+        base_path.join("configuration").join(".project"),
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<projectDescription>\n  <name>configuration</name>\n</projectDescription>\n",
+    )
+    .expect("project file");
+    fs::write(
+        base_path
+            .join("configuration")
+            .join("Catalogs.Items")
+            .join("ObjectModule.bsl"),
+        "procedure Test() endprocedure",
+    )
+    .expect("bsl");
+
+    write_ibcmd_script(&ibcmd_path, &ibcmd_calls_log, None);
+    write_edt_script(&edt_cli_path, &edt_calls_log);
+
+    let config = format!(
+        "basePath: '{}'\nworkPath: '{}'\nformat: EDT\nbuilder: IBCMD\nconnection: 'File=/tmp/ib'\nbuild:\n  partialLoadThreshold: 20\nsource-set:\n  - name: configuration\n    type: CONFIGURATION\n    path: configuration\ntools:\n  platform:\n    path: '{}'\n  edt_cli:\n    path: '{}'\n",
+        base_path.display(),
+        work_path.display(),
+        ibcmd_path.display(),
+        edt_cli_path.display(),
+    );
+    fs::write(&config_path, config).expect("config");
+
+    (dir, config_path, ibcmd_calls_log, edt_calls_log)
+}
+
 #[test]
 fn build_json_failure_returns_step_payload() {
     let (_dir, config_path, binary_path, _work_path) = setup_project();
@@ -281,17 +330,67 @@ fn build_text_stdout_includes_action_logs() {
 
     let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
-        .args(["--config", &config_path.display().to_string(), "build"])
+        .args([
+            "--no-color",
+            "--config",
+            &config_path.display().to_string(),
+            "build",
+        ])
         .output()
         .expect("run command");
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout
+        .lines()
+        .any(|line| line.contains("│") && line.contains("[Изменения]")));
     assert!(stdout.contains("[Изменения]"));
+    assert!(stdout.contains("● main: changes - found"));
+    assert!(stdout.contains("● main: partial"));
     assert!(stdout.contains("main"));
     assert!(stdout.contains("[Конфигуратор]"));
     assert!(stdout.contains("Загрузка изменений в базу:"));
     assert!(stdout.contains("Build completed successfully"));
+}
+
+#[test]
+fn build_edt_text_interleaves_export_stage_after_edt_log() {
+    let (_dir, config_path, ibcmd_calls_log, edt_calls_log) = setup_edt_ibcmd_project();
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args([
+            "--no-color",
+            "--config",
+            &config_path.display().to_string(),
+            "build",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines = stdout.lines().collect::<Vec<_>>();
+    let edt_log_index = lines
+        .iter()
+        .position(|line| line.contains("[EDT] Конвертация в файлы конфигуратора: configuration"))
+        .expect("EDT log line");
+    assert_eq!(
+        lines.get(edt_log_index + 1).copied(),
+        Some("● configuration: edt_export - EDT export completed")
+    );
+    assert!(stdout.contains("● configuration: changes - found"));
+    assert!(stdout.contains("● configuration: ibcmd_import - launching ibcmd full import"));
+    assert!(stdout.contains("● configuration: ibcmd_apply - launching ibcmd apply"));
+    assert!(
+        stdout.contains("● configuration: full - full load from EDT export after change detection")
+    );
+
+    let ibcmd_calls = fs::read_to_string(ibcmd_calls_log).expect("ibcmd calls");
+    let edt_calls = fs::read_to_string(edt_calls_log).expect("edt calls");
+    assert!(edt_calls.contains("export --project-name configuration"));
+    assert!(ibcmd_calls.contains("config import"));
+    assert!(ibcmd_calls.contains("config apply"));
 }
 
 #[test]
@@ -328,6 +427,7 @@ fn build_ibcmd_full_rebuild_invokes_import_and_apply() {
     let output = std::process::Command::cargo_bin("v8-runner")
         .expect("binary")
         .args([
+            "--no-color",
             "--config",
             &config_path.display().to_string(),
             "build",
@@ -337,6 +437,9 @@ fn build_ibcmd_full_rebuild_invokes_import_and_apply() {
         .expect("run command");
 
     assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("● main: ibcmd_import - launching ibcmd full import"));
+    assert!(stdout.contains("● main: ibcmd_apply - launching ibcmd apply"));
     let calls = fs::read_to_string(calls_log).expect("calls");
     assert!(calls.contains("config import"));
     assert!(calls.contains("config apply"));

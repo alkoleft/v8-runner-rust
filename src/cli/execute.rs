@@ -944,41 +944,6 @@ fn build_test_envelope(result: TestRunResult, ok: bool) -> Envelope<TestRunResul
 }
 
 fn render_build_text(result: &BuildResult, presenter: &Presenter, succeeded: bool) {
-    let mut timeline = Vec::new();
-    for step in &result.steps {
-        let line = match &step.mode {
-            BuildMode::EdtExport => format!(
-                "{}: edt_export - {}",
-                step.source_set,
-                step.message.as_deref().unwrap_or("ok")
-            ),
-            BuildMode::Full => format!(
-                "{}: full - {}",
-                step.source_set,
-                step.message.as_deref().unwrap_or("ok")
-            ),
-            BuildMode::Partial { file_count } => format!(
-                "{}: partial ({file_count} files) - {}",
-                step.source_set,
-                step.message.as_deref().unwrap_or("ok")
-            ),
-            BuildMode::Skipped => format!(
-                "{}: skipped - {}",
-                step.source_set,
-                step.message.as_deref().unwrap_or("ok")
-            ),
-        };
-
-        let status = if matches!(step.mode, BuildMode::Skipped) && step.ok {
-            TimelineStatus::Skipped
-        } else if step.ok {
-            TimelineStatus::Succeeded
-        } else {
-            TimelineStatus::Failed
-        };
-        timeline.push(TimelineItem::new(status, line));
-    }
-
     let summary = if !succeeded {
         TimelineItem::new(TimelineStatus::Failed, "Build failed")
     } else if result
@@ -990,8 +955,7 @@ fn render_build_text(result: &BuildResult, presenter: &Presenter, succeeded: boo
     } else {
         TimelineItem::new(TimelineStatus::Succeeded, "Build completed successfully")
     };
-    timeline.push(summary);
-    presenter.print_timeline(&timeline);
+    presenter.print_timeline(&[summary]);
 }
 
 fn render_load_text(result: &LoadResult, presenter: &Presenter, succeeded: bool) {

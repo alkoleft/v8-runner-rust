@@ -71,6 +71,23 @@ enum StepPlan {
     },
 }
 
+#[derive(Clone, Copy)]
+enum TimelineStageStatus {
+    Succeeded,
+    Failed,
+    Skipped,
+}
+
+impl TimelineStageStatus {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+            Self::Skipped => "skipped",
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn run_build(config: &AppConfig, args: &BuildArgs) -> UseCaseResult<BuildResult> {
     run_build_unlocked(config, args)
@@ -143,16 +160,17 @@ fn run_build_designer(
                 source_set_external_kind(source_set).expect("external kind"),
             );
             match result {
-                Ok(descriptors) => steps.push(BuildStep {
-                    source_set: source_set.name.clone(),
-                    mode: BuildMode::Skipped,
-                    ok: true,
-                    message: Some(format!(
+                Ok(descriptors) => push_build_step(
+                    &mut steps,
+                    &source_set.name,
+                    BuildMode::Skipped,
+                    true,
+                    format!(
                         "prepared {} external artifact(s) for packaging",
                         descriptors.len()
-                    )),
-                    duration_ms: step_started.elapsed().as_millis() as u64,
-                }),
+                    ),
+                    step_started.elapsed().as_millis() as u64,
+                ),
                 Err(error) => {
                     let result = fail_with_remaining_steps(
                         started,
@@ -194,6 +212,12 @@ fn run_build_designer(
                         found_changes = 0,
                         "change analysis result: found 0 change(s)"
                     );
+                    log_timeline_stage(
+                        &source_set.name,
+                        "changes",
+                        "no changes",
+                        TimelineStageStatus::Succeeded,
+                    );
                     StepPlan::Skip {
                         message: "no changes".to_owned(),
                         ok: true,
@@ -203,6 +227,12 @@ fn run_build_designer(
                     debug!(
                         source_set = source_set.name.as_str(),
                         "change analysis result: fallback to full load after recoverable issue"
+                    );
+                    log_timeline_stage(
+                        &source_set.name,
+                        "changes",
+                        "fallback to full load after recoverable issue",
+                        TimelineStageStatus::Succeeded,
                     );
                     StepPlan::Execute {
                         mode: BuildMode::Full,
@@ -280,13 +310,14 @@ fn run_build_designer(
                     message = message.as_str(),
                     "skipping build step"
                 );
-                steps.push(BuildStep {
-                    source_set: source_set.name.clone(),
-                    mode: BuildMode::Skipped,
+                push_build_step(
+                    &mut steps,
+                    &source_set.name,
+                    BuildMode::Skipped,
                     ok,
-                    message: Some(message),
-                    duration_ms: 0,
-                })
+                    message,
+                    0,
+                )
             }
             StepPlan::Execute {
                 mode,
@@ -341,13 +372,14 @@ fn run_build_designer(
                     partial_paths.as_deref(),
                     &commit,
                 ) {
-                    Ok(()) => steps.push(BuildStep {
-                        source_set: source_set.name.clone(),
+                    Ok(()) => push_build_step(
+                        &mut steps,
+                        &source_set.name,
                         mode,
-                        ok: true,
-                        message: Some(message),
-                        duration_ms: step_started.elapsed().as_millis() as u64,
-                    }),
+                        true,
+                        message,
+                        step_started.elapsed().as_millis() as u64,
+                    ),
                     Err(error) => {
                         let result = fail_with_remaining_steps(
                             started,
@@ -392,6 +424,82 @@ fn log_change_analysis(source_set_name: &str, changes: &[analyzer::FileChange]) 
         "[Изменения] {source_set_name}: найдено {} (новых {added}, изменено {modified}, удалено {deleted})",
         changes.len()
     );
+    log_timeline_stage(
+        source_set_name,
+        "changes",
+        &format!("found {} change(s)", changes.len()),
+        TimelineStageStatus::Succeeded,
+    );
+}
+
+fn push_build_step(
+    steps: &mut Vec<BuildStep>,
+    source_set_name: &str,
+    mode: BuildMode,
+    ok: bool,
+    message: String,
+    duration_ms: u64,
+) {
+    let step = BuildStep {
+        source_set: source_set_name.to_owned(),
+        mode,
+        ok,
+        message: Some(message),
+        duration_ms,
+    };
+    log_build_step_timeline(&step);
+    steps.push(step);
+}
+
+fn log_build_step_timeline(step: &BuildStep) {
+    let status = if !step.ok {
+        TimelineStageStatus::Failed
+    } else if matches!(step.mode, BuildMode::Skipped) {
+        TimelineStageStatus::Skipped
+    } else {
+        TimelineStageStatus::Succeeded
+    };
+    let message = step
+        .message
+        .as_deref()
+        .map(first_message_line)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("ok");
+    log_timeline_stage(
+        &step.source_set,
+        &build_mode_label(&step.mode),
+        message,
+        status,
+    );
+}
+
+fn log_timeline_stage(
+    source_set_name: &str,
+    stage: &str,
+    message: &str,
+    status: TimelineStageStatus,
+) {
+    let label = format!(
+        "{source_set_name}: {stage} - {}",
+        first_message_line(message)
+    );
+    info!(
+        timeline_status = status.as_str(),
+        timeline_label = label.as_str()
+    );
+}
+
+fn build_mode_label(mode: &BuildMode) -> String {
+    match mode {
+        BuildMode::EdtExport => "edt_export".to_owned(),
+        BuildMode::Full => "full".to_owned(),
+        BuildMode::Partial { file_count } => format!("partial ({file_count} files)"),
+        BuildMode::Skipped => "skipped".to_owned(),
+    }
+}
+
+fn first_message_line(message: &str) -> &str {
+    message.lines().next().unwrap_or(message).trim()
 }
 
 fn run_build_ibcmd(
@@ -452,6 +560,12 @@ fn run_build_ibcmd(
                         found_changes = 0,
                         "change analysis result: found 0 change(s)"
                     );
+                    log_timeline_stage(
+                        &source_set.name,
+                        "changes",
+                        "no changes",
+                        TimelineStageStatus::Succeeded,
+                    );
                     StepPlan::Skip {
                         message: "no changes".to_owned(),
                         ok: true,
@@ -461,6 +575,12 @@ fn run_build_ibcmd(
                     info!(
                         source_set = source_set.name.as_str(),
                         "change analysis result: fallback to full load after recoverable issue"
+                    );
+                    log_timeline_stage(
+                        &source_set.name,
+                        "changes",
+                        "fallback to full load after recoverable issue",
+                        TimelineStageStatus::Succeeded,
                     );
                     StepPlan::Execute {
                         mode: BuildMode::Full,
@@ -538,13 +658,14 @@ fn run_build_ibcmd(
                     message = message.as_str(),
                     "skipping build step"
                 );
-                steps.push(BuildStep {
-                    source_set: source_set.name.clone(),
-                    mode: BuildMode::Skipped,
+                push_build_step(
+                    &mut steps,
+                    &source_set.name,
+                    BuildMode::Skipped,
                     ok,
-                    message: Some(message),
-                    duration_ms: 0,
-                })
+                    message,
+                    0,
+                )
             }
             StepPlan::Execute {
                 mode,
@@ -598,13 +719,14 @@ fn run_build_ibcmd(
                     partial_paths.as_deref(),
                     &commit,
                 ) {
-                    Ok(()) => steps.push(BuildStep {
-                        source_set: source_set.name.clone(),
+                    Ok(()) => push_build_step(
+                        &mut steps,
+                        &source_set.name,
                         mode,
-                        ok: true,
-                        message: Some(message),
-                        duration_ms: step_started.elapsed().as_millis() as u64,
-                    }),
+                        true,
+                        message,
+                        step_started.elapsed().as_millis() as u64,
+                    ),
                     Err(error) => {
                         let result = fail_with_remaining_steps(
                             started,
@@ -737,6 +859,12 @@ fn run_build_edt(
                         found_changes = 0,
                         "edt change analysis result: found 0 change(s)"
                     );
+                    log_timeline_stage(
+                        &source_set.name,
+                        "changes",
+                        "no changes",
+                        TimelineStageStatus::Succeeded,
+                    );
                     StepPlan::Skip {
                         message: "no changes".to_owned(),
                         ok: true,
@@ -746,6 +874,12 @@ fn run_build_edt(
                     debug!(
                         source_set = source_set.name.as_str(),
                         "edt change analysis result: fallback to full export/load after recoverable issue"
+                    );
+                    log_timeline_stage(
+                        &source_set.name,
+                        "changes",
+                        "fallback to full export/load after recoverable issue",
+                        TimelineStageStatus::Succeeded,
                     );
                     StepPlan::Execute {
                         mode: BuildMode::Full,
@@ -914,16 +1048,17 @@ fn run_build_edt(
                         },
                         StepPlan::Skip { .. } => {}
                     }
-                    steps.push(BuildStep {
-                        source_set: source_set.name.clone(),
-                        mode: BuildMode::EdtExport,
-                        ok: true,
-                        message: Some(format!(
+                    push_build_step(
+                        &mut steps,
+                        &source_set.name,
+                        BuildMode::EdtExport,
+                        true,
+                        format!(
                             "exported {} external artifact(s) to designer runtime",
                             descriptors.len()
-                        )),
-                        duration_ms: export_started.elapsed().as_millis() as u64,
-                    })
+                        ),
+                        export_started.elapsed().as_millis() as u64,
+                    )
                 }
                 Err(error) => {
                     let result = fail_with_remaining_steps(
@@ -946,13 +1081,14 @@ fn run_build_edt(
 
         match plan {
             StepPlan::Skip { message, ok } => {
-                steps.push(BuildStep {
-                    source_set: source_set.name.clone(),
-                    mode: BuildMode::Skipped,
+                push_build_step(
+                    &mut steps,
+                    &source_set.name,
+                    BuildMode::Skipped,
                     ok,
-                    message: Some(message),
-                    duration_ms: 0,
-                });
+                    message,
+                    0,
+                );
             }
             StepPlan::Execute {
                 mode,
@@ -1062,13 +1198,14 @@ fn run_build_edt(
                     return Err(BuildExecutionFailure::with_payload(error, result));
                 }
 
-                steps.push(BuildStep {
-                    source_set: source_set.name.clone(),
-                    mode: BuildMode::EdtExport,
-                    ok: true,
-                    message: Some("EDT export completed".to_owned()),
-                    duration_ms: export_started.elapsed().as_millis() as u64,
-                });
+                push_build_step(
+                    &mut steps,
+                    &source_set.name,
+                    BuildMode::EdtExport,
+                    true,
+                    "EDT export completed".to_owned(),
+                    export_started.elapsed().as_millis() as u64,
+                );
 
                 let load_started = Instant::now();
                 let load_result = match config.builder {
@@ -1155,13 +1292,14 @@ fn run_build_edt(
                     }
                 };
                 match load_result {
-                    Ok(()) => steps.push(BuildStep {
-                        source_set: source_set.name.clone(),
+                    Ok(()) => push_build_step(
+                        &mut steps,
+                        &source_set.name,
                         mode,
-                        ok: true,
-                        message: Some(message),
-                        duration_ms: load_started.elapsed().as_millis() as u64,
-                    }),
+                        true,
+                        message,
+                        load_started.elapsed().as_millis() as u64,
+                    ),
                     Err(error) => {
                         let result = fail_with_remaining_steps(
                             started,
@@ -1366,9 +1504,21 @@ fn execute_source_set_step_ibcmd(
             partial_load::relative_paths(paths, load_context.path()).map_err(|error| {
                 AppError::Runtime(format!("failed to convert partial paths: {error}"))
             })?;
+        log_timeline_stage(
+            &source_set.name,
+            "ibcmd_import",
+            "launching ibcmd partial import",
+            TimelineStageStatus::Succeeded,
+        );
         dsl.config_import_partial(load_context.path(), &rel_paths, extension)
             .map_err(map_ibcmd_error)?
     } else {
+        log_timeline_stage(
+            &source_set.name,
+            "ibcmd_import",
+            "launching ibcmd full import",
+            TimelineStageStatus::Succeeded,
+        );
         dsl.config_import_full(load_context.path(), extension)
             .map_err(map_ibcmd_error)?
     };
@@ -1377,6 +1527,12 @@ fn execute_source_set_step_ibcmd(
     debug!(
         source_set = source_set.name.as_str(),
         "applying database configuration after ibcmd load"
+    );
+    log_timeline_stage(
+        &source_set.name,
+        "ibcmd_apply",
+        "launching ibcmd apply",
+        TimelineStageStatus::Succeeded,
     );
     let apply_result = dsl
         .config_apply(extension, DynamicUpdateMode::Auto)
@@ -1526,22 +1682,24 @@ fn fail_with_remaining_steps(
     failed_mode: BuildMode,
     message: String,
 ) -> BuildResult {
-    completed_steps.push(BuildStep {
-        source_set: failed_source_set.name.clone(),
-        mode: failed_mode,
-        ok: false,
-        message: Some(message),
-        duration_ms: 0,
-    });
+    push_build_step(
+        &mut completed_steps,
+        &failed_source_set.name,
+        failed_mode,
+        false,
+        message,
+        0,
+    );
 
     for source_set in remaining.into_iter().skip(1) {
-        completed_steps.push(BuildStep {
-            source_set: source_set.name.clone(),
-            mode: BuildMode::Skipped,
-            ok: false,
-            message: Some("aborted after previous failure".to_owned()),
-            duration_ms: 0,
-        });
+        push_build_step(
+            &mut completed_steps,
+            &source_set.name,
+            BuildMode::Skipped,
+            false,
+            "aborted after previous failure".to_owned(),
+            0,
+        );
     }
 
     BuildResult {
