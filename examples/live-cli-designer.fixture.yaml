@@ -5,7 +5,8 @@ basePath: /abs/path/to/repo/tests/fixtures/designer
 workPath: /abs/path/to/repo/target/manual-tests/live-cli-fixture/work
 format: DESIGNER
 builder: DESIGNER
-connection: "File=/abs/path/to/dedicated/file-infobase"
+infobase:
+  connection: "File=/abs/path/to/dedicated/file-infobase"
 
 source-set:
   - name: configuration

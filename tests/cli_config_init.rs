@@ -30,7 +30,8 @@ fn config_init_creates_yaml_with_detected_designer_sources() {
     let config = fs::read_to_string(dir.path().join("v8project.yaml")).expect("config");
     assert!(config.contains("format: DESIGNER"));
     assert!(config.contains("workPath: 'build'"));
-    assert!(config.contains("connection: 'File=build/ib'"));
+    assert!(config.contains("infobase:"));
+    assert!(config.contains("  connection: 'File=build/ib'"));
     assert!(config.contains("path: 'src/configuration'"));
     assert!(config.contains("type: EXTENSION"));
     assert!(String::from_utf8_lossy(&output.stdout).contains("Config written"));
@@ -66,7 +67,8 @@ fn config_init_uses_json_envelope_and_config_path_override() {
     assert_eq!(payload["data"]["source_sets"][0]["path"], ".");
     assert_eq!(payload["data"]["source_sets"][0]["type"], "CONFIGURATION");
     let config = fs::read_to_string(config_path).expect("config");
-    assert!(config.contains("connection: 'File=/tmp/test-ib'"));
+    assert!(config.contains("infobase:"));
+    assert!(config.contains("  connection: 'File=/tmp/test-ib'"));
 }
 
 #[test]

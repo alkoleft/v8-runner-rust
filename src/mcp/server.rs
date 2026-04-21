@@ -1591,8 +1591,7 @@ mod tests {
             work_path: PathBuf::from("/tmp/work"),
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
-            connection: String::from("File=/tmp/ib"),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![SourceSetConfig {
                 name: String::from("main"),
                 purpose: SourceSetPurpose::Configuration,

@@ -2100,8 +2100,7 @@ mod tests {
             work_path: PathBuf::from("/tmp/work"),
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
-            connection: "File=/tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![SourceSetConfig {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,

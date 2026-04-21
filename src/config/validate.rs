@@ -11,6 +11,9 @@ use crate::support::path::is_safe_path_segment;
 
 #[derive(Debug, Error)]
 pub enum ConfigValidationError {
+    #[error("{0}")]
+    InvalidYamlRoot(String),
+
     #[error("basePath does not exist or is not a directory: {0}")]
     BasePathInvalid(String),
 
@@ -41,11 +44,20 @@ pub enum ConfigValidationError {
     #[error("source-set resolved path must be unique, duplicate: {0}")]
     DuplicateSourceSetPath(String),
 
-    #[error("connection string is empty")]
+    #[error("infobase.connection is empty")]
     EmptyConnection,
 
-    #[error("IBCMD builder requires a file-based connection string (File=... or /F <path>)")]
-    IbcmdRequiresFileConnection,
+    #[error("legacy top-level key 'connection' is not supported; use infobase.connection")]
+    LegacyTopLevelConnection,
+
+    #[error("legacy top-level key 'credentials' is not supported; use infobase.user/password")]
+    LegacyTopLevelCredentials,
+
+    #[error("infobase.dbms is not allowed for file-based infobase.connection")]
+    DbmsNotAllowedForFileConnection,
+
+    #[error("builder=IBCMD with server-based infobase.connection requires infobase.dbms.{0}")]
+    MissingIbcmdServerDbmsField(&'static str),
 
     #[error("format EDT requires at least one source-set with a valid EDT project path")]
     EdtNoProjects,
@@ -279,15 +291,43 @@ fn validate_source_set_name(name: &str) -> Result<(), ConfigValidationError> {
 }
 
 fn validate_connection(config: &AppConfig) -> Result<(), ConfigValidationError> {
-    if config.connection.trim().is_empty() {
+    if config.infobase.connection.trim().is_empty() {
         return Err(ConfigValidationError::EmptyConnection);
     }
 
-    if config.builder == BuilderBackend::Ibcmd && config.v8_connection().file_path().is_none() {
-        return Err(ConfigValidationError::IbcmdRequiresFileConnection);
+    let is_file_connection = config.v8_connection().file_path().is_some();
+    if is_file_connection {
+        if config.infobase.dbms.is_some() {
+            return Err(ConfigValidationError::DbmsNotAllowedForFileConnection);
+        }
+        return Ok(());
+    }
+
+    if config.builder != BuilderBackend::Ibcmd {
+        return Ok(());
+    }
+
+    let Some(dbms) = config.infobase.dbms.as_ref() else {
+        return Err(ConfigValidationError::MissingIbcmdServerDbmsField("kind"));
+    };
+    if option_is_blank(dbms.kind.as_deref()) {
+        return Err(ConfigValidationError::MissingIbcmdServerDbmsField("kind"));
+    }
+    if option_is_blank(dbms.server.as_deref()) {
+        return Err(ConfigValidationError::MissingIbcmdServerDbmsField("server"));
+    }
+    if option_is_blank(dbms.name.as_deref()) {
+        return Err(ConfigValidationError::MissingIbcmdServerDbmsField("name"));
     }
 
     Ok(())
+}
+
+fn option_is_blank(value: Option<&str>) -> bool {
+    match value {
+        Some(value) => value.trim().is_empty(),
+        None => true,
+    }
 }
 
 fn validate_edt_runtime_paths(
@@ -517,8 +557,7 @@ mod tests {
             work_path: work.path().to_path_buf(),
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
-            connection: "File=/tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![SourceSetConfig {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
@@ -554,8 +593,7 @@ mod tests {
             work_path: work.path().to_path_buf(),
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
-            connection: "File=/tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![SourceSetConfig {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
@@ -591,8 +629,7 @@ mod tests {
             work_path: work.path().to_path_buf(),
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
-            connection: "File=/tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![SourceSetConfig {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
@@ -632,8 +669,7 @@ mod tests {
             work_path: work.path().to_path_buf(),
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
-            connection: "File=/tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![SourceSetConfig {
                 name: "../outside".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
@@ -667,8 +703,7 @@ mod tests {
             work_path: work.path().to_path_buf(),
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
-            connection: "File=/tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![SourceSetConfig {
                 name: "bad/name".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
@@ -702,8 +737,7 @@ mod tests {
             work_path: work.path().to_path_buf(),
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
-            connection: "File=/tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![SourceSetConfig {
                 name: "main-config_01".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
@@ -733,8 +767,7 @@ mod tests {
             work_path: work.path().to_path_buf(),
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
-            connection: "File=/tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![SourceSetConfig {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
@@ -770,8 +803,7 @@ mod tests {
             work_path: work.path().to_path_buf(),
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
-            connection: "File=/tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![SourceSetConfig {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
@@ -806,8 +838,7 @@ mod tests {
             work_path: work.path().to_path_buf(),
             format: SourceFormat::Edt,
             builder: BuilderBackend::Ibcmd,
-            connection: "File=/tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![SourceSetConfig {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
@@ -836,8 +867,7 @@ mod tests {
             work_path: work.path().to_path_buf(),
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
-            connection: "File=/tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![SourceSetConfig {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
@@ -867,8 +897,7 @@ mod tests {
             work_path: work.path().to_path_buf(),
             format: SourceFormat::Designer,
             builder: BuilderBackend::Ibcmd,
-            connection: "/F /tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("/F /tmp/ib"),
             source_sets: vec![SourceSetConfig {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
@@ -897,8 +926,7 @@ mod tests {
             work_path: work.path().to_path_buf(),
             format: SourceFormat::Edt,
             builder: BuilderBackend::Designer,
-            connection: "File=/tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![SourceSetConfig {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
@@ -931,8 +959,7 @@ mod tests {
             work_path: work.path().to_path_buf(),
             format: SourceFormat::Edt,
             builder: BuilderBackend::Designer,
-            connection: "File=/tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![],
             build: BuildConfig::default(),
             tools: ToolsConfig::default(),
@@ -955,8 +982,7 @@ mod tests {
             work_path: shared.path().to_path_buf(),
             format: SourceFormat::Edt,
             builder: BuilderBackend::Designer,
-            connection: "File=/tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![SourceSetConfig {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
@@ -991,8 +1017,7 @@ mod tests {
             work_path: work.path().to_path_buf(),
             format: SourceFormat::Edt,
             builder: BuilderBackend::Designer,
-            connection: "File=/tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![SourceSetConfig {
                 name: "hash-storages".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
@@ -1026,8 +1051,7 @@ mod tests {
             work_path: work.path().to_path_buf(),
             format: SourceFormat::Edt,
             builder: BuilderBackend::Ibcmd,
-            connection: "Srvr=localhost;Ref=ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig { connection: "Srvr=localhost;Ref=ib".to_owned(), user: None, password: None, dbms: None },
             source_sets: vec![SourceSetConfig {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
@@ -1045,8 +1069,83 @@ mod tests {
         let err = validate(&config).expect_err("expected IBCMD connection validation error");
         assert!(matches!(
             err,
-            ConfigValidationError::IbcmdRequiresFileConnection
+            ConfigValidationError::MissingIbcmdServerDbmsField("kind")
         ));
+    }
+
+    #[test]
+    fn ibcmd_server_connection_accepts_complete_dbms_contract() {
+        let base = tempdir().expect("base");
+        let work = tempdir().expect("work");
+        let source_dir = base.path().join("edt-main");
+        std::fs::create_dir_all(&source_dir).expect("source dir");
+
+        let config = AppConfig {
+            base_path: base.path().to_path_buf(),
+            work_path: work.path().to_path_buf(),
+            format: SourceFormat::Edt,
+            builder: BuilderBackend::Ibcmd,
+            infobase: crate::config::model::InfobaseConfig::server(
+                "Srvr=localhost;Ref=ib",
+                crate::config::model::InfobaseDbmsConfig::new(
+                    "PostgreSQL",
+                    "localhost",
+                    "ib",
+                ),
+            ),
+            source_sets: vec![SourceSetConfig {
+                name: "main".to_owned(),
+                purpose: SourceSetPurpose::Configuration,
+                path: source_dir
+                    .strip_prefix(base.path())
+                    .expect("relative")
+                    .to_path_buf(),
+            }],
+            build: BuildConfig::default(),
+            tools: ToolsConfig::default(),
+            mcp: Default::default(),
+            tests: TestsConfig::default(),
+        };
+
+        validate(&config).expect("server IBCMD config should be valid with dbms contract");
+    }
+
+    #[test]
+    fn file_connection_rejects_dbms_contract() {
+        let base = tempdir().expect("base");
+        let work = tempdir().expect("work");
+        let source_dir = base.path().join("src");
+        std::fs::create_dir_all(&source_dir).expect("source dir");
+
+        let config = AppConfig {
+            base_path: base.path().to_path_buf(),
+            work_path: work.path().to_path_buf(),
+            format: SourceFormat::Designer,
+            builder: BuilderBackend::Ibcmd,
+            infobase: crate::config::model::InfobaseConfig::server(
+                "File=/tmp/ib",
+                crate::config::model::InfobaseDbmsConfig::new(
+                    "PostgreSQL",
+                    "localhost",
+                    "ib",
+                ),
+            ),
+            source_sets: vec![SourceSetConfig {
+                name: "main".to_owned(),
+                purpose: SourceSetPurpose::Configuration,
+                path: source_dir
+                    .strip_prefix(base.path())
+                    .expect("relative")
+                    .to_path_buf(),
+            }],
+            build: BuildConfig::default(),
+            tools: ToolsConfig::default(),
+            mcp: Default::default(),
+            tests: TestsConfig::default(),
+        };
+
+        let err = validate(&config).expect_err("file connection must reject dbms contract");
+        assert!(matches!(err, ConfigValidationError::DbmsNotAllowedForFileConnection));
     }
 
     #[test]
@@ -1061,8 +1160,7 @@ mod tests {
             work_path: work.path().to_path_buf(),
             format: SourceFormat::Edt,
             builder: BuilderBackend::Designer,
-            connection: "File=/tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![SourceSetConfig {
                 name: "Logs".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
@@ -1094,8 +1192,7 @@ mod tests {
             work_path: work.path().to_path_buf(),
             format: SourceFormat::Edt,
             builder: BuilderBackend::Ibcmd,
-            connection: "File=/tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![SourceSetConfig {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
@@ -1126,8 +1223,7 @@ mod tests {
             work_path: work.path().to_path_buf(),
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
-            connection: "File=/tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![SourceSetConfig {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
@@ -1162,8 +1258,7 @@ mod tests {
             work_path: work.path().to_path_buf(),
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
-            connection: "File=/tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![SourceSetConfig {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
@@ -1211,8 +1306,7 @@ mod tests {
             work_path: work.path().to_path_buf(),
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
-            connection: "File=/tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![SourceSetConfig {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
@@ -1259,8 +1353,7 @@ mod tests {
             work_path: work.path().to_path_buf(),
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
-            connection: "File=/tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![SourceSetConfig {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
@@ -1303,8 +1396,7 @@ mod tests {
             work_path: work.path().to_path_buf(),
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
-            connection: "File=/tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![SourceSetConfig {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
@@ -1354,8 +1446,7 @@ mod tests {
             work_path: work.path().to_path_buf(),
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
-            connection: "File=/tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![SourceSetConfig {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,

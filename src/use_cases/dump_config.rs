@@ -937,15 +937,14 @@ fn build_ibcmd_dsl<'a>(
     binary: &Path,
     runner: &'a dyn ProcessRunner,
 ) -> Result<IbcmdDsl<'a>, AppError> {
-    let connection =
-        IbcmdConnection::from_v8_connection(&config.v8_connection()).map_err(map_ibcmd_error)?;
+    let connection = IbcmdConnection::from_infobase(&config.infobase).map_err(map_ibcmd_error)?;
 
     Ok(IbcmdDsl::new(binary.to_path_buf(), connection, runner))
 }
 
 fn map_ibcmd_error(error: IbcmdError) -> AppError {
     match error {
-        IbcmdError::ServerConnectionNotSupported => AppError::Validation(error.to_string()),
+        IbcmdError::MissingServerDbmsField(_) => AppError::Validation(error.to_string()),
         IbcmdError::Spawn(_) => AppError::Platform(error.to_string()),
     }
 }
@@ -1216,8 +1215,7 @@ mod tests {
             work_path: work_path.to_path_buf(),
             format: SourceFormat::Designer,
             builder,
-            connection: "File=/tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![
                 SourceSetConfig {
                     name: "main".to_owned(),
@@ -2011,6 +2009,49 @@ mod tests {
         assert!(calls.contains("--force"));
         assert!(calls.contains(".dump-stage-"));
         assert!(!base.join("main").join("old.txt").exists());
+    }
+
+    #[test]
+    fn ibcmd_dump_with_server_infobase_passes_dbms_and_infobase_credentials() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let script = dir.path().join("ibcmd");
+        let calls = dir.path().join("calls.log");
+        create_source_tree(&base);
+        write_ibcmd_dump_script(&script, &calls, None, 0);
+        let mut config = build_config_with_builder(&base, &work, &script, BuilderBackend::Ibcmd);
+        config.infobase = crate::config::model::InfobaseConfig::server(
+            "Srvr=cluster:1541;Ref=demo",
+            crate::config::model::InfobaseDbmsConfig::new(
+                "PostgreSQL",
+                "localhost",
+                "demo",
+            )
+            .with_credentials(Some("postgres".to_owned()), Some("pg-secret".to_owned())),
+        )
+        .with_credentials(Some("Admin".to_owned()), Some("secret".to_owned()));
+
+        let result = run_dump(
+            &config,
+            &DumpArgs {
+                mode: DumpModeRequest::Full,
+                source_set: Some("main".to_owned()),
+                extension: None,
+                objects: vec![],
+            },
+        )
+        .expect("dump");
+
+        assert!(result.ok);
+        let calls = fs::read_to_string(calls).expect("calls");
+        assert!(calls.contains("--dbms PostgreSQL"));
+        assert!(calls.contains("--database-server localhost"));
+        assert!(calls.contains("--database-name demo"));
+        assert!(calls.contains("--database-user postgres"));
+        assert!(calls.contains("--database-password pg-secret"));
+        assert!(calls.contains("--user Admin"));
+        assert!(calls.contains("--password secret"));
     }
 
     #[test]

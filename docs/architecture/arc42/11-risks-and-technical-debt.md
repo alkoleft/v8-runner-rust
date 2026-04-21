@@ -4,7 +4,7 @@
 - Публичная и внутренняя документация могут расходиться, если их не обновлять вместе с кодом.
 - Общий shared interactive EDT-path покрывает только MCP syntax, а CLI пока создаёт non-shared interactive EDT sessions; это implementation gap к ADR-0007 и увеличивает число execution paths.
 - Поддержка `IBCMD` остаётся уже, чем поддержка Designer.
-- `init` пока безусловно пропускает server infobase create path и не реализует принятый provisioning contract из ADR-0019 для `builder=IBCMD`.
+- Provisioning contract из ADR-0019 реализован только для `builder=IBCMD`; `builder=DESIGNER` по-прежнему пропускает server infobase create step и это остаётся документированным ограничением.
 - Общая timeout/cancellation policy из ADR-0014 является целевой архитектурой и ещё не полностью реализована во всех public commands.
 - MCP running cancellation/timeout с detached completion считается переходным механизмом до terminal-state semantics из ADR-0014.
 - External artifacts staging cleanup ещё нужно привести к ADR-0015: metadata должен ставиться на cleanup unit, чтобы stale staging directory удалялся безопасно.

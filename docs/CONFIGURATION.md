@@ -41,9 +41,9 @@ basePath: /path/to/project
 workPath: build
 format: EDT
 builder: DESIGNER
-connection: "File=build/ib"
+infobase:
+  connection: "File=build/ib"
 
-credentials:
   user: Admin
   password: secret
 
@@ -129,7 +129,7 @@ tests:
   - `workPath/edt-workspace`
   - `workPath/designer`
 
-### `connection`
+### `infobase.connection`
 
 - Тип: строка
 - Обязателен: да
@@ -137,9 +137,42 @@ tests:
 Поведение:
 
 - передаётся в платформенные утилиты как строка подключения;
-- сейчас для `builder=IBCMD` должна указывать на файловую ИБ;
-- целевой контракт ADR-0003 требует поддержки серверных ИБ для всех инструментов, поэтому file-only ограничения считаются временными gaps.
-- Для `init` серверная строка подключения означает "использовать уже созданную серверную ИБ": шаг создания ИБ пропускается, а EDT workspace при `format=EDT` всё равно инициализируется.
+- для `builder=DESIGNER` используется как обычная строка подключения 1С;
+- для `builder=IBCMD` file connection маппится в `--db-path`, а server connection использует `infobase.dbms`;
+- для `init` server connection с `builder=IBCMD` выполняет `ensure` через `ibcmd infobase create --create-database`; при `builder=DESIGNER` server create step по-прежнему пропускается.
+
+### `infobase.user` / `infobase.password`
+
+- Тип: строка
+- Обязательны: нет
+
+Поведение:
+
+- используются как логин/пароль подключения к информационной базе;
+- передаются в `1cv8`, `1cv8c` и `ibcmd` как credentials самой ИБ;
+- пароль редактируется в логах и диагностике команд.
+
+### `infobase.dbms`
+
+- Тип: объект
+- Обязателен: нет
+
+Используется только для server connection с `builder=IBCMD`.
+
+Поддержанные поля:
+
+- `infobase.dbms.kind`
+- `infobase.dbms.server`
+- `infobase.dbms.name`
+- `infobase.dbms.user`
+- `infobase.dbms.password`
+
+Поведение:
+
+- `kind/server/name` обязательны для server connection с `builder=IBCMD`;
+- `user/password` опциональны и передаются как credentials физической БД;
+- для file connection секция `infobase.dbms` запрещена;
+- legacy top-level `connection` и `credentials` loader отклоняет до валидации use case.
 
 ### `source-set`
 
@@ -175,17 +208,10 @@ tests:
 
 Ограничения:
 
-- `builder=IBCMD` сейчас требует файловую строку подключения и остаётся ограниченным backend для сценариев `init`, `build`, `dump`, `extensions`; server-based support является целевым требованием, а не новой отдельной веткой продукта.
+- `builder=IBCMD` поддерживает file и server ИБ для сценариев `init`, `build`, `dump`, `extensions`, но для server connection требует полный `infobase.dbms.kind/server/name`.
 - Для `format=EDT` команда `build` сначала экспортирует EDT-проект в Designer-файлы под `workPath/designer/<name>`, затем загружает результат выбранным backend.
 
 ## Опциональные секции
-
-### `credentials`
-
-- `credentials.user`
-- `credentials.password`
-
-Используются как логин/пароль для подключения к ИБ.
 
 ### `build`
 
@@ -394,8 +420,8 @@ tools:
 
 Дополнительно автоматически передаются только:
 
-- аргументы из `connection`;
-- `credentials.user/password`, если они заданы.
+- аргументы из `infobase.connection`;
+- `infobase.user/password`, если они заданы.
 
 ### Дополнительные параметры клиента 1С
 

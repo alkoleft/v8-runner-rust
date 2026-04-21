@@ -2,36 +2,63 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+use crate::config::model::InfobaseConfig;
 use crate::platform::connection::V8Connection;
 use crate::platform::process::{ProcessError, ProcessRequest, ProcessRunner};
 use crate::platform::result::PlatformCommandResult;
 
 #[derive(Debug, Error)]
 pub enum IbcmdError {
-    #[error("ibcmd requires file-based infobase, got server connection")]
-    ServerConnectionNotSupported,
+    #[error("server-based IBCMD connection requires infobase.dbms.{0}")]
+    MissingServerDbmsField(&'static str),
 
     #[error("failed to execute ibcmd process: {0}")]
     Spawn(ProcessError),
 }
 
+/// Connection contract passed to `ibcmd infobase ...` commands.
 #[derive(Debug, Clone)]
-pub struct IbcmdConnection {
-    database_path: PathBuf,
-    user: Option<String>,
-    password: Option<String>,
+pub enum IbcmdConnection {
+    File {
+        database_path: PathBuf,
+        user: Option<String>,
+        password: Option<String>,
+    },
+    Server {
+        dbms_kind: String,
+        database_server: String,
+        database_name: String,
+        user: Option<String>,
+        password: Option<String>,
+        database_user: Option<String>,
+        database_password: Option<String>,
+    },
 }
 
 impl IbcmdConnection {
-    pub fn from_v8_connection(conn: &V8Connection) -> Result<Self, IbcmdError> {
+    /// Maps the public `infobase` config contract into `ibcmd` arguments.
+    pub fn from_infobase(infobase: &InfobaseConfig) -> Result<Self, IbcmdError> {
+        let conn = V8Connection::from_connection_string(&infobase.connection);
         let Some(database_path) = conn.file_path() else {
-            return Err(IbcmdError::ServerConnectionNotSupported);
+            let Some(dbms) = infobase.dbms.as_ref() else {
+                return Err(IbcmdError::MissingServerDbmsField("kind"));
+            };
+
+            return Ok(Self::Server {
+                dbms_kind: required_dbms_field("kind", dbms.kind.as_deref())?,
+                database_server: required_dbms_field("server", dbms.server.as_deref())?,
+                database_name: required_dbms_field("name", dbms.name.as_deref())?,
+                user: infobase.user.clone(),
+                password: infobase.password.clone(),
+                database_user: dbms.user.clone(),
+                database_password: dbms.password.clone(),
+            });
         };
 
-        Ok(Self {
+        Ok(Self::File {
             database_path: PathBuf::from(database_path),
-            user: conn.user.clone(),
-            password: conn.password.clone(),
+            user: infobase.user.clone(),
+            password: infobase.password.clone(),
         })
     }
 
@@ -39,34 +66,75 @@ impl IbcmdConnection {
     fn args(&self) -> Vec<String> {
         let mut args = self.infobase_args();
         args.extend(self.auth_args());
+        args.extend(self.dbms_auth_args());
         args
     }
 
     fn infobase_args(&self) -> Vec<String> {
-        let mut args = Vec::new();
-        // 8.3.20 accepts only this short alias and expects it before nested commands.
-        push_option_value(
-            &mut args,
-            "--db-path",
-            self.database_path.display().to_string(),
-        );
-        args
+        match self {
+            Self::File { database_path, .. } => {
+                let mut args = Vec::new();
+                // 8.3.20 accepts only this short alias and expects it before nested commands.
+                push_option_value(&mut args, "--db-path", database_path.display().to_string());
+                args
+            }
+            Self::Server {
+                dbms_kind,
+                database_server,
+                database_name,
+                ..
+            } => {
+                let mut args = Vec::new();
+                push_option_value(&mut args, "--dbms", dbms_kind);
+                push_option_value(&mut args, "--database-server", database_server);
+                push_option_value(&mut args, "--database-name", database_name);
+                args
+            }
+        }
     }
 
     fn auth_args(&self) -> Vec<String> {
         let mut args = Vec::new();
-        if let Some(user) = &self.user {
+        let (user, password) = match self {
+            Self::File { user, password, .. } | Self::Server { user, password, .. } => {
+                (user, password)
+            }
+        };
+        if let Some(user) = user {
             push_option_value(&mut args, "--user", user);
         }
-        if let Some(password) = &self.password {
+        if let Some(password) = password {
             if !password.is_empty() {
                 push_option_value(&mut args, "--password", password);
             }
         }
         args
     }
+
+    fn dbms_auth_args(&self) -> Vec<String> {
+        let mut args = Vec::new();
+        if let Self::Server {
+            database_user,
+            database_password,
+            ..
+        } = self
+        {
+            if let Some(user) = database_user {
+                if !user.trim().is_empty() {
+                    push_option_value(&mut args, "--database-user", user);
+                }
+            }
+            if let Some(password) = database_password {
+                if !password.is_empty() {
+                    push_option_value(&mut args, "--database-password", password);
+                }
+            }
+        }
+        args
+    }
 }
 
+/// Dynamic apply mode supported by `ibcmd config apply`.
 #[derive(Debug, Clone, Copy)]
 pub enum DynamicUpdateMode {
     Auto,
@@ -80,6 +148,21 @@ impl DynamicUpdateMode {
     }
 }
 
+/// Result status returned by `ibcmd infobase create`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IbcmdInfobaseCreateStatus {
+    Created,
+    AlreadyExists,
+    Failed,
+}
+
+/// Normalized outcome for infobase creation with the raw platform payload preserved.
+#[derive(Debug)]
+pub struct IbcmdInfobaseCreateOutcome {
+    pub status: IbcmdInfobaseCreateStatus,
+    pub result: PlatformCommandResult,
+}
+
 /// Low-level DSL for invoking `ibcmd`.
 pub struct IbcmdDsl<'a> {
     binary: PathBuf,
@@ -88,6 +171,7 @@ pub struct IbcmdDsl<'a> {
 }
 
 impl<'a> IbcmdDsl<'a> {
+    /// Creates a new DSL bound to a resolved `ibcmd` binary and target infobase.
     pub fn new(
         binary: PathBuf,
         connection: IbcmdConnection,
@@ -100,6 +184,7 @@ impl<'a> IbcmdDsl<'a> {
         }
     }
 
+    /// Imports a full configuration or extension snapshot into the target infobase.
     pub fn config_import_full(
         &self,
         source_dir: &Path,
@@ -113,11 +198,25 @@ impl<'a> IbcmdDsl<'a> {
         self.run(&args)
     }
 
-    pub fn infobase_create(&self) -> Result<PlatformCommandResult, IbcmdError> {
-        let args = self.infobase_args(&["create"]);
-        self.run(&args)
+    /// Ensures the infobase exists and normalizes benign "already exists" outcomes.
+    pub fn ensure_infobase_create(&self) -> Result<IbcmdInfobaseCreateOutcome, IbcmdError> {
+        let args = self.create_infobase_args();
+        let result = self.run(&args)?;
+        let status = if result.process.exit_code == 0 {
+            IbcmdInfobaseCreateStatus::Created
+        } else if is_benign_already_exists(
+            &result.process.stdout,
+            &result.process.stderr,
+        ) {
+            IbcmdInfobaseCreateStatus::AlreadyExists
+        } else {
+            IbcmdInfobaseCreateStatus::Failed
+        };
+
+        Ok(IbcmdInfobaseCreateOutcome { status, result })
     }
 
+    /// Updates extension security properties in the target infobase.
     pub fn infobase_extension_update_properties(
         &self,
         name: &str,
@@ -143,6 +242,7 @@ impl<'a> IbcmdDsl<'a> {
         self.run(&args)
     }
 
+    /// Imports a partial file list into the target infobase.
     pub fn config_import_partial(
         &self,
         base_dir: &Path,
@@ -159,6 +259,7 @@ impl<'a> IbcmdDsl<'a> {
         self.run(&args)
     }
 
+    /// Applies imported configuration changes to the infobase.
     pub fn config_apply(
         &self,
         extension: Option<&str>,
@@ -173,6 +274,7 @@ impl<'a> IbcmdDsl<'a> {
         self.run(&args)
     }
 
+    /// Exports a full configuration or extension snapshot from the infobase.
     pub fn config_export_full(
         &self,
         target_dir: &Path,
@@ -187,6 +289,7 @@ impl<'a> IbcmdDsl<'a> {
         self.run(&args)
     }
 
+    /// Exports changes in sync mode relative to an existing target directory.
     pub fn config_export_incremental(
         &self,
         target_dir: &Path,
@@ -215,6 +318,17 @@ impl<'a> IbcmdDsl<'a> {
     fn authenticated_infobase_args(&self, command: &[&str]) -> Vec<String> {
         let mut args = self.infobase_args(command);
         args.extend(self.connection.auth_args());
+        args.extend(self.connection.dbms_auth_args());
+        args
+    }
+
+    fn create_infobase_args(&self) -> Vec<String> {
+        let mut args = self.infobase_args(&["create"]);
+        if matches!(self.connection, IbcmdConnection::Server { .. }) {
+            args.push("--create-database".to_owned());
+        }
+        args.extend(self.connection.auth_args());
+        args.extend(self.connection.dbms_auth_args());
         args
     }
 
@@ -245,10 +359,52 @@ fn push_option_value(args: &mut Vec<String>, key: &str, value: impl ToString) {
     args.push(value.to_string());
 }
 
+fn required_dbms_field(field: &'static str, value: Option<&str>) -> Result<String, IbcmdError> {
+    match value.map(str::trim) {
+        Some(value) if !value.is_empty() => Ok(value.to_owned()),
+        _ => Err(IbcmdError::MissingServerDbmsField(field)),
+    }
+}
+
+fn is_benign_already_exists(stdout: &str, stderr: &str) -> bool {
+    let combined = format!("{stdout}\n{stderr}").to_lowercase();
+    if combined.trim().is_empty() {
+        return false;
+    }
+
+    const FATAL_PATTERNS: &[&str] = &[
+        "access denied",
+        "authentication",
+        "permission denied",
+        "timeout",
+        "connection refused",
+        "network",
+        "ошибка авторизации",
+        "доступ запрещен",
+        "доступ запрещён",
+        "недостаточно прав",
+        "не удалось подключ",
+        "таймаут",
+    ];
+    if FATAL_PATTERNS.iter().any(|pattern| combined.contains(pattern)) {
+        return false;
+    }
+
+    const BENIGN_PATTERNS: &[&str] = &["already exists", "уже существует"];
+    combined
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .any(|line| BENIGN_PATTERNS.iter().any(|pattern| line.contains(pattern)))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{DynamicUpdateMode, IbcmdConnection, IbcmdDsl, IbcmdError};
-    use crate::platform::connection::V8Connection;
+    use super::{
+        is_benign_already_exists, DynamicUpdateMode, IbcmdConnection, IbcmdDsl,
+        IbcmdInfobaseCreateStatus,
+    };
+    use crate::config::model::{InfobaseConfig, InfobaseDbmsConfig};
     use crate::platform::process::{ProcessExecutor, ProcessRunner};
     use std::fs;
     use std::io::Write;
@@ -279,30 +435,50 @@ mod tests {
         fs::rename(&staged, path).expect("rename script");
     }
 
+    fn file_connection(path: &str) -> IbcmdConnection {
+        IbcmdConnection::from_infobase(&InfobaseConfig::file(path)).expect("connection")
+    }
+
     #[test]
     fn ibcmd_connection_from_file_path() {
-        let conn = V8Connection::from_connection_string("File=/tmp/ib");
-        let ibcmd = IbcmdConnection::from_v8_connection(&conn).expect("connection");
+        let ibcmd = file_connection("File=/tmp/ib");
 
         assert_eq!(ibcmd.args(), vec!["--db-path", "/tmp/ib"]);
     }
 
     #[test]
-    fn ibcmd_connection_from_server_fails() {
-        let conn = V8Connection::from_connection_string("Srvr=demo;Ref=test");
+    fn ibcmd_connection_from_server_uses_dbms_contract() {
+        let ibcmd = IbcmdConnection::from_infobase(&InfobaseConfig::server(
+            "Srvr=demo;Ref=test",
+            InfobaseDbmsConfig::new("PostgreSQL", "localhost", "demo")
+                .with_credentials(Some("postgres".to_owned()), Some("secret".to_owned())),
+        ))
+        .expect("connection");
 
-        let err = IbcmdConnection::from_v8_connection(&conn).expect_err("expected error");
-
-        assert!(matches!(err, IbcmdError::ServerConnectionNotSupported));
+        assert_eq!(
+            ibcmd.args(),
+            vec![
+                "--dbms",
+                "PostgreSQL",
+                "--database-server",
+                "localhost",
+                "--database-name",
+                "demo",
+                "--database-user",
+                "postgres",
+                "--database-password",
+                "secret"
+            ]
+        );
     }
 
     #[test]
     fn ibcmd_connection_includes_auth_args() {
-        let mut conn = V8Connection::from_connection_string("File=/tmp/ib");
-        conn.user = Some("admin".to_owned());
-        conn.password = Some("secret".to_owned());
-
-        let ibcmd = IbcmdConnection::from_v8_connection(&conn).expect("connection");
+        let ibcmd = IbcmdConnection::from_infobase(
+            &InfobaseConfig::file("File=/tmp/ib")
+                .with_credentials(Some("admin".to_owned()), Some("secret".to_owned())),
+        )
+        .expect("connection");
 
         assert_eq!(
             ibcmd.args(),
@@ -328,9 +504,7 @@ mod tests {
             &format!("printf '%s\\n' \"$@\" > \"{}\"\nexit 0", args_log.display()),
         );
         let runner = ProcessExecutor;
-        let conn =
-            IbcmdConnection::from_v8_connection(&V8Connection::from_connection_string("File=/ib"))
-                .expect("connection");
+        let conn = file_connection("File=/ib");
         let dsl = IbcmdDsl::new(script, conn, &runner as &dyn ProcessRunner);
 
         dsl.config_import_full(dir.path(), Some("Ext"))
@@ -354,9 +528,7 @@ mod tests {
             &format!("printf '%s\\n' \"$@\" > \"{}\"\nexit 0", args_log.display()),
         );
         let runner = ProcessExecutor;
-        let conn =
-            IbcmdConnection::from_v8_connection(&V8Connection::from_connection_string("File=/ib"))
-                .expect("connection");
+        let conn = file_connection("File=/ib");
         let dsl = IbcmdDsl::new(script, conn, &runner as &dyn ProcessRunner);
         let files = vec![PathBuf::from("Catalogs/Items.xml")];
 
@@ -382,9 +554,7 @@ mod tests {
             &format!("printf '%s\\n' \"$@\" > \"{}\"\nexit 0", args_log.display()),
         );
         let runner = ProcessExecutor;
-        let conn =
-            IbcmdConnection::from_v8_connection(&V8Connection::from_connection_string("File=/ib"))
-                .expect("connection");
+        let conn = file_connection("File=/ib");
         let dsl = IbcmdDsl::new(script, conn, &runner as &dyn ProcessRunner);
 
         dsl.config_apply(None, DynamicUpdateMode::Auto)
@@ -407,9 +577,7 @@ mod tests {
             &format!("printf '%s\\n' \"$@\" > \"{}\"\nexit 0", args_log.display()),
         );
         let runner = ProcessExecutor;
-        let conn =
-            IbcmdConnection::from_v8_connection(&V8Connection::from_connection_string("File=/ib"))
-                .expect("connection");
+        let conn = file_connection("File=/ib");
         let dsl = IbcmdDsl::new(script, conn, &runner as &dyn ProcessRunner);
 
         dsl.config_export_full(dir.path(), None).expect("export");
@@ -431,10 +599,7 @@ mod tests {
                 &format!("printf '%s\\n' \"$@\" > \"{}\"\nexit 0", args_log.display()),
             );
             let runner = ProcessExecutor;
-            let conn = IbcmdConnection::from_v8_connection(&V8Connection::from_connection_string(
-                "File=/ib",
-            ))
-            .expect("connection");
+            let conn = file_connection("File=/ib");
             let dsl = IbcmdDsl::new(script, conn, &runner as &dyn ProcessRunner);
 
             dsl.config_export_full(dir.path(), None).expect("export");
@@ -456,9 +621,7 @@ mod tests {
             &format!("printf '%s\\n' \"$@\" > \"{}\"\nexit 0", args_log.display()),
         );
         let runner = ProcessExecutor;
-        let conn =
-            IbcmdConnection::from_v8_connection(&V8Connection::from_connection_string("File=/ib"))
-                .expect("connection");
+        let conn = file_connection("File=/ib");
         let dsl = IbcmdDsl::new(script, conn, &runner as &dyn ProcessRunner);
 
         dsl.config_export_incremental(dir.path(), None)
@@ -476,9 +639,7 @@ mod tests {
         let script = dir.path().join("ibcmd");
         write_script(&script, "echo out; echo err 1>&2; exit 7");
         let runner = ProcessExecutor;
-        let conn =
-            IbcmdConnection::from_v8_connection(&V8Connection::from_connection_string("File=/ib"))
-                .expect("connection");
+        let conn = file_connection("File=/ib");
         let dsl = IbcmdDsl::new(script, conn, &runner as &dyn ProcessRunner);
 
         let result = dsl
@@ -504,17 +665,60 @@ mod tests {
             &format!("printf '%s\\n' \"$@\" > \"{}\"\nexit 0", args_log.display()),
         );
         let runner = ProcessExecutor;
-        let conn =
-            IbcmdConnection::from_v8_connection(&V8Connection::from_connection_string("File=/ib"))
-                .expect("connection");
+        let conn = file_connection("File=/ib");
         let dsl = IbcmdDsl::new(script, conn, &runner as &dyn ProcessRunner);
 
-        dsl.infobase_create().expect("create");
+        let outcome = dsl.ensure_infobase_create().expect("create");
 
         let args = fs::read_to_string(args_log).expect("args");
+        assert_eq!(outcome.status, IbcmdInfobaseCreateStatus::Created);
         assert!(args.contains("infobase"));
         assert!(args.contains("create"));
         assert!(args.contains("infobase\n--db-path\n/ib\ncreate"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn server_infobase_create_adds_create_database_and_normalizes_already_exists() {
+        let dir = tempdir().expect("tempdir");
+        let script = dir.path().join("ibcmd");
+        let args_log = dir.path().join("args.log");
+        write_script(
+            &script,
+            &format!(
+                "printf '%s\\n' \"$@\" > \"{}\"\nprintf 'already exists\\n' >&2\nexit 17",
+                args_log.display()
+            ),
+        );
+        let runner = ProcessExecutor;
+        let conn = IbcmdConnection::from_infobase(&InfobaseConfig::server(
+            "Srvr=demo;Ref=test",
+            InfobaseDbmsConfig::new("PostgreSQL", "localhost", "demo")
+                .with_credentials(Some("postgres".to_owned()), Some("secret".to_owned())),
+        ))
+        .expect("connection");
+        let dsl = IbcmdDsl::new(script, conn, &runner as &dyn ProcessRunner);
+
+        let outcome = dsl.ensure_infobase_create().expect("ensure");
+
+        assert_eq!(outcome.status, IbcmdInfobaseCreateStatus::AlreadyExists);
+        let args = fs::read_to_string(args_log).expect("args");
+        assert!(args.contains("--create-database"));
+        assert!(args.contains("--dbms\nPostgreSQL"));
+        assert!(args.contains("--database-server\nlocalhost"));
+        assert!(args.contains("--database-name\ndemo"));
+        assert!(args.contains("--database-user\npostgres"));
+        assert!(args.contains("--database-password\nsecret"));
+    }
+
+    #[test]
+    fn already_exists_detection_handles_uppercase_russian_messages() {
+        assert!(is_benign_already_exists("", "УЖЕ СУЩЕСТВУЕТ"));
+    }
+
+    #[test]
+    fn already_exists_detection_keeps_uppercase_russian_auth_failures_fatal() {
+        assert!(!is_benign_already_exists("", "ОШИБКА АВТОРИЗАЦИИ: УЖЕ СУЩЕСТВУЕТ"));
     }
 
     #[cfg(unix)]
@@ -528,9 +732,7 @@ mod tests {
             &format!("printf '%s\\n' \"$@\" > \"{}\"\nexit 0", args_log.display()),
         );
         let runner = ProcessExecutor;
-        let conn =
-            IbcmdConnection::from_v8_connection(&V8Connection::from_connection_string("File=/ib"))
-                .expect("connection");
+        let conn = file_connection("File=/ib");
         let dsl = IbcmdDsl::new(script, conn, &runner as &dyn ProcessRunner);
 
         dsl.infobase_extension_update_properties("client_mcp", false, false)

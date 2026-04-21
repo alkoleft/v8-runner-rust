@@ -382,7 +382,8 @@ fn render_config(
     yaml.push_str("workPath: 'build'\n");
     yaml.push_str(&format!("format: {}\n", format.as_yaml()));
     yaml.push_str(&format!("builder: {}\n", builder.as_yaml()));
-    yaml.push_str(&format!("connection: '{}'\n", escape_yaml(connection)));
+    yaml.push_str("infobase:\n");
+    yaml.push_str(&format!("  connection: '{}'\n", escape_yaml(connection)));
     yaml.push_str("source-set:\n");
     for source_set in source_sets {
         yaml.push_str(&format!("  - name: {}\n", source_set.name));
@@ -403,6 +404,7 @@ mod tests {
     use super::{
         execute, ConfigBuilderRequest, ConfigFormatRequest, ConfigInitRequest, SourcePurpose,
     };
+    use crate::config::loader::load_config;
     use tempfile::tempdir;
 
     #[test]
@@ -464,5 +466,26 @@ mod tests {
             super::detect_designer_purpose(&xml),
             SourcePurpose::Extension
         );
+    }
+
+    #[test]
+    fn generated_config_round_trips_through_loader() {
+        let dir = tempdir().expect("tempdir");
+        let main = dir.path().join("Configuration.xml");
+        std::fs::write(&main, "<Configuration/>").expect("main xml");
+
+        let result = execute(&ConfigInitRequest {
+            project_dir: dir.path().to_path_buf(),
+            output_path: "v8project.yaml".into(),
+            force: false,
+            connection: None,
+            format: ConfigFormatRequest::Designer,
+            builder: ConfigBuilderRequest::Designer,
+        })
+        .expect("init config");
+
+        let config = load_config(Some(&result.path), None).expect("load config");
+
+        assert_eq!(config.infobase.connection, format!("File={}", dir.path().join("build/ib").display()));
     }
 }

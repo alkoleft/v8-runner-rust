@@ -23,7 +23,7 @@ The platform layer is intentionally split so responsibilities do not bleed into 
 
 - `platform::process` defines `ProcessRunner`, `ProcessExecutor`, `ProcessRequest`, `ProcessResult`, and `SpawnResult`.
 - `platform::locator` resolves concrete executables (`1cv8`, `1cv8c`, `ibcmd`, `1cedtcli`) and caches results per `Locator` instance. Platform component discovery by version mask is governed by [ADR-0004](docs/decisions/0004-avtoobnaruzhivat-komponenty-platformy-1s-po-versii-maske.md).
-- `platform::connection` builds reusable V8 connection/auth arguments from the raw config connection string.
+- `platform::connection` builds reusable V8 connection/auth arguments from `infobase.connection`.
 - `platform::utilities` is the current facade used by use cases. It owns the stateful `Locator` and exposes the standard execution path.
 - `platform::designer` is the low-level batch DSL for `1cv8 DESIGNER`, returning `PlatformCommandResult` so `/Out` logs stay separate from runner-captured stdio.
 - `platform::ibcmd` is the low-level DSL for `ibcmd`, returning `PlatformCommandResult` with stdout/stderr diagnostics (no `/Out` log).
@@ -112,7 +112,7 @@ Important staging note:
 Constraints to keep in mind:
 
 - Граница поддержки `IBCMD` как ограниченного backend формально закреплена в [ADR-0001](docs/decisions/0001-granitsy-podderzhki-ibcmd-kak-ogranichennogo-backend.md).
-- IBCMD currently requires file-based infobase connections; server infobase support is required by [ADR-0003](docs/decisions/0003-podderzhivat-servernye-ib-dlya-vseh-instrumentov.md) as a target contract for all tools.
+- Для реализованных builder-сценариев `IBCMD` уже поддерживает file и server infobase connections; server path требует полный `infobase.dbms` contract. Оставшиеся file-only или unsupported сценарии считаются явными gaps, а не нормой архитектуры.
 - `builder=DESIGNER` supports object-level partial dump via `/DumpConfigToFiles -partial -listFile`.
 - `builder=IBCMD` does not support object-scoped partial dump directly; `PARTIAL` degrades to
   incremental export for the resolved target and returns a warning while preserving the requested

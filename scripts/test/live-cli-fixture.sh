@@ -233,18 +233,30 @@ import sys
 config_path = pathlib.Path(sys.argv[1])
 text = config_path.read_text(encoding="utf-8")
 
-match = re.search(r"^connection:\s*(.+)$", text, re.MULTILINE)
-if not match:
-    raise SystemExit("connection must use File=... or raw /F ...")
+connection = None
+in_infobase = False
+for line in text.splitlines():
+    if re.match(r"^infobase:\s*$", line):
+        in_infobase = True
+        continue
+    if in_infobase and re.match(r"^\S", line):
+        break
+    if in_infobase:
+        match = re.match(r"^[ \t]+connection:\s*(.+)$", line)
+        if match:
+            connection = match.group(1).strip().strip("'\"")
+            break
 
-connection = match.group(1).strip().strip("'\"")
+if not connection:
+    raise SystemExit("infobase.connection must use File=... or raw /F ...")
+
 if connection.startswith("/") or connection.startswith("-"):
     parts = shlex.split(connection)
     for index, part in enumerate(parts):
         if part.lower() in ("/f", "-f") and index + 1 < len(parts):
             print(pathlib.Path(parts[index + 1]).expanduser())
             raise SystemExit(0)
-    raise SystemExit("connection must use File=... or raw /F ...")
+    raise SystemExit("infobase.connection must use File=... or raw /F ...")
 
 for part in connection.split(";"):
     part = part.strip()
@@ -252,7 +264,7 @@ for part in connection.split(";"):
         print(pathlib.Path(part[5:]).expanduser())
         raise SystemExit(0)
 
-raise SystemExit("connection must use File=... or raw /F ...")
+raise SystemExit("infobase.connection must use File=... or raw /F ...")
 PY
 }
 
@@ -486,8 +498,8 @@ case "$BUILDER_BACKEND" in
 esac
 SMOKE_TITLE="LIVE CLI $BUILDER_BACKEND SMOKE"
 
-if ! config_matches "^connection:[[:space:]]*['\"]?(File=|/F[[:space:]]+)" "$DESIGNER_CONFIG_PATH"; then
-    die "Live Designer config must use a file-based connection ('File=...' or raw '/F ...'): $DESIGNER_CONFIG_PATH"
+if ! extract_connection_file_path >/dev/null; then
+    die "Live Designer config must use file-based infobase.connection ('File=...' or raw '/F ...'): $DESIGNER_CONFIG_PATH"
 fi
 
 declare -A SOURCE_SET_NAME_BY_TYPE=()

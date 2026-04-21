@@ -82,12 +82,31 @@ fn write_config_with_builder(
     builder: &str,
     connection: &str,
 ) {
+    let infobase = format!("  connection: '{}'\n", connection);
+    write_config_with_builder_and_infobase(
+        path,
+        base_path,
+        work_path,
+        platform_path,
+        builder,
+        &infobase,
+    );
+}
+
+fn write_config_with_builder_and_infobase(
+    path: &Path,
+    base_path: &Path,
+    work_path: &Path,
+    platform_path: &Path,
+    builder: &str,
+    infobase_yaml: &str,
+) {
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: {}\nconnection: '{}'\nbuild:\n  partialLoadThreshold: 20\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\n  - name: ext\n    type: EXTENSION\n    path: ext\ntools:\n  platform:\n    path: '{}'\n",
+        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: {}\ninfobase:\n{}build:\n  partialLoadThreshold: 20\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\n  - name: ext\n    type: EXTENSION\n    path: ext\ntools:\n  platform:\n    path: '{}'\n",
         base_path.display(),
         work_path.display(),
         builder,
-        connection,
+        infobase_yaml,
         platform_path.display(),
     );
 
@@ -258,7 +277,7 @@ fn setup_edt_ibcmd_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
     write_edt_script(&edt_cli_path, &edt_calls_log);
 
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: EDT\nbuilder: IBCMD\nconnection: 'File=/tmp/ib'\nbuild:\n  partialLoadThreshold: 20\nsource-set:\n  - name: configuration\n    type: CONFIGURATION\n    path: configuration\ntools:\n  platform:\n    path: '{}'\n  edt_cli:\n    path: '{}'\n",
+        "basePath: '{}'\nworkPath: '{}'\nformat: EDT\nbuilder: IBCMD\ninfobase:\n  connection: 'File=/tmp/ib'\nbuild:\n  partialLoadThreshold: 20\nsource-set:\n  - name: configuration\n    type: CONFIGURATION\n    path: configuration\ntools:\n  platform:\n    path: '{}'\n  edt_cli:\n    path: '{}'\n",
         base_path.display(),
         work_path.display(),
         ibcmd_path.display(),
@@ -592,7 +611,7 @@ fn build_ibcmd_full_rebuild_invokes_import_and_apply() {
 fn build_ibcmd_passes_credentials_to_import_and_apply() {
     let (dir, config_path, binary_path, work_path, base_path, calls_log) = setup_ibcmd_project();
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: IBCMD\nconnection: 'File=/tmp/ib'\ncredentials:\n  user: Admin\n  password: secret\nbuild:\n  partialLoadThreshold: 20\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n",
+        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: IBCMD\ninfobase:\n  connection: 'File=/tmp/ib'\n  user: Admin\n  password: secret\nbuild:\n  partialLoadThreshold: 20\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n",
         base_path.display(),
         work_path.display(),
         binary_path.display(),
@@ -679,6 +698,38 @@ fn build_ibcmd_server_connection_fails_at_config_load() {
 
     assert!(!output.status.success());
     assert_eq!(output.status.code(), Some(2));
+}
+
+#[test]
+fn build_ibcmd_server_connection_passes_dbms_and_infobase_credentials() {
+    let (dir, config_path, binary_path, _work_path, _base_path, calls_log) = setup_ibcmd_project();
+    write_config_with_builder_and_infobase(
+        &config_path,
+        &dir.path().join("project"),
+        &dir.path().join("work"),
+        &binary_path,
+        "IBCMD",
+        "  connection: 'Srvr=server;Ref=main'\n  user: Admin\n  password: secret\n  dbms:\n    kind: PostgreSQL\n    server: localhost\n    name: maindb\n    user: postgres\n    password: pg-secret\n",
+    );
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "build",
+            "--full-rebuild",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let calls = fs::read_to_string(calls_log).expect("calls");
+    assert!(calls.contains("--dbms PostgreSQL --database-server localhost --database-name maindb"));
+    assert!(calls.contains("--user Admin --password secret"));
+    assert!(calls.contains("--database-user postgres --database-password pg-secret"));
+    assert!(calls.contains("config import"));
+    assert!(calls.contains("config apply"));
 }
 
 #[test]

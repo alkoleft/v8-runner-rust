@@ -14,7 +14,8 @@ format: DESIGNER
 builder: DESIGNER
 
 # 1C infobase connection string
-connection: "File=build/ib"
+infobase:
+  connection: "File=build/ib"
 
 # Source sets: list of configurations and extensions
 source-set:

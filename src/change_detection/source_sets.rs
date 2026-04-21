@@ -106,8 +106,7 @@ mod tests {
             work_path: std::path::PathBuf::from("target/tmp-work"),
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
-            connection: "File=/tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![SourceSetConfig {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
@@ -134,8 +133,7 @@ mod tests {
             work_path: std::path::PathBuf::from("target/tmp-work"),
             format: SourceFormat::Edt,
             builder: BuilderBackend::Designer,
-            connection: "File=/tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![SourceSetConfig {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,

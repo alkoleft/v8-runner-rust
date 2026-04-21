@@ -27,12 +27,13 @@
 3. `infobase.user/password` являются supported ключами пользователя ИБ; top-level `credentials` не является публичным контрактом.
 4. `infobase.dbms` описывает DBMS-level доступ для server-based ИБ; для `builder=IBCMD` + server connection обязательны `kind`, `server` и `name`.
 5. Полный `infobase.dbms` contract является достаточным explicit authorization для server infobase provisioning path в `init` при `builder=IBCMD`; отдельный `tools.*` field для этого не требуется.
-6. `infobase.dbms` не должен задаваться для file-based ИБ.
-7. `source-set[].type` является поддержанным ключом типа source-set; legacy `purpose` не является публичным контрактом.
-8. `source-set.name` является stable identity для ordering, diagnostics, runtime contexts, generated directories и selection logic.
-9. `source-set.name` должен быть уникальным и безопасным path segment; resolved paths должны быть уникальны после normalization.
-10. EDT/external source-set paths и generated work targets не должны пересекаться; reserved work directory names нельзя использовать как EDT source-set names.
-11. Unsupported или unsafe config combinations должны отклоняться на validation boundary до вызова platform DSL.
+6. Для `builder=DESIGNER` автоматическое создание server-based ИБ в `init` не вводится; server create step остаётся explicit gap вне `IBCMD` provisioning path.
+7. `infobase.dbms` не должен задаваться для file-based ИБ.
+8. `source-set[].type` является поддержанным ключом типа source-set; legacy `purpose` не является публичным контрактом.
+9. `source-set.name` является stable identity для ordering, diagnostics, runtime contexts, generated directories и selection logic.
+10. `source-set.name` должен быть уникальным и безопасным path segment; resolved paths должны быть уникальны после normalization.
+11. EDT/external source-set paths и generated work targets не должны пересекаться; reserved work directory names нельзя использовать как EDT source-set names.
+12. Unsupported или unsafe config combinations должны отклоняться на validation boundary до вызова platform DSL.
 
 См. [ADR-0017](../decisions/0017-v8project-yaml-source-set-kak-glavnyy-konfiguratsionnyy-kontrakt.md), [ADR-0018](../decisions/0018-perenesti-kontrakt-informatsionnoy-bazy-v-infobase.md) и [ADR-0019](../decisions/0019-sozdavat-servernuyu-infobazu-cherez-ibcmd-pri-init-pri-otsutstvii.md).
 

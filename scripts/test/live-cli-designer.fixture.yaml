@@ -5,7 +5,8 @@ basePath: __OUTPUT_ROOT__/workspace/basePath
 workPath: __OUTPUT_ROOT__/work
 format: DESIGNER
 builder: DESIGNER
-connection: "File=__OUTPUT_ROOT__/infobase"
+infobase:
+  connection: "File=__OUTPUT_ROOT__/infobase"
 
 tests:
   execution_timeout_seconds: 300

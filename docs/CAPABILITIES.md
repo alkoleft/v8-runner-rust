@@ -2,23 +2,23 @@
 
 Публичный справочник по тому, что `v8-runner` поддерживает на текущий момент.
 
-Последняя факт-проверка: `2026-04-20` по свежей локальной сборке `cargo test`, актуальному CLI `--help`, `src/config/model.rs` и реальной MCP-поверхности запросов в `src/mcp/request.rs` / `src/mcp/service.rs`.
+Последняя факт-проверка: `2026-04-22` по свежей локальной сборке `cargo test`, актуальному CLI `--help`, `src/config/model.rs` и реальной MCP-поверхности запросов в `src/mcp/request.rs` / `src/mcp/service.rs`.
 
 Если этот документ расходится со старыми внутренними заметками в `spec/*`, доверяйте текущему коду и CLI-интерфейсу.
 
-Граница поддержки `IBCMD` зафиксирована в [ADR-0001](decisions/0001-granitsy-podderzhki-ibcmd-kak-ogranichennogo-backend.md): сейчас это ограниченный backend для `init`, `build`, `dump`, `extensions`, только с файловой ИБ. Целевой принцип builder-слоя: реализованные builder-сценарии должны быть взаимозаменяемы между `DESIGNER`, `IBCMD` и будущим Designer agent mode либо иметь явно описанный gap. Целевой контракт по [ADR-0003](decisions/0003-podderzhivat-servernye-ib-dlya-vseh-instrumentov.md): все инструменты должны развиваться с поддержкой серверных ИБ; текущие file-only ограничения считаются gaps.
+Граница поддержки `IBCMD` зафиксирована в [ADR-0001](decisions/0001-granitsy-podderzhki-ibcmd-kak-ogranichennogo-backend.md): сейчас это ограниченный backend для `init`, `build`, `dump`, `extensions`, но file/server contract уже унифицирован через `infobase` и `infobase.dbms`. Целевой принцип builder-слоя: реализованные builder-сценарии должны быть взаимозаменяемы между `DESIGNER`, `IBCMD` и будущим Designer agent mode либо иметь явно описанный gap.
 
 ## Матрица сценариев
 
 | Сценарий | Поддерживаемые комбинации | Примечания |
 | --- | --- | --- |
 | `config init` | Работает без существующего конфига | Создаёт `v8project.yaml`, ищет Designer/EDT-исходники и пишет `source-set[].type` |
-| `init` | `format=DESIGNER` + `builder=DESIGNER` | Создаёт файловую ИБ через `1cv8 CREATEINFOBASE`, если отсутствует |
-| `init` | `format=DESIGNER` + `builder=IBCMD` | Создаёт файловую ИБ через `ibcmd infobase create`, если отсутствует |
-| `init` | `format=EDT` + `builder=DESIGNER` или `IBCMD` | Создаёт файловую ИБ и, если workspace отсутствует, импортирует все EDT `source-set` в `workPath/edt-workspace`; при `IBCMD` только файловая ИБ |
-| `extensions` | `format=DESIGNER` или `format=EDT` | Обновляет свойства расширений для extension `source-set`, указанных в конфиге; только файловая ИБ |
+| `init` | `format=DESIGNER` + `builder=DESIGNER` | Создаёт файловую ИБ через `1cv8 CREATEINFOBASE`, если отсутствует; server connection остаётся manual prerequisite |
+| `init` | `format=DESIGNER` + `builder=IBCMD` | Выполняет `ensure` файловой или серверной ИБ через `ibcmd infobase create`; для server path добавляет `--create-database` и трактует benign `already exists` как non-fatal |
+| `init` | `format=EDT` + `builder=DESIGNER` или `IBCMD` | Подготавливает ИБ по правилам builder и, если workspace отсутствует, импортирует все EDT `source-set` в `workPath/edt-workspace` |
+| `extensions` | `format=DESIGNER` или `format=EDT` | Обновляет свойства расширений для extension `source-set`, указанных в конфиге; file и server ИБ поддерживаются через IBCMD adapter |
 | `build` | `format=DESIGNER` + `builder=DESIGNER` | Инкрементальная или полная загрузка через Designer |
-| `build` | `format=DESIGNER` + `builder=IBCMD` | Использует `ibcmd config import` + `config apply`; только файловая ИБ |
+| `build` | `format=DESIGNER` + `builder=IBCMD` | Использует `ibcmd config import` + `config apply`; file и server ИБ через `infobase` / `infobase.dbms` |
 | `build` | `format=EDT` + `builder=DESIGNER` или `IBCMD` | Определяет EDT-изменения, экспортирует затронутые `source-set`, затем загружает Designer-вывод выбранным backend |
 | `test` | Та же матрица, что и у `build` | Всегда сначала запускает `build`, затем YaXUnit через Enterprise |
 | `dump` | `format=DESIGNER` + `builder=DESIGNER` | Полная, инкрементальная или точечная частичная выгрузка объектов |
@@ -53,7 +53,7 @@ v8-runner config init [--force] [--file <FILE>] [--connection <CONNECTION>] [--f
 - По умолчанию создаёт конфиг в текущем каталоге; путь можно переопределить через `--file` или глобальный `--config`.
 - Не перезаписывает существующий файл без `--force`.
 - Ищет Designer-исходники по `Configuration.xml`, EDT-проекты по `.project`.
-- Генерирует `workPath: 'build'`, `connection: 'File=build/ib'` и элементы `source-set` с ключом `type`.
+- Генерирует `workPath: 'build'`, секцию `infobase.connection: 'File=build/ib'` и элементы `source-set` с ключом `type`.
 
 ## Команда `build`
 
@@ -73,7 +73,7 @@ v8-runner build [--full-rebuild]
 - `format=DESIGNER`, `builder=DESIGNER`: загружает изменённые Designer-исходники напрямую через бэкенд Designer.
 - `format=DESIGNER`, `builder=IBCMD`: загружает исходники в Designer-формате через `ibcmd`.
 - `format=EDT`, `builder=DESIGNER`: экспортирует изменённые EDT `source-set` во временные Designer-файлы под `workPath/designer`, затем запускает обычный конвейер Designer.
-- `format=EDT`, `builder=IBCMD`: экспортирует изменённые EDT `source-set` во временные Designer-файлы под `workPath/designer`, затем загружает их через `ibcmd`; только файловая ИБ.
+- `format=EDT`, `builder=IBCMD`: экспортирует изменённые EDT `source-set` во временные Designer-файлы под `workPath/designer`, затем загружает их через `ibcmd`; file и server ИБ поддерживаются единым `infobase` contract.
 
 Важные детали:
 
@@ -90,14 +90,15 @@ v8-runner init
 Поведение:
 
 - Всегда выполняет два независимых шага: подготовку ИБ и инициализацию EDT workspace.
-- Создание ИБ выполняется только для файловой строки подключения.
-- Для серверной строки подключения шаг создания ИБ пропускается без ошибки; серверная база должна быть создана вручную заранее.
+- Для file connection шаг создания ИБ использует файловый path flow.
+- Для server connection `builder=IBCMD` выполняет `ibcmd infobase create --create-database` без обязательного отдельного pre-check; benign `already exists` нормализуется как non-fatal outcome.
+- Для server connection `builder=DESIGNER` шаг создания ИБ пропускается без ошибки; серверная база остаётся manual prerequisite.
 - Падение шага создания ИБ не блокирует EDT-шаг; общий результат остаётся неуспешным, если любой шаг завершился ошибкой.
 - Файловая ИБ считается существующей только при наличии файла `1Cv8.1CD` в каталоге базы.
 - Для `builder=DESIGNER` создание ИБ идёт через `1cv8 CREATEINFOBASE`.
-- Для `builder=IBCMD` создание ИБ идёт через `ibcmd infobase create`.
+- Для `builder=IBCMD` file/server path идут через `ibcmd infobase create`.
 - Для `format=EDT` workspace создаётся в `workPath/edt-workspace`, а импорт проектов идёт в порядке `CONFIGURATION`, затем `EXTENSION`.
-- EDT workspace должен создаваться и импортироваться даже при серверной строке подключения, потому что серверная ИБ является внешним prerequisite.
+- EDT workspace должен создаваться и импортироваться независимо от file/server infobase step.
 - Если `workPath/edt-workspace` уже существует и содержит внутренний marker успешной инициализации, EDT-шаг пропускается.
 - Если каталог workspace уже есть, но marker успешной инициализации отсутствует, `init` повторяет импорт всех EDT-проектов.
 

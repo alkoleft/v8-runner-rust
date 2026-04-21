@@ -29,6 +29,8 @@ pub fn load_config(
     let path = resolve_config_path(config_path)?;
     let path = normalize_windows_verbatim_path(&std::fs::canonicalize(&path)?);
     let content = std::fs::read_to_string(&path)?;
+    let root: serde_yaml::Value = serde_yaml::from_str(&content)?;
+    reject_legacy_top_level_keys(&root)?;
     let mut config: AppConfig = serde_yaml::from_str(&content)?;
     normalize_config_paths(&mut config, path.parent().unwrap_or_else(|| Path::new(".")));
 
@@ -46,7 +48,8 @@ pub fn load_config(
 fn normalize_config_paths(config: &mut AppConfig, config_dir: &Path) {
     config.base_path = normalize_optional_path(&config.base_path, config_dir);
     config.work_path = normalize_optional_path(&config.work_path, config_dir);
-    config.connection = normalize_connection_string(&config.connection, config_dir);
+    config.infobase.connection =
+        normalize_connection_string(&config.infobase.connection, config_dir);
 
     let va = &mut config.tests.va;
     if let Some(path) = va.epf_path.as_mut() {
@@ -60,6 +63,24 @@ fn normalize_config_paths(config: &mut AppConfig, config_dir: &Path) {
             *path = normalize_optional_path(path, config_dir);
         }
     }
+}
+
+fn reject_legacy_top_level_keys(root: &serde_yaml::Value) -> Result<(), ConfigValidationError> {
+    let Some(mapping) = root.as_mapping() else {
+        return Err(ConfigValidationError::InvalidYamlRoot(
+            "expected a YAML mapping at the document root".to_owned(),
+        ));
+    };
+
+    if mapping.contains_key(serde_yaml::Value::String("connection".to_owned())) {
+        return Err(ConfigValidationError::LegacyTopLevelConnection);
+    }
+
+    if mapping.contains_key(serde_yaml::Value::String("credentials".to_owned())) {
+        return Err(ConfigValidationError::LegacyTopLevelCredentials);
+    }
+
+    Ok(())
 }
 
 fn normalize_optional_path(path: &Path, config_dir: &Path) -> PathBuf {
@@ -223,7 +244,7 @@ mod tests {
         std::fs::write(
             &config_path,
             format!(
-                "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: \"File=/tmp/ib\"\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: src\n",
+                "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: \"File=/tmp/ib\"\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: src\n",
                 base.display(),
                 work.display()
             ),
@@ -249,7 +270,7 @@ mod tests {
         std::fs::write(
             &config_path,
             format!(
-                "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: \"File=/tmp/ib\"\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: src\n",
+                "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: \"File=/tmp/ib\"\nsource-set:\n  - name: main\n    purpose: CONFIGURATION\n    path: src\n",
                 base.display(),
                 work.display()
             ),
@@ -272,7 +293,7 @@ mod tests {
         std::fs::write(
             &config_path,
             format!(
-                "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: \"File=/tmp/ib\"\nbuild:\n  partialLoadThreshold: 7\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: src\n",
+                "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: \"File=/tmp/ib\"\nbuild:\n  partialLoadThreshold: 7\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: src\n",
                 base.display(),
                 work.display()
             ),
@@ -295,7 +316,7 @@ mod tests {
         std::fs::write(
             &config_path,
             format!(
-                "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: \"File=/tmp/ib\"\ntests:\n  execution_timeout_seconds: 17\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: src\n",
+                "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: \"File=/tmp/ib\"\ntests:\n  execution_timeout_seconds: 17\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: src\n",
                 base.display(),
                 work.display()
             ),
@@ -326,7 +347,7 @@ mod tests {
         std::fs::write(
             &config_path,
             format!(
-                "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: \"File=/tmp/ib\"\ntests:\n  va:\n    epf_path: va/runner.epf\n    params_path: va/params.json\n    profile: smoke\n    profiles:\n      smoke:\n        feature_path: features\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: src\n",
+                "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: \"File=/tmp/ib\"\ntests:\n  va:\n    epf_path: va/runner.epf\n    params_path: va/params.json\n    profile: smoke\n    profiles:\n      smoke:\n        feature_path: features\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: src\n",
                 base.display(),
                 work.display()
             ),
@@ -364,7 +385,7 @@ mod tests {
         let config_path = config_dir.join("v8project.yaml");
         std::fs::write(
             &config_path,
-            "basePath: sources\nworkPath: build\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: \"File=build/ib\"\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\n",
+            "basePath: sources\nworkPath: build\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: \"File=build/ib\"\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\n",
         )
         .expect("write config");
 
@@ -373,9 +394,77 @@ mod tests {
         assert_eq!(config.base_path, base);
         assert_eq!(config.work_path, config_dir.join("build"));
         assert_eq!(
-            config.connection,
+            config.infobase.connection,
             format!("File={}", config_dir.join("build/ib").display())
         );
+    }
+
+    #[test]
+    fn load_config_preserves_server_connection_string() {
+        let dir = tempdir().expect("tempdir");
+        let config_dir = dir.path().join("project");
+        let base = config_dir.join("sources");
+        std::fs::create_dir_all(&base).expect("base dir");
+        let config_path = config_dir.join("v8project.yaml");
+        std::fs::write(
+            &config_path,
+            "basePath: sources\nworkPath: build\nformat: DESIGNER\nbuilder: IBCMD\ninfobase:\n  connection: \"Srvr=cluster:1541;Ref=demo\"\n  dbms:\n    kind: PostgreSQL\n    server: localhost\n    name: demo\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\n",
+        )
+        .expect("write config");
+
+        let config = load_config(config_path.to_str(), None).expect("load config");
+
+        assert_eq!(config.infobase.connection, "Srvr=cluster:1541;Ref=demo");
+    }
+
+    #[test]
+    fn load_config_rejects_legacy_top_level_connection_key() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).expect("src dir");
+        let config_path = dir.path().join("v8project.yaml");
+        std::fs::write(
+            &config_path,
+            format!(
+                "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: \"File=/tmp/ib\"\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: src\n",
+                base.display(),
+                work.display()
+            ),
+        )
+        .expect("write config");
+
+        let error = load_config(config_path.to_str(), None).expect_err("reject legacy connection");
+
+        assert!(error
+            .to_string()
+            .contains("legacy top-level key 'connection'"));
+    }
+
+    #[test]
+    fn load_config_rejects_mixed_new_and_legacy_infobase_keys() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).expect("src dir");
+        let config_path = dir.path().join("v8project.yaml");
+        std::fs::write(
+            &config_path,
+            format!(
+                "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: \"File=/tmp/ib\"\ncredentials:\n  password: secret\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: src\n",
+                base.display(),
+                work.display()
+            ),
+        )
+        .expect("write config");
+
+        let error = load_config(config_path.to_str(), None).expect_err("reject legacy credentials");
+
+        assert!(error
+            .to_string()
+            .contains("legacy top-level key 'credentials'"));
     }
 
     #[test]
@@ -387,7 +476,7 @@ mod tests {
         let config_path = config_dir.join("v8project.yaml");
         std::fs::write(
             &config_path,
-            "basePath: sources\nworkPath: build\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: '/F \"build/my ib\"'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\n",
+            "basePath: sources\nworkPath: build\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: '/F \"build/my ib\"'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\n",
         )
         .expect("write config");
 
@@ -410,7 +499,7 @@ mod tests {
         std::fs::write(
             &config_path,
             format!(
-                "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: \"File=/tmp/ib\"\nmcp:\n  http:\n    bind_address: 127.0.0.1:4000\n    path: /custom-mcp\n    stateful_sessions: false\n    max_sessions: 12\n    idle_ttl_secs: 45\n  execution:\n    max_concurrent_calls: 3\n    shutdown_grace_period_secs: 9\ntools:\n  enterprise:\n    additional-launch-keys:\n      - /TESTMANAGER\n  edt_cli:\n    interactive-mode: true\n    startup_timeout_ms: 1234\n    command_timeout_ms: 5678\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: src\n",
+                "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: \"File=/tmp/ib\"\nmcp:\n  http:\n    bind_address: 127.0.0.1:4000\n    path: /custom-mcp\n    stateful_sessions: false\n    max_sessions: 12\n    idle_ttl_secs: 45\n  execution:\n    max_concurrent_calls: 3\n    shutdown_grace_period_secs: 9\ntools:\n  enterprise:\n    additional-launch-keys:\n      - /TESTMANAGER\n  edt_cli:\n    interactive-mode: true\n    startup_timeout_ms: 1234\n    command_timeout_ms: 5678\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: src\n",
                 base.display(),
                 work.display()
             ),
@@ -452,7 +541,7 @@ mod tests {
             std::fs::write(
                 &config_path,
                 format!(
-                    "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: \"File=/tmp/ib\"\ntools:\n  enterprise:\n    {}:\n      - /TESTMANAGER\n      - /TCUser\n      - ci-user\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: src\n",
+                    "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: \"File=/tmp/ib\"\ntools:\n  enterprise:\n    {}:\n      - /TESTMANAGER\n      - /TCUser\n      - ci-user\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: src\n",
                     base.display(),
                     work.display(),
                     key
@@ -483,7 +572,7 @@ mod tests {
         std::fs::write(
             &config_path,
             format!(
-                "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: \"File=/tmp/ib\"\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: src\n",
+                "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: \"File=/tmp/ib\"\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: src\n",
                 base.display(),
                 work.display()
             ),
@@ -514,7 +603,7 @@ mod tests {
         std::fs::write(
             &config_path,
             format!(
-                "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: \"File=/tmp/ib\"\ntools:\n  edt-cli:\n    startup-timeout-ms: 2222\n    command-timeout-ms: 3333\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: src\n",
+                "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: \"File=/tmp/ib\"\ntools:\n  edt-cli:\n    startup-timeout-ms: 2222\n    command-timeout-ms: 3333\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: src\n",
                 base.display(),
                 work.display()
             ),
@@ -538,7 +627,7 @@ mod tests {
         std::fs::write(
             &config_path,
             format!(
-                "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: \"File=/tmp/ib\"\ntools:\n  platform:\n    version: 8.3.27.1859\n  edt-cli:\n    path: 1c-edt-2025.2.3\n    version: 1c-edt-2025.2.3\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: src\n",
+                "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: \"File=/tmp/ib\"\ntools:\n  platform:\n    version: 8.3.27.1859\n  edt-cli:\n    path: 1c-edt-2025.2.3\n    version: 1c-edt-2025.2.3\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: src\n",
                 base.display(),
                 work.display()
             ),

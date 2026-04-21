@@ -57,7 +57,7 @@ fn default_config_path_uses_v8project_yaml_from_current_dir() {
     fs::write(
         &config_path,
         format!(
-            "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\n",
+            "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\n",
             base_path.display(),
             work_path.display()
         ),
@@ -88,7 +88,7 @@ fn mcp_rejects_clean_before_execution_flag() {
     fs::write(
         &config_path,
         format!(
-            "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\n",
+            "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\n",
             base_path.display(),
             work_path.display()
         ),
@@ -113,4 +113,82 @@ fn mcp_rejects_clean_before_execution_flag() {
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8_lossy(&output.stderr)
         .contains("--clean-before-execution is not supported for MCP transports"));
+}
+
+#[test]
+fn legacy_top_level_connection_is_rejected_in_json_mode() {
+    let dir = tempdir().expect("tempdir");
+    let config_path = dir.path().join("v8project.yaml");
+    let base_path = dir.path().join("project");
+    let work_path = dir.path().join("work");
+    fs::create_dir_all(&base_path).expect("base");
+    fs::create_dir_all(&work_path).expect("work");
+    fs::write(
+        &config_path,
+        format!(
+            "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\n",
+            base_path.display(),
+            work_path.display()
+        ),
+    )
+    .expect("config");
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--output",
+            "json",
+            "build",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(2));
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert!(payload["data"]["message"]
+        .as_str()
+        .expect("message")
+        .contains("legacy top-level key 'connection'"));
+}
+
+#[test]
+fn legacy_top_level_credentials_is_rejected_in_json_mode() {
+    let dir = tempdir().expect("tempdir");
+    let config_path = dir.path().join("v8project.yaml");
+    let base_path = dir.path().join("project");
+    let work_path = dir.path().join("work");
+    fs::create_dir_all(&base_path).expect("base");
+    fs::create_dir_all(&work_path).expect("work");
+    fs::write(
+        &config_path,
+        format!(
+            "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\ncredentials:\n  user: Admin\n  password: secret\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\n",
+            base_path.display(),
+            work_path.display()
+        ),
+    )
+    .expect("config");
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--output",
+            "json",
+            "build",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(2));
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert!(payload["data"]["message"]
+        .as_str()
+        .expect("message")
+        .contains("legacy top-level key 'credentials'"));
 }

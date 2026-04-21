@@ -1823,15 +1823,14 @@ fn build_ibcmd_dsl<'a>(
     binary: &Path,
     runner: &'a dyn ProcessRunner,
 ) -> Result<IbcmdDsl<'a>, AppError> {
-    let connection =
-        IbcmdConnection::from_v8_connection(&config.v8_connection()).map_err(map_ibcmd_error)?;
+    let connection = IbcmdConnection::from_infobase(&config.infobase).map_err(map_ibcmd_error)?;
 
     Ok(IbcmdDsl::new(binary.to_path_buf(), connection, runner))
 }
 
 fn map_ibcmd_error(error: IbcmdError) -> AppError {
     match error {
-        IbcmdError::ServerConnectionNotSupported => AppError::Validation(error.to_string()),
+        IbcmdError::MissingServerDbmsField(_) => AppError::Validation(error.to_string()),
         IbcmdError::Spawn(_) => AppError::Platform(error.to_string()),
     }
 }
@@ -2054,8 +2053,7 @@ mod tests {
             work_path: work_path.to_path_buf(),
             format,
             builder,
-            connection: "File=/tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![
                 SourceSetConfig {
                     name: "main".to_owned(),
@@ -2094,8 +2092,7 @@ mod tests {
             work_path: work_path.to_path_buf(),
             format: SourceFormat::Edt,
             builder: BuilderBackend::Designer,
-            connection: "File=/tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![
                 SourceSetConfig {
                     name: "main".to_owned(),
@@ -2223,6 +2220,48 @@ mod tests {
         let calls_text = fs::read_to_string(&calls).expect("calls");
         assert!(calls_text.contains("config import"));
         assert!(calls_text.contains("config apply"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ibcmd_build_with_server_infobase_passes_dbms_and_infobase_credentials() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let script = dir.path().join("ibcmd");
+        let calls = dir.path().join("calls.log");
+        create_source_tree(&base);
+        write_ibcmd_script(&script, &calls, None);
+        let mut config = build_config(
+            &base,
+            &work,
+            &script,
+            20,
+            SourceFormat::Designer,
+            BuilderBackend::Ibcmd,
+        );
+        config.infobase = crate::config::model::InfobaseConfig::server(
+            "Srvr=cluster:1541;Ref=demo",
+            crate::config::model::InfobaseDbmsConfig::new(
+                "PostgreSQL",
+                "localhost",
+                "demo",
+            )
+            .with_credentials(Some("postgres".to_owned()), Some("pg-secret".to_owned())),
+        )
+        .with_credentials(Some("Admin".to_owned()), Some("secret".to_owned()));
+
+        let result = run_build(&config, &BuildArgs { full_rebuild: true }).expect("build");
+
+        assert!(result.ok);
+        let calls_text = fs::read_to_string(&calls).expect("calls");
+        assert!(calls_text.contains("--dbms PostgreSQL"));
+        assert!(calls_text.contains("--database-server localhost"));
+        assert!(calls_text.contains("--database-name demo"));
+        assert!(calls_text.contains("--database-user postgres"));
+        assert!(calls_text.contains("--database-password pg-secret"));
+        assert!(calls_text.contains("--user Admin"));
+        assert!(calls_text.contains("--password secret"));
     }
 
     #[cfg(unix)]

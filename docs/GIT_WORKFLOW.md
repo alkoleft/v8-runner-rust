@@ -6,7 +6,7 @@
 
 `git checkout / edit / build / validate / test / dump / commit`
 
-Для `IBCMD` в этом workflow действует зафиксированная граница из [ADR-0001](decisions/0001-granitsy-podderzhki-ibcmd-kak-ogranichennogo-backend.md): backend сейчас ограничен сценариями `init`, `build`, `dump`, `extensions`, поддерживает только файловую ИБ, а `dump --mode partial` деградирует в incremental export с предупреждением. Целевой принцип builder-слоя — взаимозаменяемость `DESIGNER`, `IBCMD` и будущего Designer agent mode для реализованных builder-сценариев. По [ADR-0003](decisions/0003-podderzhivat-servernye-ib-dlya-vseh-instrumentov.md) все инструменты должны развиваться с поддержкой серверных ИБ.
+Для `IBCMD` в этом workflow действует зафиксированная граница из [ADR-0001](decisions/0001-granitsy-podderzhki-ibcmd-kak-ogranichennogo-backend.md): backend сейчас ограничен сценариями `init`, `build`, `dump`, `extensions`, уже поддерживает file и server ИБ для реализованных операций, а `dump --mode partial` деградирует в incremental export с предупреждением. Для server connection нужен полный `infobase.dbms` contract. Целевой принцип builder-слоя — взаимозаменяемость `DESIGNER`, `IBCMD` и будущего Designer agent mode для реализованных builder-сценариев. По [ADR-0003](decisions/0003-podderzhivat-servernye-ib-dlya-vseh-instrumentov.md) все инструменты должны развиваться с поддержкой серверных ИБ.
 
 ## Основной набор команд
 

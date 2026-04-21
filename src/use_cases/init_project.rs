@@ -10,7 +10,9 @@ use crate::config::model::{
 use crate::domain::init::{InitResult, InitStep, InitStepStatus};
 use crate::platform::designer::DesignerDsl;
 use crate::platform::edt::EdtDsl;
-use crate::platform::ibcmd::{IbcmdConnection, IbcmdDsl};
+use crate::platform::ibcmd::{
+    IbcmdConnection, IbcmdDsl, IbcmdInfobaseCreateOutcome, IbcmdInfobaseCreateStatus,
+};
 use crate::platform::locator::UtilityType;
 use crate::platform::result::PlatformCommandResult;
 use crate::platform::utilities::PlatformUtilities;
@@ -129,17 +131,28 @@ impl StepOutcome {
 }
 
 fn ensure_infobase(config: &AppConfig, utilities: &mut PlatformUtilities) -> StepOutcome {
-    let started = Instant::now();
     let Some(infobase_dir) = config.v8_connection().file_path().map(PathBuf::from) else {
-        return StepOutcome::skipped(
-            "infobase",
-            "create",
-            started,
-            "server infobase connection detected; database creation is skipped",
-        );
+        return match config.builder {
+            BuilderBackend::Designer => StepOutcome::skipped(
+                "infobase",
+                "create",
+                Instant::now(),
+                "server infobase connection detected; automatic creation is not supported for builder=DESIGNER",
+            ),
+            BuilderBackend::Ibcmd => ensure_server_infobase(config, utilities),
+        };
     };
 
-    let marker = infobase_marker_path(&infobase_dir);
+    ensure_file_infobase(config, utilities, &infobase_dir)
+}
+
+fn ensure_file_infobase(
+    config: &AppConfig,
+    utilities: &mut PlatformUtilities,
+    infobase_dir: &Path,
+) -> StepOutcome {
+    let started = Instant::now();
+    let marker = infobase_marker_path(infobase_dir);
     debug!("[Инфобаза] Подготовка: {}", infobase_dir.display());
     if marker.exists() {
         return StepOutcome::skipped(
@@ -154,25 +167,31 @@ fn ensure_infobase(config: &AppConfig, utilities: &mut PlatformUtilities) -> Ste
         return StepOutcome::failed("infobase", "create", started, error);
     }
 
-    let command_result = match config.builder {
-        BuilderBackend::Designer => create_infobase_via_designer(config, utilities),
-        BuilderBackend::Ibcmd => create_infobase_via_ibcmd(config, utilities),
+    let command_result = match create_infobase(config, utilities) {
+        Ok(outcome) => outcome,
+        Err(error) => return StepOutcome::failed("infobase", "create", started, error),
     };
 
-    match command_result {
-        Ok(result) => {
-            if let Err(error) = ensure_platform_success("create infobase", "infobase", &result) {
+    match command_result.status {
+        IbcmdInfobaseCreateStatus::Failed => {
+            if let Err(error) =
+                ensure_platform_success("create infobase", "infobase", &command_result.result)
+            {
                 return StepOutcome::failed("infobase", "create", started, error);
             }
+            unreachable!("failed status must return platform error");
+        }
+        IbcmdInfobaseCreateStatus::Created => {
             if !marker.exists() {
                 return StepOutcome::failed(
                     "infobase",
                     "create",
                     started,
-                    AppError::Runtime(format!(
-                        "infobase creation did not produce marker file '{}'",
-                        marker.display()
-                    )),
+                    missing_infobase_marker_error(
+                        "infobase creation did not produce marker file",
+                        &marker,
+                        &command_result.result,
+                    ),
                 );
             }
             StepOutcome::ok(
@@ -182,6 +201,58 @@ fn ensure_infobase(config: &AppConfig, utilities: &mut PlatformUtilities) -> Ste
                 format!("infobase created: {}", marker.display()),
             )
         }
+        IbcmdInfobaseCreateStatus::AlreadyExists => {
+            if !marker.exists() {
+                return StepOutcome::failed(
+                    "infobase",
+                    "create",
+                    started,
+                    missing_infobase_marker_error(
+                        "infobase create reported an existing file infobase but marker file is missing",
+                        &marker,
+                        &command_result.result,
+                    ),
+                );
+            }
+            StepOutcome::skipped(
+                "infobase",
+                "create",
+                started,
+                format!("infobase already exists: {}", marker.display()),
+            )
+        }
+    }
+}
+
+fn ensure_server_infobase(config: &AppConfig, utilities: &mut PlatformUtilities) -> StepOutcome {
+    let started = Instant::now();
+    match create_infobase(config, utilities) {
+        Ok(outcome) => match outcome.status {
+            IbcmdInfobaseCreateStatus::Created => StepOutcome::ok(
+                "infobase",
+                "create",
+                started,
+                format!(
+                    "server infobase ensured via ibcmd: {}",
+                    config.infobase.connection
+                ),
+            ),
+            IbcmdInfobaseCreateStatus::AlreadyExists => StepOutcome::skipped(
+                "infobase",
+                "create",
+                started,
+                format!(
+                    "server infobase already exists: {}",
+                    config.infobase.connection
+                ),
+            ),
+            IbcmdInfobaseCreateStatus::Failed => {
+                match ensure_platform_success("create infobase", "infobase", &outcome.result) {
+                    Ok(()) => unreachable!("failed status must return platform error"),
+                    Err(error) => StepOutcome::failed("infobase", "create", started, error),
+                }
+            }
+        },
         Err(error) => StepOutcome::failed("infobase", "create", started, error),
     }
 }
@@ -313,7 +384,7 @@ fn ensure_edt_workspace(config: &AppConfig, utilities: &mut PlatformUtilities) -
 fn create_infobase_via_designer(
     config: &AppConfig,
     utilities: &mut PlatformUtilities,
-) -> Result<PlatformCommandResult, AppError> {
+) -> Result<IbcmdInfobaseCreateOutcome, AppError> {
     let binary = utilities
         .locate(UtilityType::V8)
         .map_err(|error| AppError::Platform(error.to_string()))?
@@ -325,22 +396,44 @@ fn create_infobase_via_designer(
         None,
     )
     .create_infobase()
+    .map(|result| IbcmdInfobaseCreateOutcome {
+        status: if result.process.exit_code == 0 {
+            IbcmdInfobaseCreateStatus::Created
+        } else {
+            IbcmdInfobaseCreateStatus::Failed
+        },
+        result,
+    })
     .map_err(|error| AppError::Platform(error.to_string()))
 }
 
 fn create_infobase_via_ibcmd(
     config: &AppConfig,
     utilities: &mut PlatformUtilities,
-) -> Result<PlatformCommandResult, AppError> {
+) -> Result<IbcmdInfobaseCreateOutcome, AppError> {
     let binary = utilities
         .locate(UtilityType::Ibcmd)
         .map_err(|error| AppError::Platform(error.to_string()))?
         .path;
-    let connection = IbcmdConnection::from_v8_connection(&config.v8_connection())
-        .map_err(|error| AppError::Runtime(error.to_string()))?;
+    let connection = IbcmdConnection::from_infobase(&config.infobase).map_err(|error| match error {
+        crate::platform::ibcmd::IbcmdError::MissingServerDbmsField(_) => {
+            AppError::Validation(error.to_string())
+        }
+        crate::platform::ibcmd::IbcmdError::Spawn(_) => AppError::Platform(error.to_string()),
+    })?;
     IbcmdDsl::new(binary, connection, utilities.runner_for(UtilityType::Ibcmd))
-        .infobase_create()
+        .ensure_infobase_create()
         .map_err(|error| AppError::Platform(error.to_string()))
+}
+
+fn create_infobase(
+    config: &AppConfig,
+    utilities: &mut PlatformUtilities,
+) -> Result<IbcmdInfobaseCreateOutcome, AppError> {
+    match config.builder {
+        BuilderBackend::Designer => create_infobase_via_designer(config, utilities),
+        BuilderBackend::Ibcmd => create_infobase_via_ibcmd(config, utilities),
+    }
 }
 
 fn prepare_infobase_parent(path: &Path) -> Result<(), AppError> {
@@ -428,6 +521,21 @@ fn ensure_platform_success(
     Err(AppError::Platform(details.join("; ")))
 }
 
+fn missing_infobase_marker_error(
+    reason: &str,
+    marker: &Path,
+    result: &PlatformCommandResult,
+) -> AppError {
+    let mut details = vec![format!("{reason} '{}'", marker.display())];
+    if !result.process.stdout.trim().is_empty() {
+        details.push(format!("stdout: {}", result.process.stdout.trim()));
+    }
+    if !result.process.stderr.trim().is_empty() {
+        details.push(format!("stderr: {}", result.process.stderr.trim()));
+    }
+    AppError::Runtime(details.join("; "))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -445,8 +553,7 @@ mod tests {
             work_path: PathBuf::from("/tmp/work"),
             format: SourceFormat::Edt,
             builder: BuilderBackend::Designer,
-            connection: "File=/tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![
                 SourceSetConfig {
                     name: "ext".to_owned(),
@@ -494,7 +601,7 @@ mod tests {
     fn init_skips_infobase_creation_for_server_connection() {
         let mut config = sample_config();
         config.format = SourceFormat::Designer;
-        config.connection = "Srvr=server;Ref=demo".to_owned();
+        config.infobase.connection = "Srvr=server;Ref=demo".to_owned();
 
         let result = super::run_init(&config).expect("server init should skip infobase create");
 
@@ -505,7 +612,9 @@ mod tests {
         assert_eq!(result.steps[0].status, InitStepStatus::Skipped);
         assert_eq!(
             result.steps[0].message.as_deref(),
-            Some("server infobase connection detected; database creation is skipped")
+            Some(
+                "server infobase connection detected; automatic creation is not supported for builder=DESIGNER"
+            )
         );
         assert_eq!(result.steps[1].target, "edt_workspace");
         assert_eq!(result.steps[1].status, InitStepStatus::Skipped);

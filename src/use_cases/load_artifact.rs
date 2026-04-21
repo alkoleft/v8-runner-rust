@@ -809,8 +809,7 @@ mod tests {
             work_path: root.join("work"),
             format: SourceFormat::Designer,
             builder: BuilderBackend::Designer,
-            connection: "File=/tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![],
             build: BuildConfig::default(),
             tools: ToolsConfig {

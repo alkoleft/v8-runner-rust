@@ -38,7 +38,7 @@ fn write_config(
     format: &str,
 ) {
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: {}\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n",
+        "basePath: '{}'\nworkPath: '{}'\nformat: {}\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n",
         base_path.display(),
         work_path.display(),
         format,

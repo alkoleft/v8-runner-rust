@@ -104,7 +104,7 @@ fn write_http_designer_config(
     idle_ttl_secs: u64,
 ) {
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\nmcp:\n  http:\n    bind_address: {}\n    path: /mcp\n    stateful_sessions: {}\n    max_sessions: {}\n    idle_ttl_secs: {}\ntools:\n  platform:\n    path: '{}'\n",
+        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\nmcp:\n  http:\n    bind_address: {}\n    path: /mcp\n    stateful_sessions: {}\n    max_sessions: {}\n    idle_ttl_secs: {}\ntools:\n  platform:\n    path: '{}'\n",
         base_path.display(),
         work_path.display(),
         bind_address,
@@ -116,7 +116,7 @@ fn write_http_designer_config(
     fs::write(path, config).expect("designer config");
 }
 
-fn write_http_ibcmd_config(
+fn write_http_ibcmd_config_with_infobase(
     path: &Path,
     base_path: &Path,
     work_path: &Path,
@@ -124,11 +124,13 @@ fn write_http_ibcmd_config(
     bind_address: &str,
     max_sessions: usize,
     idle_ttl_secs: u64,
+    infobase_yaml: &str,
 ) {
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: IBCMD\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\nmcp:\n  http:\n    bind_address: {}\n    path: /mcp\n    stateful_sessions: true\n    max_sessions: {}\n    idle_ttl_secs: {}\ntools:\n  platform:\n    path: '{}'\n",
+        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: IBCMD\ninfobase:\n{}source-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\nmcp:\n  http:\n    bind_address: {}\n    path: /mcp\n    stateful_sessions: true\n    max_sessions: {}\n    idle_ttl_secs: {}\ntools:\n  platform:\n    path: '{}'\n",
         base_path.display(),
         work_path.display(),
+        infobase_yaml,
         bind_address,
         max_sessions,
         idle_ttl_secs,
@@ -166,7 +168,7 @@ fn write_http_edt_config(
     command_timeout_ms: u64,
 ) {
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: EDT\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main-edt\nmcp:\n  http:\n    bind_address: {}\n    path: /mcp\n    stateful_sessions: true\n    max_sessions: {}\n    idle_ttl_secs: {}\n  execution:\n    max_concurrent_calls: {}\ntools:\n  edt_cli:\n    path: '{}'\n    interactive-mode: true\n    command_timeout_ms: {}\n",
+        "basePath: '{}'\nworkPath: '{}'\nformat: EDT\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main-edt\nmcp:\n  http:\n    bind_address: {}\n    path: /mcp\n    stateful_sessions: true\n    max_sessions: {}\n    idle_ttl_secs: {}\n  execution:\n    max_concurrent_calls: {}\ntools:\n  edt_cli:\n    path: '{}'\n    interactive-mode: true\n    command_timeout_ms: {}\n",
         base_path.display(),
         work_path.display(),
         bind_address,
@@ -227,6 +229,20 @@ fn setup_http_ibcmd_dump_project(
     max_sessions: usize,
     idle_ttl_secs: u64,
 ) -> (tempfile::TempDir, PathBuf, String, PathBuf) {
+    setup_http_ibcmd_dump_project_with_infobase(
+        fail_pattern,
+        max_sessions,
+        idle_ttl_secs,
+        "  connection: 'File=/tmp/ib'\n",
+    )
+}
+
+fn setup_http_ibcmd_dump_project_with_infobase(
+    fail_pattern: Option<&str>,
+    max_sessions: usize,
+    idle_ttl_secs: u64,
+    infobase_yaml: &str,
+) -> (tempfile::TempDir, PathBuf, String, PathBuf) {
     let dir = tempdir().expect("tempdir");
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
@@ -239,7 +255,7 @@ fn setup_http_ibcmd_dump_project(
     fs::create_dir_all(&work_path).expect("work");
     fs::write(base_path.join("main").join("old.txt"), "old").expect("old");
     write_ibcmd_script(&ibcmd_path, &calls_log, fail_pattern);
-    write_http_ibcmd_config(
+    write_http_ibcmd_config_with_infobase(
         &config_path,
         &base_path,
         &work_path,
@@ -247,6 +263,7 @@ fn setup_http_ibcmd_dump_project(
         &bind_address,
         max_sessions,
         idle_ttl_secs,
+        infobase_yaml,
     );
 
     (
@@ -567,6 +584,47 @@ async fn mcp_http_initialize_reuses_session_and_lists_tools() {
             "run_module_tests",
         ]
     );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_http_dump_config_full_ibcmd_server_contract_passes_dbms_and_infobase_credentials() {
+    let (_dir, config_path, url, calls_log) = setup_http_ibcmd_dump_project_with_infobase(
+        None,
+        4,
+        900,
+        "  connection: 'Srvr=server;Ref=main'\n  user: Admin\n  password: secret\n  dbms:\n    kind: PostgreSQL\n    server: localhost\n    name: maindb\n    user: postgres\n    password: pg-secret\n",
+    );
+    let mut server = HttpServerProcess::spawn(&config_path, &url).await;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .expect("http client");
+
+    let (session_id, _) = initialize_session(&client, &url).await;
+    send_initialized(&client, &url, &session_id).await;
+
+    let response = call_tool(
+        &client,
+        &url,
+        &session_id,
+        "dump_config",
+        json!({ "mode": "FULL" }),
+        29,
+    )
+    .await;
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let payload = extract_sse_json(&response.text().await.expect("dump body"));
+    assert_eq!(payload["result"]["structuredContent"]["status"], "success");
+    assert_eq!(
+        payload["result"]["structuredContent"]["result"]["success"],
+        true
+    );
+    let calls = fs::read_to_string(calls_log).expect("ibcmd calls");
+    assert!(calls.contains("--dbms PostgreSQL --database-server localhost --database-name maindb"));
+    assert!(calls.contains("--user Admin --password secret"));
+    assert!(calls.contains("--database-user postgres --database-password pg-secret"));
 
     server.shutdown().await;
 }

@@ -368,9 +368,11 @@ fn render_command(request: &ProcessRequest) -> String {
         if skip_next {
             parts.push("***".to_owned());
             skip_next = false;
-        } else if arg.eq_ignore_ascii_case("/P") {
+        } else if is_sensitive_flag(arg) {
             parts.push(arg.clone());
             skip_next = true;
+        } else if let Some((key, _)) = split_sensitive_assignment(arg) {
+            parts.push(format!("{key}=***"));
         } else {
             parts.push(arg.clone());
         }
@@ -378,9 +380,42 @@ fn render_command(request: &ProcessRequest) -> String {
     parts.join(" ")
 }
 
+fn is_sensitive_flag(arg: &str) -> bool {
+    const FLAGS: &[&str] = &[
+        "/P",
+        "-P",
+        "--password",
+        "--database-password",
+        "--db-pwd",
+        "--target-database-password",
+        "--target-db-pwd",
+    ];
+
+    FLAGS.iter().any(|flag| arg.eq_ignore_ascii_case(flag))
+}
+
+fn split_sensitive_assignment(arg: &str) -> Option<(&str, &str)> {
+    const FLAGS: &[&str] = &[
+        "/P",
+        "-P",
+        "--password",
+        "--database-password",
+        "--db-pwd",
+        "--target-database-password",
+        "--target-db-pwd",
+    ];
+
+    let (key, value) = arg.split_once('=')?;
+    if FLAGS.iter().any(|flag| key.eq_ignore_ascii_case(flag)) {
+        Some((key, value))
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ProcessError, ProcessExecutor, ProcessRequest, ProcessRunner};
+    use super::{render_command, ProcessError, ProcessExecutor, ProcessRequest, ProcessRunner};
     use std::fs;
     use std::path::Path;
     use std::time::Duration;
@@ -438,6 +473,36 @@ mod tests {
             fs::read_to_string(stderr_log).expect("stderr log").trim(),
             "oops"
         );
+    }
+
+    #[test]
+    fn render_command_masks_ibcmd_password_flags() {
+        let rendered = render_command(&ProcessRequest {
+            program: Path::new("/tmp/ibcmd").to_path_buf(),
+            args: vec![
+                "--user".to_owned(),
+                "admin".to_owned(),
+                "/p".to_owned(),
+                "secret".to_owned(),
+                "--DATABASE-password=pg-secret".to_owned(),
+                "-p=legacy-secret".to_owned(),
+                "--target-db-pwd".to_owned(),
+                "target-secret".to_owned(),
+            ],
+            workdir: None,
+            stdout_log_path: None,
+            stderr_log_path: None,
+            startup_probe: None,
+        });
+
+        assert!(rendered.contains("/p ***"));
+        assert!(rendered.contains("--DATABASE-password=***"));
+        assert!(rendered.contains("-p=***"));
+        assert!(rendered.contains("--target-db-pwd ***"));
+        assert!(!rendered.contains("secret"));
+        assert!(!rendered.contains("pg-secret"));
+        assert!(!rendered.contains("legacy-secret"));
+        assert!(!rendered.contains("target-secret"));
     }
 
     #[cfg(unix)]

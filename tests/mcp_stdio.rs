@@ -18,7 +18,7 @@ use tempfile::tempdir;
 
 fn write_config(path: &Path, base_path: &Path, work_path: &Path, platform_path: &Path) {
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\ntools:\n  platform:\n    path: '{}'\n",
+        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\ntools:\n  platform:\n    path: '{}'\n",
         base_path.display(),
         work_path.display(),
         platform_path.display(),
@@ -35,7 +35,7 @@ fn write_edt_config_with_options(
     max_concurrent_calls: usize,
 ) {
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: EDT\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main-edt\nmcp:\n  execution:\n    max_concurrent_calls: {}\ntools:\n  edt_cli:\n    path: '{}'\n    interactive-mode: true\n    command_timeout_ms: {}\n",
+        "basePath: '{}'\nworkPath: '{}'\nformat: EDT\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main-edt\nmcp:\n  execution:\n    max_concurrent_calls: {}\ntools:\n  edt_cli:\n    path: '{}'\n    interactive-mode: true\n    command_timeout_ms: {}\n",
         base_path.display(),
         work_path.display(),
         max_concurrent_calls,
@@ -54,7 +54,7 @@ fn write_designer_config_with_options(
     max_concurrent_calls: usize,
 ) {
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\nmcp:\n  execution:\n    max_concurrent_calls: {}\ntools:\n  platform:\n    path: '{}'\n  edt_cli:\n    command_timeout_ms: {}\n",
+        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\nmcp:\n  execution:\n    max_concurrent_calls: {}\ntools:\n  platform:\n    path: '{}'\n  edt_cli:\n    command_timeout_ms: {}\n",
         base_path.display(),
         work_path.display(),
         max_concurrent_calls,
@@ -74,7 +74,7 @@ fn write_edt_config_with_platform(
     max_concurrent_calls: usize,
 ) {
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: EDT\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main-edt\nmcp:\n  execution:\n    max_concurrent_calls: {}\ntools:\n  platform:\n    path: '{}'\n  edt_cli:\n    path: '{}'\n    interactive-mode: true\n    command_timeout_ms: {}\n",
+        "basePath: '{}'\nworkPath: '{}'\nformat: EDT\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main-edt\nmcp:\n  execution:\n    max_concurrent_calls: {}\ntools:\n  platform:\n    path: '{}'\n  edt_cli:\n    path: '{}'\n    interactive-mode: true\n    command_timeout_ms: {}\n",
         base_path.display(),
         work_path.display(),
         max_concurrent_calls,
@@ -207,7 +207,7 @@ fn write_designer_suite_config(
     platform_path: &Path,
 ) {
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\ntests:\n  execution_timeout_seconds: 5\nmcp:\n  execution:\n    max_concurrent_calls: 1\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n",
+        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\ntests:\n  execution_timeout_seconds: 5\nmcp:\n  execution:\n    max_concurrent_calls: 1\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n",
         base_path.display(),
         work_path.display(),
         platform_path.display(),
@@ -258,11 +258,18 @@ fn setup_designer_suite_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathB
     )
 }
 
-fn write_ibcmd_config(path: &Path, base_path: &Path, work_path: &Path, ibcmd_path: &Path) {
+fn write_ibcmd_config_with_infobase(
+    path: &Path,
+    base_path: &Path,
+    work_path: &Path,
+    ibcmd_path: &Path,
+    infobase_yaml: &str,
+) {
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: IBCMD\nconnection: 'File=/tmp/ib'\nmcp:\n  execution:\n    max_concurrent_calls: 1\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n",
+        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: IBCMD\ninfobase:\n{}mcp:\n  execution:\n    max_concurrent_calls: 1\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n",
         base_path.display(),
         work_path.display(),
+        infobase_yaml,
         ibcmd_path.display(),
     );
     fs::write(path, config).expect("ibcmd config");
@@ -286,6 +293,13 @@ fn write_ibcmd_script(path: &Path, calls_log: &Path, fail_pattern: Option<&str>)
 }
 
 fn setup_ibcmd_dump_project(fail_pattern: Option<&str>) -> (tempfile::TempDir, PathBuf, PathBuf) {
+    setup_ibcmd_dump_project_with_infobase(fail_pattern, "  connection: 'File=/tmp/ib'\n")
+}
+
+fn setup_ibcmd_dump_project_with_infobase(
+    fail_pattern: Option<&str>,
+    infobase_yaml: &str,
+) -> (tempfile::TempDir, PathBuf, PathBuf) {
     let dir = tempdir().expect("tempdir");
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
@@ -297,7 +311,13 @@ fn setup_ibcmd_dump_project(fail_pattern: Option<&str>) -> (tempfile::TempDir, P
     fs::create_dir_all(&work_path).expect("work");
     fs::write(base_path.join("main").join("old.txt"), "old").expect("old");
     write_ibcmd_script(&ibcmd_path, &calls_log, fail_pattern);
-    write_ibcmd_config(&config_path, &base_path, &work_path, &ibcmd_path);
+    write_ibcmd_config_with_infobase(
+        &config_path,
+        &base_path,
+        &work_path,
+        &ibcmd_path,
+        infobase_yaml,
+    );
 
     (dir, config_path, calls_log)
 }
@@ -428,6 +448,78 @@ fn mcp_missing_config_reports_error_on_stderr() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("config"));
     assert!(stderr.contains("not found"));
+}
+
+#[test]
+fn mcp_legacy_top_level_connection_reports_error_on_stderr() {
+    let dir = tempdir().expect("tempdir");
+    let config_path = dir.path().join("v8project.yaml");
+    let base_path = dir.path().join("project");
+    let work_path = dir.path().join("work");
+    fs::create_dir_all(&base_path).expect("base");
+    fs::create_dir_all(&work_path).expect("work");
+    fs::write(
+        &config_path,
+        format!(
+            "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\n",
+            base_path.display(),
+            work_path.display()
+        ),
+    )
+    .expect("config");
+
+    let output = std::process::Command::new(cargo_bin("v8-runner"))
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "mcp",
+            "serve",
+            "stdio",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("legacy top-level key 'connection'"));
+}
+
+#[test]
+fn mcp_legacy_top_level_credentials_reports_error_on_stderr() {
+    let dir = tempdir().expect("tempdir");
+    let config_path = dir.path().join("v8project.yaml");
+    let base_path = dir.path().join("project");
+    let work_path = dir.path().join("work");
+    fs::create_dir_all(&base_path).expect("base");
+    fs::create_dir_all(&work_path).expect("work");
+    fs::write(
+        &config_path,
+        format!(
+            "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\ncredentials:\n  user: Admin\n  password: secret\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\n",
+            base_path.display(),
+            work_path.display()
+        ),
+    )
+    .expect("config");
+
+    let output = std::process::Command::new(cargo_bin("v8-runner"))
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "mcp",
+            "serve",
+            "stdio",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("legacy top-level key 'credentials'"));
 }
 
 #[tokio::test]
@@ -902,6 +994,45 @@ async fn mcp_stdio_dump_config_partial_ibcmd_returns_degraded_success() {
     assert!(fs::read_to_string(calls_log)
         .expect("ibcmd calls")
         .contains("--sync"));
+
+    client.cancel().await.expect("cancel client");
+}
+
+#[tokio::test]
+async fn mcp_stdio_dump_config_full_ibcmd_server_contract_passes_dbms_and_infobase_credentials() {
+    let (_dir, config_path, calls_log) = setup_ibcmd_dump_project_with_infobase(
+        None,
+        "  connection: 'Srvr=server;Ref=main'\n  user: Admin\n  password: secret\n  dbms:\n    kind: PostgreSQL\n    server: localhost\n    name: maindb\n    user: postgres\n    password: pg-secret\n",
+    );
+    let transport = TokioChildProcess::new(
+        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
+            cmd.arg("--config")
+                .arg(config_path.as_os_str())
+                .arg("mcp")
+                .arg("serve")
+                .arg("stdio");
+        }),
+    )
+    .expect("spawn stdio transport");
+
+    let client = ().serve(transport).await.expect("connect rmcp client");
+    let response =
+        client
+            .peer()
+            .call_tool(CallToolRequestParams::new("dump_config").with_arguments(
+                serde_json::from_value(json!({ "mode": "FULL" })).expect("arguments"),
+            ))
+            .await
+            .expect("call tool");
+
+    assert_eq!(response.is_error, Some(false));
+    let payload: Value = response.structured_content.expect("structured payload");
+    assert_eq!(payload["status"], "success");
+    assert_eq!(payload["result"]["success"], true);
+    let calls = fs::read_to_string(calls_log).expect("ibcmd calls");
+    assert!(calls.contains("--dbms PostgreSQL --database-server localhost --database-name maindb"));
+    assert!(calls.contains("--user Admin --password secret"));
+    assert!(calls.contains("--database-user postgres --database-password pg-secret"));
 
     client.cancel().await.expect("cancel client");
 }

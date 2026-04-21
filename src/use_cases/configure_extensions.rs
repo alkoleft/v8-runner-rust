@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use crate::config::model::{AppConfig, SourceFormat, SourceSetConfig, SourceSetPurpose};
 use crate::domain::extensions::{ExtensionsResult, ExtensionsStep};
-use crate::platform::ibcmd::{IbcmdConnection, IbcmdDsl};
+use crate::platform::ibcmd::{IbcmdConnection, IbcmdDsl, IbcmdError};
 use crate::platform::locator::UtilityType;
 use crate::platform::utilities::PlatformUtilities;
 use crate::support::error::AppError;
@@ -34,12 +34,14 @@ pub fn execute(
         }
     };
 
-    let connection = match IbcmdConnection::from_v8_connection(&config.v8_connection()) {
+    let connection = match IbcmdConnection::from_infobase(&config.infobase) {
         Ok(connection) => connection,
         Err(error) => {
-            return Err(UseCaseFailure::without_payload(AppError::Platform(
-                error.to_string(),
-            )));
+            let error = match error {
+                IbcmdError::MissingServerDbmsField(_) => AppError::Validation(error.to_string()),
+                IbcmdError::Spawn(_) => AppError::Platform(error.to_string()),
+            };
+            return Err(UseCaseFailure::without_payload(error));
         }
     };
 
@@ -269,8 +271,7 @@ mod tests {
             work_path: work.to_path_buf(),
             format: SourceFormat::Edt,
             builder: BuilderBackend::Designer,
-            connection: "File=/tmp/ib".to_owned(),
-            credentials: Default::default(),
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
             source_sets: vec![
                 SourceSetConfig {
                     name: "configuration".to_owned(),
@@ -344,6 +345,52 @@ mod tests {
         assert!(calls_text.contains("--name client_mcp"));
         assert!(calls_text.contains("--safe-mode no"));
         assert!(calls_text.contains("--unsafe-action-protection no"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn execute_updates_extension_properties_via_ibcmd_server_contract() {
+        let dir = tempdir().expect("tempdir");
+        let calls = dir.path().join("ibcmd.calls.log");
+        let ibcmd = dir.path().join("ibcmd");
+        fs::create_dir_all(dir.path().join("exts").join("client-mcp")).expect("ext dir");
+        fs::write(
+            dir.path().join("exts").join("client-mcp").join(".project"),
+            "<projectDescription><name>client_mcp</name></projectDescription>",
+        )
+        .expect("project file");
+        write_script(
+            &ibcmd,
+            &format!("printf '%s\\n' \"$*\" >> '{}'\nexit 0", calls.display()),
+        );
+        let mut config = sample_config(dir.path(), dir.path(), &ibcmd);
+        config.infobase = crate::config::model::InfobaseConfig::server(
+            "Srvr=cluster:1541;Ref=demo",
+            crate::config::model::InfobaseDbmsConfig::new(
+                "PostgreSQL",
+                "localhost",
+                "demo",
+            )
+            .with_credentials(Some("postgres".to_owned()), Some("pg-secret".to_owned())),
+        )
+        .with_credentials(Some("Admin".to_owned()), Some("secret".to_owned()));
+
+        let result = execute(
+            &ExecutionContext::cli(CommandName::Extensions),
+            &config,
+            &ConfigureExtensionsRequest { names: vec![] },
+        )
+        .expect("execute");
+
+        assert!(result.ok);
+        let calls_text = fs::read_to_string(calls).expect("calls");
+        assert!(calls_text.contains("--dbms PostgreSQL"));
+        assert!(calls_text.contains("--database-server localhost"));
+        assert!(calls_text.contains("--database-name demo"));
+        assert!(calls_text.contains("--database-user postgres"));
+        assert!(calls_text.contains("--database-password pg-secret"));
+        assert!(calls_text.contains("--user Admin"));
+        assert!(calls_text.contains("--password secret"));
     }
 
     #[cfg(unix)]

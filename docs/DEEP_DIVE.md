@@ -4,7 +4,7 @@
 
 Это пользовательский документ по эксплуатационным деталям. Карта модулей для контрибьюторов находится в [../ARCHITECTURE.md](../ARCHITECTURE.md). Матрица команд и конфигурации находится в [CAPABILITIES.md](CAPABILITIES.md).
 
-Формальная граница поддержки `IBCMD` описана в [ADR-0001](decisions/0001-granitsy-podderzhki-ibcmd-kak-ogranichennogo-backend.md): сейчас это ограниченный backend для `init`, `build`, `dump`, `extensions` с файловой ИБ и degraded `partial` для `dump`. Целевой контракт [ADR-0003](decisions/0003-podderzhivat-servernye-ib-dlya-vseh-instrumentov.md) требует поддержки серверных ИБ для всех инструментов; текущие file-only ограничения считаются gaps.
+Формальная граница поддержки `IBCMD` описана в [ADR-0001](decisions/0001-granitsy-podderzhki-ibcmd-kak-ogranichennogo-backend.md): сейчас это ограниченный backend для `init`, `build`, `dump`, `extensions`, уже поддерживающий file и server ИБ для реализованных сценариев. Для server connection нужен полный `infobase.dbms` contract, а `partial` для `dump` по-прежнему деградирует в incremental export. Целевой контракт [ADR-0003](decisions/0003-podderzhivat-servernye-ib-dlya-vseh-instrumentov.md) требует поддержки серверных ИБ для всех инструментов; оставшиеся file-only ограничения считаются gaps.
 
 ## 1. Модель выполнения
 
@@ -17,7 +17,7 @@
 
 - CLI и MCP разделяют одну и ту же базовую логику для `build`, `test`, `dump`, `syntax` и `launch`;
 - `init` пока существует только в CLI и не публикуется как MCP-инструмент;
-- для серверной строки подключения `init` не создает ИБ и считает серверную базу ручным prerequisite, но EDT workspace при `format=EDT` всё равно должен быть создан/import-нут;
+- для server connection `init` с `builder=IBCMD` выполняет `ensure` через `ibcmd infobase create --create-database`; при `builder=DESIGNER` server create step по-прежнему считается ручным prerequisite, но EDT workspace при `format=EDT` всё равно должен быть создан/import-нут;
 - `extensions` пока существует только в CLI и не публикуется как MCP-инструмент;
 - MCP добавляет в основном нормализацию запросов, обработку транспортных ошибок и контроль сессий и ограничений выполнения;
 - публичное поведение стоит описывать через семантику команд и инструментов, а не через внутренние детали адаптеров.

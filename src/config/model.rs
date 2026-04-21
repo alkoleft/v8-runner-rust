@@ -23,12 +23,8 @@ pub struct AppConfig {
     #[serde(default = "default_builder")]
     pub builder: BuilderBackend,
 
-    /// Connection string to the infobase
-    pub connection: String,
-
-    /// Optional credentials for infobase authentication
-    #[serde(default)]
-    pub credentials: CredentialsConfig,
+    /// Infobase connection and credentials contract.
+    pub infobase: InfobaseConfig,
 
     /// Source sets (configuration + extensions)
     #[serde(rename = "source-set")]
@@ -51,17 +47,111 @@ pub struct AppConfig {
     pub tests: TestsConfig,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
-pub struct CredentialsConfig {
+/// Connection and credentials for the target infobase.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct InfobaseConfig {
+    /// Connection string to the infobase.
+    pub connection: String,
+
+    /// Optional infobase user name passed to platform utilities.
     pub user: Option<String>,
+
+    /// Optional infobase password passed to platform utilities.
+    pub password: Option<String>,
+
+    /// Optional DBMS contract for server-based infobases.
+    #[serde(default)]
+    pub dbms: Option<InfobaseDbmsConfig>,
+}
+
+impl InfobaseConfig {
+    /// Build a file-based infobase config.
+    #[cfg(test)]
+    pub fn file(connection: impl Into<String>) -> Self {
+        Self {
+            connection: connection.into(),
+            user: None,
+            password: None,
+            dbms: None,
+        }
+    }
+
+    /// Attach infobase credentials to an existing config.
+    #[cfg(test)]
+    pub fn with_credentials(mut self, user: Option<String>, password: Option<String>) -> Self {
+        self.user = user;
+        self.password = password;
+        self
+    }
+
+    /// Build a server-based infobase config.
+    #[cfg(test)]
+    pub fn server(connection: impl Into<String>, dbms: InfobaseDbmsConfig) -> Self {
+        Self {
+            connection: connection.into(),
+            user: None,
+            password: None,
+            dbms: Some(dbms),
+        }
+    }
+}
+
+/// DBMS-level contract used by `IBCMD` for server-based infobases.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct InfobaseDbmsConfig {
+    /// DBMS kind passed as `--dbms`.
+    #[serde(default)]
+    pub kind: Option<String>,
+
+    /// DBMS server passed as `--database-server`.
+    #[serde(default)]
+    pub server: Option<String>,
+
+    /// Physical database name passed as `--database-name`.
+    #[serde(default)]
+    pub name: Option<String>,
+
+    /// Optional DBMS user passed as `--database-user`.
+    #[serde(default)]
+    pub user: Option<String>,
+
+    /// Optional DBMS password passed as `--database-password`.
+    #[serde(default)]
     pub password: Option<String>,
 }
 
+impl InfobaseDbmsConfig {
+    /// Build a DBMS contract with mandatory fields populated.
+    #[cfg(test)]
+    pub fn new(
+        kind: impl Into<String>,
+        server: impl Into<String>,
+        name: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind: Some(kind.into()),
+            server: Some(server.into()),
+            name: Some(name.into()),
+            user: None,
+            password: None,
+        }
+    }
+
+    /// Attach DBMS credentials to an existing contract.
+    #[cfg(test)]
+    pub fn with_credentials(mut self, user: Option<String>, password: Option<String>) -> Self {
+        self.user = user;
+        self.password = password;
+        self
+    }
+}
+
 impl AppConfig {
+    /// Builds a platform-ready 1C connection with infobase credentials applied.
     pub fn v8_connection(&self) -> V8Connection {
-        let mut conn = V8Connection::from_connection_string(&self.connection);
-        conn.user = self.credentials.user.clone();
-        conn.password = self.credentials.password.clone();
+        let mut conn = V8Connection::from_connection_string(&self.infobase.connection);
+        conn.user = self.infobase.user.clone();
+        conn.password = self.infobase.password.clone();
         conn
     }
 }
@@ -322,7 +412,9 @@ pub struct EdtCliConfig {
     #[serde(default)]
     pub interactive_mode: bool,
 
-    /// Auto-start interactive EDT session on startup
+    /// Eagerly prewarm the shared EDT session on MCP server startup.
+    ///
+    /// Short-lived CLI commands ignore this flag and start EDT lazily on demand.
     #[serde(default)]
     pub auto_start: bool,
 

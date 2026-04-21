@@ -40,10 +40,27 @@ fn write_ibcmd_script(path: &Path, calls_log: &Path, fail_pattern: Option<&str>)
 }
 
 fn write_config(path: &Path, base_path: &Path, work_path: &Path, platform_path: &Path) {
+    write_config_with_infobase(
+        path,
+        base_path,
+        work_path,
+        platform_path,
+        "  connection: 'File=/tmp/ib'\n",
+    );
+}
+
+fn write_config_with_infobase(
+    path: &Path,
+    base_path: &Path,
+    work_path: &Path,
+    platform_path: &Path,
+    infobase_yaml: &str,
+) {
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: IBCMD\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n",
+        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: IBCMD\ninfobase:\n{}source-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n",
         base_path.display(),
         work_path.display(),
+        infobase_yaml,
         platform_path.display(),
     );
 
@@ -211,4 +228,38 @@ fn dump_ibcmd_partial_failure_keeps_partial_mode_and_warning() {
         .as_str()
         .expect("message")
         .contains("dump failed for source-set 'main' with exit code 17"));
+}
+
+#[test]
+fn dump_ibcmd_full_server_connection_passes_dbms_and_infobase_credentials() {
+    let (_dir, config_path, _binary_path, _work_path, _base_path, calls_log) = setup_project();
+    write_config_with_infobase(
+        &config_path,
+        &config_path.parent().expect("dir").join("project"),
+        &config_path.parent().expect("dir").join("work"),
+        &config_path.parent().expect("dir").join("ibcmd"),
+        "  connection: 'Srvr=server;Ref=main'\n  user: Admin\n  password: secret\n  dbms:\n    kind: PostgreSQL\n    server: localhost\n    name: maindb\n    user: postgres\n    password: pg-secret\n",
+    );
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--output",
+            "json",
+            "dump",
+            "--mode",
+            "full",
+            "--source-set",
+            "main",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let calls = fs::read_to_string(calls_log).expect("calls");
+    assert!(calls.contains("--dbms PostgreSQL --database-server localhost --database-name maindb"));
+    assert!(calls.contains("--user Admin --password secret"));
+    assert!(calls.contains("--database-user postgres --database-password pg-secret"));
 }

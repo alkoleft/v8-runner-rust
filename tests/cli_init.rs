@@ -23,6 +23,14 @@ fn write_script(path: &Path, body: &str) {
 }
 
 fn setup_designer_init_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
+    setup_designer_init_project_with_body(
+        "if [ \"$1\" = \"CREATEINFOBASE\" ]; then mkdir -p \"$ib_path\" && : > \"$ib_path/1Cv8.1CD\"; fi\nexit 0",
+    )
+}
+
+fn setup_designer_init_project_with_body(
+    script_body: &str,
+) -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
     let dir = tempdir().expect("tempdir");
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
@@ -34,15 +42,11 @@ fn setup_designer_init_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBu
     fs::create_dir_all(&work_path).expect("work");
     write_script(
         &v8_path,
-        &format!(
-            "if [ \"$1\" = \"CREATEINFOBASE\" ]; then mkdir -p \"{}\" && : > \"{}/1Cv8.1CD\"; fi\nexit 0",
-            infobase_path.display(),
-            infobase_path.display()
-        ),
+        &script_body.replace("$ib_path", &infobase_path.display().to_string()),
     );
 
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: 'File={}'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n",
+        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File={}'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n",
         base_path.display(),
         work_path.display(),
         infobase_path.display(),
@@ -101,7 +105,7 @@ fn setup_edt_init_project(
     );
 
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: {}\nbuilder: {}\nconnection: '{}'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\n  - name: ext\n    type: EXTENSION\n    path: ext\ntools:\n  platform:\n    path: '{}'\n  edt_cli:\n    path: '{}'\n",
+        "basePath: '{}'\nworkPath: '{}'\nformat: {}\nbuilder: {}\ninfobase:\n  connection: '{}'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\n  - name: ext\n    type: EXTENSION\n    path: ext\ntools:\n  platform:\n    path: '{}'\n  edt_cli:\n    path: '{}'\n",
         base_path.display(),
         work_path.display(),
         format,
@@ -120,6 +124,36 @@ fn setup_edt_init_project(
         platform_path,
         edt_calls_log,
     )
+}
+
+fn setup_ibcmd_server_init_project(script_body: &str) -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
+    let dir = tempdir().expect("tempdir");
+    let base_path = dir.path().join("project");
+    let work_path = dir.path().join("work");
+    let config_path = dir.path().join("v8project.yaml");
+    let ibcmd_path = dir.path().join("ibcmd");
+    let calls_log = dir.path().join("ibcmd.calls.log");
+
+    fs::create_dir_all(base_path.join("main")).expect("main");
+    fs::create_dir_all(&work_path).expect("work");
+    write_script(
+        &ibcmd_path,
+        &format!(
+            "printf '%s\\n' \"$*\" >> '{}'\n{}\n",
+            calls_log.display(),
+            script_body
+        ),
+    );
+
+    let config = format!(
+        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: IBCMD\ninfobase:\n  connection: 'Srvr=cluster:1541;Ref=demo'\n  user: Admin\n  password: secret\n  dbms:\n    kind: PostgreSQL\n    server: localhost\n    name: demo\n    user: postgres\n    password: pg-secret\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n",
+        base_path.display(),
+        work_path.display(),
+        ibcmd_path.display(),
+    );
+    fs::write(&config_path, config).expect("config");
+
+    (dir, config_path, work_path, calls_log)
 }
 
 #[test]
@@ -142,6 +176,33 @@ fn init_designer_creates_infobase_and_skips_edt_workspace() {
 }
 
 #[test]
+fn init_designer_non_zero_create_exit_stays_fatal_even_when_marker_appears() {
+    let (_dir, config_path, _work_path, _infobase_path) = setup_designer_init_project_with_body(
+        "if [ \"$1\" = \"CREATEINFOBASE\" ]; then mkdir -p \"$ib_path\" && : > \"$ib_path/1Cv8.1CD\"; fi\nprintf 'designer create failed\\n' >&2\nexit 1",
+    );
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--output",
+            "json",
+            "init",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(!output.status.success());
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(payload["data"]["steps"][0]["status"], "failed");
+    assert!(payload["data"]["steps"][0]["message"]
+        .as_str()
+        .expect("message")
+        .contains("designer create failed"));
+}
+
+#[test]
 fn init_ibcmd_creates_infobase_and_imports_edt_projects_in_order() {
     let (_dir, config_path, work_path, _base_path, _platform_path, edt_calls_log) =
         setup_edt_init_project("DESIGNER", "IBCMD", "__AUTO_FILE__");
@@ -156,7 +217,7 @@ fn init_ibcmd_creates_infobase_and_imports_edt_projects_in_order() {
     let config = fs::read_to_string(&config_path).expect("config");
     let connection_line = config
         .lines()
-        .find(|line| line.starts_with("connection:"))
+        .find(|line| line.trim_start().starts_with("connection:"))
         .expect("connection line");
     let infobase_dir = connection_line
         .split("File=")
@@ -166,6 +227,36 @@ fn init_ibcmd_creates_infobase_and_imports_edt_projects_in_order() {
     assert!(Path::new(infobase_dir).join("1Cv8.1CD").exists());
     assert!(!work_path.join("edt-workspace").exists());
     assert!(!edt_calls_log.exists());
+}
+
+#[test]
+fn init_ibcmd_file_already_exists_without_marker_is_fatal() {
+    let (_dir, config_path, _work_path, _base_path, platform_path, _edt_calls_log) =
+        setup_edt_init_project("DESIGNER", "IBCMD", "__AUTO_FILE__");
+    write_script(
+        &platform_path,
+        "if [ \"$1\" = \"infobase\" ]; then printf 'already exists\\n' >&2; exit 17; fi\nexit 0",
+    );
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--output",
+            "json",
+            "init",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(!output.status.success());
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(payload["data"]["steps"][0]["status"], "failed");
+    assert!(payload["data"]["steps"][0]["message"]
+        .as_str()
+        .expect("message")
+        .contains("marker file is missing"));
 }
 
 #[test]
@@ -183,7 +274,7 @@ fn init_edt_with_ibcmd_creates_infobase_and_imports_projects_in_order() {
     let config = fs::read_to_string(&config_path).expect("config");
     let connection_line = config
         .lines()
-        .find(|line| line.starts_with("connection:"))
+        .find(|line| line.trim_start().starts_with("connection:"))
         .expect("connection line");
     let infobase_dir = connection_line
         .split("File=")
@@ -214,7 +305,7 @@ fn init_edt_imports_projects_in_configuration_then_extension_order() {
     let config = fs::read_to_string(&config_path).expect("config");
     let connection_line = config
         .lines()
-        .find(|line| line.starts_with("connection:"))
+        .find(|line| line.trim_start().starts_with("connection:"))
         .expect("connection line");
     let infobase_dir = connection_line
         .split("File=")
@@ -387,4 +478,84 @@ fn init_rejects_workspace_path_that_is_not_a_directory() {
         .as_str()
         .expect("message")
         .contains("is not a directory"));
+}
+
+#[test]
+fn init_ibcmd_server_provisions_infobase_without_precheck() {
+    let (_dir, config_path, work_path, calls_log) =
+        setup_ibcmd_server_init_project("exit 0");
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--output",
+            "json",
+            "init",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(payload["data"]["steps"][0]["status"], "ok");
+    assert_eq!(payload["data"]["steps"][1]["status"], "skipped");
+    assert!(!work_path.join("edt-workspace").exists());
+    let calls = fs::read_to_string(calls_log).expect("calls");
+    assert!(calls.contains("infobase --dbms PostgreSQL --database-server localhost --database-name demo create --create-database --user Admin --password secret --database-user postgres --database-password pg-secret"));
+    assert!(!calls.contains(" info "));
+    assert!(!calls.contains(" list "));
+}
+
+#[test]
+fn init_ibcmd_server_already_exists_is_non_fatal() {
+    let (_dir, config_path, _work_path, _calls_log) =
+        setup_ibcmd_server_init_project("printf 'already exists\\n' >&2\nexit 17");
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--output",
+            "json",
+            "init",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(payload["data"]["steps"][0]["status"], "skipped");
+    assert!(payload["data"]["steps"][0]["message"]
+        .as_str()
+        .expect("message")
+        .contains("already exists"));
+}
+
+#[test]
+fn init_ibcmd_server_auth_failure_stays_fatal() {
+    let (_dir, config_path, _work_path, _calls_log) =
+        setup_ibcmd_server_init_project("printf 'access denied\\n' >&2\nexit 17");
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--output",
+            "json",
+            "init",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(!output.status.success());
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(payload["data"]["steps"][0]["status"], "failed");
+    assert!(payload["data"]["steps"][0]["message"]
+        .as_str()
+        .expect("message")
+        .contains("access denied"));
 }
