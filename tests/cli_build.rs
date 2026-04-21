@@ -57,7 +57,7 @@ fn write_ibcmd_script(path: &Path, calls_log: &Path, fail_pattern: Option<&str>)
 
 fn write_edt_script(path: &Path, calls_log: &Path) {
     let body = format!(
-        "args=\"$*\"\nprintf '%s\\n' \"$args\" >> \"{}\"\nexit 0",
+        "args=\"$*\"\ntarget=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"--configuration-files\" ]; then target=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$target\" ]; then mkdir -p \"$target\"; printf '<Configuration />\\n' > \"$target/Configuration.xml\"; fi\nprintf '%s\\n' \"$args\" >> \"{}\"\nexit 0",
         calls_log.display()
     );
     write_script(path, &body);
@@ -523,7 +523,7 @@ fn build_edt_text_interleaves_export_stage_after_edt_log() {
     assert!(stdout.contains("│   ✓ completed"));
     assert!(stdout.contains("│   [ibcmd] Загрузка в базу"));
     assert!(stdout.contains("│   [ibcmd] Применение изменений"));
-    assert!(stdout.contains("│   ✓ full load from EDT export after change detection"));
+    assert!(stdout.contains("│   ✓ full load selected by partial-load rules"));
     assert_eq!(stdout.matches("● configuration").count(), 1);
 
     let ibcmd_calls = fs::read_to_string(ibcmd_calls_log).expect("ibcmd calls");

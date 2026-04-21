@@ -824,7 +824,7 @@ fn run_build_edt(
         .collect();
     let ordered_source_sets = ordered_source_sets(config);
 
-    let analysis_by_name = if args.full_rebuild {
+    let edt_analysis_by_name = if args.full_rebuild {
         None
     } else {
         Some(analyze_contexts_by_name(
@@ -849,17 +849,17 @@ fn run_build_edt(
             continue;
         };
 
-        let plan = if args.full_rebuild {
+        let edt_stage = if args.full_rebuild {
             StepPlan::Execute {
-                mode: BuildMode::Full,
-                message: "full load from EDT export (--full-rebuild)".to_owned(),
+                mode: BuildMode::EdtExport,
+                message: "forced EDT export (--full-rebuild)".to_owned(),
                 partial_paths: None,
                 commit: StepCommit::RescanFull {
                     recover_storage: true,
                 },
             }
         } else {
-            match analysis_by_name
+            match edt_analysis_by_name
                 .as_ref()
                 .and_then(|analysis| analysis.get(&source_set.name))
                 .cloned()
@@ -888,10 +888,9 @@ fn run_build_edt(
                         TimelineStageStatus::Succeeded,
                     );
                     StepPlan::Execute {
-                        mode: BuildMode::Full,
-                        message:
-                            "fallback to full export/load after recoverable change-detection issue"
-                                .to_owned(),
+                        mode: BuildMode::EdtExport,
+                        message: "fallback to EDT export after recoverable change-detection issue"
+                            .to_owned(),
                         partial_paths: None,
                         commit: StepCommit::RescanFull {
                             recover_storage: false,
@@ -901,8 +900,8 @@ fn run_build_edt(
                 Ok(AnalysisOutcome::Changes { changes, prepared }) => {
                     log_change_analysis(source_set.name.as_str(), &changes);
                     StepPlan::Execute {
-                        mode: BuildMode::Full,
-                        message: "full load from EDT export after change detection".to_owned(),
+                        mode: BuildMode::EdtExport,
+                        message: "EDT export after change detection".to_owned(),
                         partial_paths: None,
                         commit: StepCommit::Prepared(prepared),
                     }
@@ -1002,7 +1001,7 @@ fn run_build_edt(
             };
             match export_result {
                 Ok(descriptors) => {
-                    match &plan {
+                    match &edt_stage {
                         StepPlan::Execute { commit, .. } => match commit {
                             StepCommit::Prepared(prepared) => {
                                 if let Err(error) = analyzer::commit_success(
@@ -1085,7 +1084,9 @@ fn run_build_edt(
             continue;
         }
 
-        match plan {
+        let edt_stage_skipped = matches!(&edt_stage, StepPlan::Skip { .. });
+
+        match edt_stage {
             StepPlan::Skip { message, ok } => {
                 push_build_step(
                     &mut steps,
@@ -1097,10 +1098,10 @@ fn run_build_edt(
                 );
             }
             StepPlan::Execute {
-                mode,
-                message,
+                message: _,
                 partial_paths: _,
                 commit,
+                mode: _,
             } => {
                 let edt = match edt_binary.clone() {
                     Some(path) => path,
@@ -1205,6 +1206,47 @@ fn run_build_edt(
                     );
                     return Err(BuildExecutionFailure::with_payload(error, result));
                 }
+                match &commit {
+                    StepCommit::Prepared(prepared) => {
+                        if let Err(error) =
+                            analyzer::commit_success(&edt_context, &config.work_path, prepared)
+                        {
+                            let app_error = AppError::Runtime(error.to_string());
+                            let result = fail_with_remaining_steps(
+                                started,
+                                steps,
+                                ordered_source_sets
+                                    .iter()
+                                    .skip(index)
+                                    .copied()
+                                    .collect::<Vec<_>>(),
+                                source_set,
+                                BuildMode::EdtExport,
+                                app_error.to_string(),
+                            );
+                            return Err(BuildExecutionFailure::with_payload(app_error, result));
+                        }
+                    }
+                    StepCommit::RescanFull { recover_storage } => {
+                        if let Err(app_error) =
+                            commit_full_rescan(&edt_context, &config.work_path, *recover_storage)
+                        {
+                            let result = fail_with_remaining_steps(
+                                started,
+                                steps,
+                                ordered_source_sets
+                                    .iter()
+                                    .skip(index)
+                                    .copied()
+                                    .collect::<Vec<_>>(),
+                                source_set,
+                                BuildMode::EdtExport,
+                                app_error.to_string(),
+                            );
+                            return Err(BuildExecutionFailure::with_payload(app_error, result));
+                        }
+                    }
+                }
 
                 push_build_step(
                     &mut steps,
@@ -1214,7 +1256,133 @@ fn run_build_edt(
                     "EDT export completed".to_owned(),
                     export_started.elapsed().as_millis() as u64,
                 );
+            }
+        }
 
+        let designer_stage = if edt_stage_skipped && !designer_context.path().exists() {
+            StepPlan::Skip {
+                message: "no changes".to_owned(),
+                ok: true,
+            }
+        } else if args.full_rebuild {
+            StepPlan::Execute {
+                mode: BuildMode::Full,
+                message: "full load from EDT export (--full-rebuild)".to_owned(),
+                partial_paths: None,
+                commit: StepCommit::RescanFull {
+                    recover_storage: true,
+                },
+            }
+        } else {
+            match analyzer::analyze_context(&designer_context, &config.work_path).outcome {
+                Ok(AnalysisOutcome::NoChanges) => {
+                    debug!(
+                        source_set = source_set.name.as_str(),
+                        found_changes = 0,
+                        "generated designer change analysis result: found 0 change(s)"
+                    );
+                    StepPlan::Skip {
+                        message: "no changes".to_owned(),
+                        ok: true,
+                    }
+                }
+                Ok(AnalysisOutcome::Fallback) => {
+                    debug!(
+                        source_set = source_set.name.as_str(),
+                        "generated designer change analysis result: fallback to full load after recoverable issue"
+                    );
+                    log_timeline_stage(
+                        &source_set.name,
+                        "changes",
+                        "fallback to full load after recoverable issue",
+                        TimelineStageStatus::Succeeded,
+                    );
+                    StepPlan::Execute {
+                        mode: BuildMode::Full,
+                        message: "fallback to full load after recoverable change-detection issue"
+                            .to_owned(),
+                        partial_paths: None,
+                        commit: StepCommit::RescanFull {
+                            recover_storage: false,
+                        },
+                    }
+                }
+                Ok(AnalysisOutcome::Changes { changes, prepared }) => {
+                    log_change_analysis(source_set.name.as_str(), &changes);
+                    match partial_load::decide(
+                        &changes,
+                        designer_context.path(),
+                        config.build.partial_load_threshold,
+                    ) {
+                        LoadDecision::Partial(paths) => {
+                            debug!(
+                                source_set = source_set.name.as_str(),
+                                partial_file_count = paths.len(),
+                                threshold = config.build.partial_load_threshold,
+                                "generated designer change analysis decision: partial load"
+                            );
+                            StepPlan::Execute {
+                                mode: BuildMode::Partial {
+                                    file_count: paths.len(),
+                                },
+                                message: format!("partial load of {} files", paths.len()),
+                                partial_paths: Some(paths),
+                                commit: StepCommit::Prepared(prepared),
+                            }
+                        }
+                        LoadDecision::Full => {
+                            debug!(
+                                source_set = source_set.name.as_str(),
+                                threshold = config.build.partial_load_threshold,
+                                "generated designer change analysis decision: full load"
+                            );
+                            StepPlan::Execute {
+                                mode: BuildMode::Full,
+                                message: "full load selected by partial-load rules".to_owned(),
+                                partial_paths: None,
+                                commit: StepCommit::Prepared(prepared),
+                            }
+                        }
+                    }
+                }
+                Err(error) => {
+                    let result = fail_with_remaining_steps(
+                        started,
+                        steps,
+                        ordered_source_sets
+                            .iter()
+                            .skip(index)
+                            .copied()
+                            .collect::<Vec<_>>(),
+                        source_set,
+                        BuildMode::Skipped,
+                        error.to_string(),
+                    );
+                    return Err(BuildExecutionFailure::with_payload(
+                        AppError::Runtime(error.to_string()),
+                        result,
+                    ));
+                }
+            }
+        };
+
+        match designer_stage {
+            StepPlan::Skip { message, ok } => {
+                push_build_step(
+                    &mut steps,
+                    &source_set.name,
+                    BuildMode::Skipped,
+                    ok,
+                    message,
+                    0,
+                );
+            }
+            StepPlan::Execute {
+                mode,
+                message,
+                partial_paths,
+                commit,
+            } => {
                 let load_started = Instant::now();
                 let load_result = match config.builder {
                     BuilderBackend::Designer => {
@@ -1252,9 +1420,9 @@ fn run_build_edt(
                             utilities.runner_for(UtilityType::V8),
                             source_set,
                             &designer_context,
-                            &edt_context,
+                            &designer_context,
                             index,
-                            None,
+                            partial_paths.as_deref(),
                             &commit,
                         )
                     }
@@ -1293,8 +1461,8 @@ fn run_build_edt(
                             utilities.runner_for(UtilityType::Ibcmd),
                             source_set,
                             &designer_context,
-                            &edt_context,
-                            None,
+                            &designer_context,
+                            partial_paths.as_deref(),
                             &commit,
                         )
                     }
@@ -2140,8 +2308,12 @@ mod tests {
             .steps
             .iter()
             .any(|step| matches!(step.mode, BuildMode::EdtExport) && step.ok));
+        assert!(result.steps.iter().any(|step| {
+            step.source_set == "main" && matches!(step.mode, BuildMode::Partial { .. }) && step.ok
+        }));
         assert!(edt_calls_text.contains("export --project-name main"));
         assert!(designer_calls_text.contains("/LoadConfigFromFiles"));
+        assert!(designer_calls_text.contains("-partial"));
         assert!(designer_calls_text.contains(
             work.join("designer")
                 .join("main")
@@ -2150,6 +2322,28 @@ mod tests {
                 .as_str()
         ));
         assert_eq!(edt_storage_generation(&config, "main"), 2);
+        assert_eq!(storage_generation(&config, "main"), 1);
+
+        let rerun = run_build(
+            &config,
+            &BuildArgs {
+                full_rebuild: false,
+            },
+        )
+        .expect("rerun");
+        let rerun_edt_calls = fs::read_to_string(&edt_calls).expect("edt calls after rerun");
+
+        assert!(rerun
+            .steps
+            .iter()
+            .filter(|step| step.source_set == "main")
+            .all(|step| matches!(step.mode, BuildMode::Skipped) && step.ok));
+        assert_eq!(
+            rerun_edt_calls
+                .matches("export --project-name main")
+                .count(),
+            1
+        );
     }
 
     #[cfg(unix)]
@@ -2192,8 +2386,12 @@ mod tests {
             .steps
             .iter()
             .any(|step| matches!(step.mode, BuildMode::EdtExport) && step.ok));
+        assert!(result.steps.iter().any(|step| {
+            step.source_set == "main" && matches!(step.mode, BuildMode::Partial { .. }) && step.ok
+        }));
         assert!(edt_calls_text.contains("export --project-name main"));
-        assert!(ibcmd_calls_text.contains("infobase --db-path /tmp/ib config import"));
+        assert!(ibcmd_calls_text.contains("infobase --db-path /tmp/ib config import files"));
+        assert!(ibcmd_calls_text.contains("--base-dir"));
         assert!(ibcmd_calls_text.contains("infobase --db-path /tmp/ib config apply"));
         assert!(ibcmd_calls_text.contains(
             work.join("designer")
@@ -2203,6 +2401,7 @@ mod tests {
                 .as_str()
         ));
         assert_eq!(edt_storage_generation(&config, "main"), 2);
+        assert_eq!(storage_generation(&config, "main"), 1);
     }
 
     #[cfg(unix)]
@@ -2349,6 +2548,81 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn edt_build_loads_generated_designer_diff_even_when_edt_sources_are_unchanged() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let platform_script = dir.path().join("platform").join("bin").join("1cv8");
+        let edt_script = dir.path().join("edt").join("1cedtcli");
+        let designer_calls = dir.path().join("designer-calls.log");
+        let edt_calls = dir.path().join("edt-calls.log");
+        create_source_tree(&base);
+        write_designer_script(&platform_script, &designer_calls, None);
+        write_edt_script(&edt_script, &edt_calls, None);
+        let config = build_edt_config(&base, &work, &dir.path().join("platform"), &edt_script);
+        prime_edt_snapshots(&config);
+
+        fs::write(
+            base.join("main")
+                .join("Catalogs.Items")
+                .join("ObjectModule.bsl"),
+            "procedure Test()\n  // changed in edt\nendprocedure",
+        )
+        .expect("modify edt main");
+
+        run_build(
+            &config,
+            &BuildArgs {
+                full_rebuild: false,
+            },
+        )
+        .expect("initial build");
+
+        fs::write(
+            work.join("designer").join("main").join("exported.txt"),
+            "generated designer drift\n",
+        )
+        .expect("modify generated designer source");
+
+        let edt_generation_before = edt_storage_generation(&config, "main");
+        let designer_generation_before = storage_generation(&config, "main");
+
+        let result = run_build(
+            &config,
+            &BuildArgs {
+                full_rebuild: false,
+            },
+        )
+        .expect("second build");
+        let designer_calls_text = fs::read_to_string(&designer_calls).expect("designer calls");
+        let edt_calls_text = fs::read_to_string(&edt_calls).expect("edt calls");
+
+        assert!(result.steps.iter().any(|step| {
+            step.source_set == "main" && matches!(step.mode, BuildMode::Skipped) && step.ok
+        }));
+        assert!(result.steps.iter().any(|step| {
+            step.source_set == "main" && matches!(step.mode, BuildMode::Partial { .. }) && step.ok
+        }));
+        assert_eq!(
+            edt_calls_text.matches("export --project-name main").count(),
+            1
+        );
+        assert_eq!(
+            designer_calls_text.matches("/LoadConfigFromFiles").count(),
+            2
+        );
+        assert_eq!(
+            edt_storage_generation(&config, "main"),
+            edt_generation_before
+        );
+        assert_eq!(
+            storage_generation(&config, "main"),
+            designer_generation_before + 1
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn edt_export_failure_stops_pipeline_before_designer_load() {
         let dir = tempdir().expect("tempdir");
         let base = dir.path().join("base");
@@ -2386,6 +2660,57 @@ mod tests {
         assert!(matches!(result.steps[0].mode, BuildMode::EdtExport));
         assert!(!result.steps[0].ok);
         assert!(!designer_calls.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn edt_build_failure_does_not_commit_generated_designer_snapshot() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let platform_script = dir.path().join("platform").join("bin").join("1cv8");
+        let edt_script = dir.path().join("edt").join("1cedtcli");
+        let designer_calls = dir.path().join("designer-calls.log");
+        let edt_calls = dir.path().join("edt-calls.log");
+        create_source_tree(&base);
+        write_designer_script(&platform_script, &designer_calls, Some("/UpdateDBCfg"));
+        write_edt_script(&edt_script, &edt_calls, None);
+        let config = build_edt_config(&base, &work, &dir.path().join("platform"), &edt_script);
+        prime_edt_snapshots(&config);
+
+        fs::write(
+            base.join("main")
+                .join("Catalogs.Items")
+                .join("ObjectModule.bsl"),
+            "procedure Test()\n  // changed in edt\nendprocedure",
+        )
+        .expect("modify edt main");
+
+        let failure = run_build(
+            &config,
+            &BuildArgs {
+                full_rebuild: false,
+            },
+        )
+        .expect_err("expected failure");
+        let result = failure
+            .payload
+            .expect("build failures should preserve a structured payload");
+        let designer_storage_path = SourceSetsService::new(&config)
+            .designer_contexts()
+            .into_iter()
+            .find(|context| context.name() == "main")
+            .expect("designer context")
+            .storage_path(&config.work_path);
+
+        assert!(!result.ok);
+        assert!(matches!(result.steps[0].mode, BuildMode::EdtExport));
+        assert!(result.steps[0].ok);
+        assert!(result.steps.iter().any(|step| {
+            step.source_set == "main" && matches!(step.mode, BuildMode::Partial { .. }) && !step.ok
+        }));
+        assert_eq!(edt_storage_generation(&config, "main"), 2);
+        assert!(!designer_storage_path.exists());
     }
 
     #[cfg(unix)]
