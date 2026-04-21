@@ -81,14 +81,21 @@ EDT source-set
 
 ## План реализации
 
-Текущее состояние кода уже следует этому решению:
+Целевое состояние реализации:
 
 1. `src/config/model.rs` описывает `source-set`, `workPath`, `format` и `builder`.
 2. `src/config/validate.rs` валидирует уникальность и безопасность `source-set` и рабочие ограничения.
 3. `src/change_detection/source_sets.rs` создает контексты `designer-<sourceSetName>` и `edt-<sourceSetName>`.
 4. `src/change_detection/hash_storage.rs` хранит состояние в `redb`.
 5. `src/change_detection/partial_load.rs` принимает partial/full decision по Designer-файлам.
-6. `src/use_cases/build_project.rs` использует EDT context для export decision и Designer context для load decision.
+6. `src/use_cases/build_project.rs` использует `edt-*` context для export decision и `designer-*` context для load decision.
+7. EDT build состоит из двух независимых последовательных стадий:
+   - EDT stage анализирует `edt-<sourceSetName>` и при необходимости выполняет export;
+   - после успешного export коммитится только `edt-*` snapshot;
+   - Designer stage всегда анализирует `designer-<sourceSetName>` после успешной или skipped EDT stage, потому что прошлый load/apply мог быть отменён или сломан;
+   - Designer/IBCMD load/apply выполняется только если Designer analysis нашёл изменения;
+   - `designer-*` snapshot коммитится только после successful load/apply;
+   - ошибка на предыдущей стадии запрещает переход к следующей стадии.
 
 При дальнейших изменениях:
 
@@ -103,3 +110,7 @@ EDT source-set
 - [x] Generated Designer output для EDT находится под `workPath/designer/<sourceSetName>`.
 - [x] Partial/full load decision выполняется по Designer-format context.
 - [x] `redb` storage используется как per-context persisted state, а не как единый глобальный индекс.
+- [ ] EDT build коммитит `edt-*` snapshot сразу после successful export.
+- [ ] EDT build запускает Designer analysis после successful или skipped EDT stage независимо от наличия EDT-изменений.
+- [ ] EDT build коммитит `designer-*` snapshot только после successful Designer/IBCMD load/apply.
+- [ ] Ошибка на EDT stage останавливает pipeline до Designer stage.

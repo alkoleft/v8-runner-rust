@@ -54,7 +54,7 @@
 
 ## План реализации
 
-Текущее состояние кода уже следует этому решению:
+Целевое состояние реализации:
 
 1. `src/change_detection/source_sets.rs` создаёт Designer и EDT contexts.
 2. `src/change_detection/scanner.rs` реализует on-demand scan, ignored paths, mtime/hash strategy и coarse margin.
@@ -62,6 +62,13 @@
 4. `src/change_detection/analyzer.rs` разделяет concrete changes, no changes, fallback и hard failures.
 5. `src/change_detection/partial_load.rs` принимает `Partial`/`Full` decision и пишет list files.
 6. `src/use_cases/build_project.rs` применяет analysis перед platform operations и коммитит snapshots после успешного шага.
+7. Для `format=EDT` build pipeline разделён на независимые последовательные стадии:
+   - `edt-*` analysis управляет только export decision;
+   - successful export коммитит `edt-*` snapshot;
+   - `designer-*` analysis запускается всегда после успешной или skipped EDT stage;
+   - Designer/IBCMD load/apply запускается только при изменениях в generated Designer output;
+   - `designer-*` snapshot коммитится только после successful load/apply;
+   - ошибка на предыдущей стадии останавливает pipeline до следующей стадии.
 
 При дальнейших изменениях:
 
@@ -77,3 +84,7 @@
 - [x] ADR фиксирует разные contexts для EDT source и generated Designer output.
 - [x] ADR фиксирует conservative full-load fallback для unsafe partial cases.
 - [x] ADR фиксирует commit snapshot только после successful platform step.
+- [ ] EDT build выполняет Designer analysis всегда после successful или skipped EDT stage.
+- [ ] Отсутствие изменений в generated Designer output приводит к skip без load/apply.
+- [ ] Изменения в generated Designer output проходят через обычное partial/full decision.
+- [ ] `designer-*` snapshot не коммитится до successful load/apply.

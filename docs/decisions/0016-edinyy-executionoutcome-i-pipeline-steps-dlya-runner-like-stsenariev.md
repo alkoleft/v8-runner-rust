@@ -101,9 +101,10 @@ Top-level command result может сохранять command-specific context:
 6. message;
 7. diagnostics and structured errors;
 8. produced artifacts;
-9. interruption safety and critical phase metadata, когда применимо по ADR-0014.
+9. минимальную interruption/critical phase metadata на уровне command outcome/result, когда применимо по ADR-0014.
 
 Пока целевой `ExecutionStep` не введён, новые сценарии должны использовать `StepResult` консервативно и не прятать значимые failures только в free-form message.
+Cancellation не требует отдельного состояния на каждом step: pipeline остаётся линейным, а interruption policy применяется на command boundary и safe points.
 
 ### Status and failure semantics
 
@@ -111,8 +112,9 @@ Top-level command result может сохранять command-specific context:
 2. `ExecutionStatus::Failed` означает business/runtime failure, который не является timeout и не сводится к malformed runner output.
 3. `ExecutionStatus::TimedOut` используется только после terminal-state semantics из ADR-0014.
 4. `ExecutionStatus::InvalidOutput` используется, когда external runner завершился, но обязательный report/artifact/log отсутствует, пустой или malformed.
-5. Cancellation должна получить явный representation в `ExecutionOutcome` при реализации ADR-0014: либо отдельный `ExecutionStatus::Cancelled`, либо stable `ExecutionError.code` до расширения enum.
-6. Degraded success не должен маскироваться как чистый success: cleanup/publish/log-read warnings должны быть доступны через diagnostics, errors with non-fatal classification или будущий explicit warning channel.
+5. `ExecutionStatus::Cancelled` должен быть введён при реализации ADR-0014 и использоваться только когда command действительно завершилась отменой после terminal state underlying operation.
+6. Если cancellation/shutdown/timeout был requested в `CriticalNonAbortable` phase, но operation безопасно завершилась success, итоговый status остаётся `Succeeded`, а `ExecutionOutcome` получает diagnostic/warning о deferred interruption.
+7. Degraded success не должен маскироваться как чистый success: cleanup/publish/log-read warnings должны быть доступны через diagnostics, errors with non-fatal classification или будущий explicit warning channel.
 
 ### Transport boundary
 
@@ -177,14 +179,14 @@ Use case orchestration не зависит от `Presenter`, CLI `Envelope`, MCP
 
 1. Make `ExecutionOutcome<T>` the serialized source of truth for `test` instead of keeping it only as skipped legacy field.
 2. Reduce duplication between top-level `ok/message/path` fields and outcome status/errors/artifacts where compatibility allows.
-3. Decide whether cancellation becomes `ExecutionStatus::Cancelled` or a stable `ExecutionError.code` before implementing ADR-0014 fully.
+3. Add `ExecutionStatus::Cancelled` and minimal command-level interruption metadata for actual cancellation outcomes and deferred interruption warnings.
 4. Introduce richer `ExecutionStep` or extend `StepResult` with:
 - kind;
 - status beyond boolean `ok`;
 - target identity;
 - diagnostics/errors;
 - artifacts;
-- interruption/critical phase metadata.
+- optional reference to command-level interruption/critical phase metadata when it is useful for presentation.
 5. Add helper builders for common pipeline blocks in use-case/domain code without introducing a mandatory generic engine.
 6. Update CLI JSON and MCP mapping tests so they assert outcome-driven status, errors, metrics and artifact paths.
 7. When adding a new runner-like scenario, start from `ScenarioExecutionRequest` and `ExecutionOutcome<T>` instead of a fresh bespoke result shape.
@@ -199,3 +201,4 @@ Use case orchestration не зависит от `Presenter`, CLI `Envelope`, MCP
 - [x] ADR allows legacy compatibility fields during migration.
 - [x] ADR explicitly rejects a premature generic pipeline engine.
 - [x] ADR links timeout/cancellation terminal semantics to ADR-0014.
+- [x] ADR fixes simplified cancellation representation through `ExecutionStatus::Cancelled` plus command-level interruption diagnostics instead of per-step cancellation state machines.

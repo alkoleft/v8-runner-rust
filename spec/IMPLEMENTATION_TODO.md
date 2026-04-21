@@ -1,181 +1,36 @@
-# TODO реализации Rust CLI
+# Активный TODO реализации `v8-runner`
 
-> Примечание: это внутренний рабочий документ. Английские названия разделов и терминов оставлены там, где они совпадают с именами стадий, команд или устоявшимися техническими идентификаторами.
+Этот файл является коротким рабочим source of truth для следующих задач.
 
-## Foundation
+Исторический TODO до очистки сохранен в [spec/archive/IMPLEMENTATION_TODO_2026-04-21.md](archive/IMPLEMENTATION_TODO_2026-04-21.md).
+Подробная декомпозиция ADR-задач находится в [spec/ADR_DERIVED_BACKLOG.md](ADR_DERIVED_BACKLOG.md).
+Закрытый staged record MCP rollout остается в [spec/MCP_IMPLEMENTATION_PLAN.md](MCP_IMPLEMENTATION_PLAN.md) и не используется как активный backlog без явного запроса.
 
-- [x] Создать `Cargo.toml` для бинаря `v8-runner`
-- [x] Добавить базовые зависимости: `clap`, `serde`, `serde_yaml`, `serde_json`, `thiserror`, `tracing`, `walkdir`, `sha2`, `quick-xml`, `tempfile`
-- [x] Создать `src/main.rs`
-- [x] Создать `src/app.rs`
-- [x] Завести модульную структуру `cli`, `config`, `domain`, `use_cases`, `change_detection`, `platform`, `parsers`, `output`, `support`
+## Правила ведения
 
-## CLI и output
+- Держать здесь только открытые задачи или короткие ссылки на активные детализации.
+- После закрытия задачи отмечать ее `[x]` только на время текущего delivery loop, затем переносить детали в профильный archive/spec/history-документ.
+- Если задача меняет архитектурный контракт, сначала обновлять или добавлять ADR, затем синхронизировать `docs/architecture/invariants.md`, arc42 и публичную документацию.
+- Для реализации брать следующий конкретный пункт сверху вниз, если пользователь не указал другой приоритет.
 
-- [x] Описать CLI API на `clap`
-- [x] Добавить глобальные флаги `--config`, `--output`, `--log-level`, `--clean-before-execution`, `--no-color`, `--workdir`
-- [x] Добавить subcommands `build`, `test`, `dump`, `syntax`, `launch`
-- [x] Реализовать text presenter
-- [x] Реализовать json presenter с единым envelope
-- [x] Нормализовать exit codes для validation/runtime/platform errors
+## P0
 
-## Конфигурация
+- [ ] `ADR-TASK-002`: Закрыть EDT two-state build pipeline по `ADR-0002` и `ADR-0012`: EDT stage после successful export коммитит `edt-*` snapshot, Designer stage всегда анализирует `designer-<sourceSetName>` context, выполняет load/apply только при изменениях и коммитит `designer-*` snapshot только после successful load/apply.
+- [ ] `ADR-TASK-003`: Ввести единую transport-neutral policy таймаутов и отмены по `ADR-0013` и `ADR-0014`: общий публичный `execution_timeout`, `deadline` для каждой CLI/MCP команды, семантика terminal-state, классы interruption safety, command-boundary cancellation без state machine на каждом step, deferred warning при successful critical phase и наследование budget во вложенных сценариях.
+- [ ] `ADR-TASK-004`: Свести CLI EDT interactive execution к shared interactive режиму по `ADR-0007`: перенести shared EDT actor/manager в `src/platform` или общий execution слой, а MCP оставить controller/DTO/presenter boundary без собственной execution-логики.
 
-- [x] Описать модель конфигурации приложения
-- [x] Реализовать загрузку YAML-конфига
-- [x] Валидировать `basePath`
-- [x] Валидировать `workPath`
-- [x] Валидировать `source-set`
-- [x] Валидировать `format`
-- [x] Валидировать `builder`
-- [x] Валидировать строку подключения
-- [x] Подготовить `examples/v8project.yaml`
+## P1
 
-## Процессы и утилиты платформы
+- [ ] `ADR-TASK-005`: Закрыть follow-up gaps атомарной публикации по `ADR-0015`: neutral/caller-specific backup prefix, metadata sidecar на cleanup unit для staging directory внешних артефактов, `CriticalNonAbortable` publication phase после общей execution policy, cleanup warning для agent-oriented output.
+- [ ] `ADR-TASK-006`: Довести `ExecutionOutcome<T>` и step contract до целевого состояния по `ADR-0016`: outcome-driven serialized status/errors/metrics/artifacts, `ExecutionStatus::Cancelled` для фактической terminal cancellation, command-level interruption diagnostics, richer `ExecutionStep` или расширенный `StepResult`.
+- [ ] `ADR-TASK-007`: Проработать CLI output по `ADR-0010` как единый high-signal contract для человека и AI-агента без отдельного audience-параметра: сохранить только ось `--output text|json`, применить критерии корректного output из `spec/ADR_DERIVED_BACKLOG.md`, убрать лишний шум из clean success path, явно показывать warnings/degraded/artifacts/diagnostics и покрыть rendering tests.
 
-- [x] Реализовать `ProcessExecutor`
-- [x] Реализовать захват `stdout/stderr/exit code`
-- [x] Реализовать запись и чтение log-файлов платформы
-- [x] Реализовать временные файлы для partial lists и YaXUnit config
-- [x] Реализовать поиск бинарников `1cv8`, `1cv8c`, `ibcmd`, `1cedtcli`
-- [x] Развести ответственность между locator и platform DSL
+## P2
 
-## Change detection
+- [ ] `ADR-TASK-008`: Реализовать новый `infobase` config contract по `ADR-0018` и закрыть IBCMD server support: перенести `connection`/`credentials` в `infobase`, добавить `infobase.dbms`, убрать legacy top-level keys, покрыть Designer/Enterprise и IBCMD file/server mapping тестами.
+- [ ] `ADR-TASK-009`: Усилить regression coverage platform locator по `ADR-0004`: exact/mask selection `8.3`, `8.3.20`, `8.3.27.1789` для `1cv8`, `1cv8c`, `ibcmd`, `tools.platform.path` как root/hint и стандартные корни поиска.
+- [ ] Добавить CI workflow wiring из `spec/REAL_ENV_TEST_PLAN.md`: установка 1С на GitHub-hosted runner'ах, bootstrap файловой ИБ через `ibsrv`, trusted/fork gating и upload deploy-ready артефактов.
 
-- [x] Реализовать `Scanner` с рекурсивным обходом
-- [x] Игнорировать `.git/`, `.gradle/`, `build/`, `target/`, `temp/`, `tmp/`, `ConfigDumpInfo.xml`, `.yaxunit/`
-- [x] Реализовать отбор кандидатов по `lastModified`
-- [x] Реализовать hashing содержимого для кандидатов
-- [x] Реализовать `redb` storage в `workPath/hash-storages/*.redb` (tables: `FILES_MTIME`, `FILES_HASH`, `META`)
-- [x] Реализовать fallback на "все изменено" при recoverable проблемах хранения/сканирования
-- [x] Реализовать группировку изменений по `source-set`
-- [x] Реализовать `SourceSetsService`: выдавать `SourceSetContext` для EDT и Designer, прикреплять отдельное hash storage к каждому логическому источнику; в EDT-режиме — два независимых контекста (исходный EDT и временный Designer в `workPath`)
+## P3
 
-## Волна 1: Designer MVP
-
-### Build
-
-- [x] Реализовать `DesignerDsl`
-- [x] Реализовать `build_project` use case
-- [x] Реализовать `--full-rebuild` как forced full execution без destructive cache cleanup
-- [x] Реализовать выбор затронутых `source-set`
-- [x] Реализовать `PartialLoadListGenerator`
-- [x] Для `.bsl`-файлов добавлять в list связанные XML и каталог объекта
-- [x] Запретить partial при изменении `Configuration.xml`
-- [x] Запретить partial при превышении порога числа файлов
-- [x] Сохранять state только после успешного build
-
-### Tests
-
-- [x] Реализовать `EnterpriseDsl`
-- [x] Реализовать генерацию временного JSON-конфига YaXUnit
-- [x] Реализовать `test all`
-- [x] Реализовать `test module <MODULE_NAME>`
-- [x] Гарантировать обязательный `build` перед тестами
-- [x] Реализовать parser JUnit XML
-- [x] Реализовать parser `[ERR]` блоков YaXUnit-лога
-- [x] Вернуть summary, suites, cases и extracted errors
-- [x] Реализовать compact/full режим тестового ответа: compact скрывает passed-тесты и урезает stack trace
-
-### Dump
-
-- [x] Реализовать `dump --mode full`
-- [x] Реализовать `dump --mode incremental`
-- [x] Реализовать `dump --mode partial`
-- [x] Валидировать, что `partial` требует минимум один `--object`
-- [x] Поддержать выбор `source-set`
-- [x] Поддержать выбор `extension`
-
-### Syntax
-
-- [x] Реализовать `syntax designer-config`
-- [x] Реализовать `syntax designer-modules`
-- [x] Валидировать, что для `syntax designer-modules` включён хотя бы один режим проверки
-- [x] Реализовать parser designer validation logs
-- [x] Вернуть structured issues вместо raw stdout
-
-### Launch
-
-- [x] Реализовать `launch --mode designer`
-- [x] Реализовать `launch --mode thin`
-- [x] Реализовать `launch --mode thick`
-- [x] Возвращать статус запуска и доступные process details
-
-## Волна 1: тестирование и документация
-
-- [x] Добавить unit-тесты на change detection
-- [x] Добавить unit-тесты на `PartialLoadListGenerator`
-- [x] Добавить unit-тесты на JUnit parser
-- [x] Добавить unit-тесты на YaXUnit log parser
-- [x] Добавить unit-тесты на designer validation parser
-- [x] Добавить integration tests для CLI команд
-- [x] 2026-03-20: Подготовить fixture-наборы логов и XML
-- [x] Обновить `README.md`
-- [x] 2026-03-22: Перепаковать public docs: новый onboarding `README.md`, `docs/CAPABILITIES.md`, `docs/DEEP_DIVE.md`, и явно развести public docs vs internal reference docs
-- [x] 2026-03-22: Перевести public docs layer на русский (`README.md`, `docs/CAPABILITIES.md`, `docs/DEEP_DIVE.md`)
-
-## Волна 2: EDT
-
-- [ ] Расширить config-модель для `format = EDT`
-- [ ] Ввести отдельные state storage для `edt` и `designer`
-- [x] Реализовать `InteractiveProcessExecutor`
-- [x] Реализовать ожидание prompt `1C:EDT>`
-- [ ] Реализовать мониторинг живости EDT-процесса и автоперезапуск при сбое
-- [x] Реализовать single-flight инициализацию EDT-сессии
-- [ ] Реализовать `EdtDsl`
-- [ ] Реализовать экспорт только измененных EDT `source-set`
-- [ ] Реализовать временный Designer-каталог в `workPath/<sourceSetName>/`
-- [ ] Встроить export как первую фазу EDT build
-- [ ] Реализовать `syntax edt`
-- [ ] Реализовать parser EDT validation logs (TSV-подобный формат: каждая строка — отдельный issue)
-
-## Волна 2: IBCMD
-
-- [x] Реализовать `IbcmdDsl`
-- [x] Реализовать build через `config import` и `config apply`
-- [x] Реализовать dump `FULL` через `--force`
-- [x] Реализовать dump `INCREMENTAL` через `--sync`
-- [x] Явно задокументировать: partial dump по объектам в IBCMD backend не поддерживается
-- [x] Валидировать ограничения IBCMD для connection type (только файловая ИБ)
-- [x] Задокументировать ограничения IBCMD backend
-
-## План поддержки IBCMD (пункты 1-4)
-
-- [x] Step 1: Зафиксировать продуктовую границу `IBCMD` и синхронизировать документацию + ADR (`README.md`, `docs/CAPABILITIES.md`, `docs/DEEP_DIVE.md`, `docs/GIT_WORKFLOW.md`, `ARCHITECTURE.md`, `docs/decisions/*`).
-- [x] Step 2: Закрыть минимальный regression gap для `IBCMD` в MCP HTTP и подтвердить неизменность stdio/CLI поведения.
-- [x] Step 3: Добавить live smoke path для `IBCMD` с явной skip policy при недоступном стенде.
-- [x] Step 4: Унифицировать диагностические сообщения `IBCMD` в use-case слоях и в payload CLI/MCP.
-
-## Подготовка к следующему этапу
-
-- [x] Расширить config-модель новыми `mcp.*` и `tools.edt_cli.*` настройками для MCP stage
-- [ ] Нормализовать result types для build/test/dump/syntax/launch
-- [x] Добавить `steps` в output envelope
-- [x] Добавить `warnings` в output envelope
-- [x] Убедиться, что use cases не зависят от CLI parsing
-- [x] Добавить MCP-facing service layer с business/internal failure boundary и отдельными MCP DTO
-- [x] Нормализовать MCP contract mapping defaults, aliases и pre-validation в service layer
-- [x] Оставить место для будущего transport adapter слоя
-
-## MCP
-
-- [x] Добавить `v8-runner mcp serve stdio`
-- [x] Поднять rmcp stdio tool server с tools-only capability и опубликовать 8 MCP tools
-- [x] Добавить bounded execution через semaphore и per-call timeout/cancel semantics для MCP path
-- [x] Подключить shared EDT actor к live MCP `check_syntax_edt`
-- [x] Добавить baseline/reset pre-dispatch для shared EDT session (`cd <workspace>` + probe `cd`)
-- [x] Добавить `v8-runner mcp serve http`
-- [x] Поднять `axum` + `rmcp` streamable HTTP transport с stateful/stateless session semantics
-- [x] Переиспользовать shared EDT actor и общий execution semaphore для HTTP MCP sessions
-- [x] Добавить MCP runtime telemetry: semaphore wait time, EDT queue depth, restart count и shutdown/restart drain stats
-- [x] Расширить MCP regression/stress suite: `tools/list` contract, все 8 stdio tools, HTTP admission/tool-call regressions и `dump_config(PARTIAL)` matrix для `DESIGNER`/`IBCMD`
-- [x] 2026-03-21: `spec/MCP_IMPLEMENTATION_PLAN.md` сохранён как canonical staged MCP rollout history/reference; `spec/IMPLEMENTATION_TODO.md` остаётся активным backlog для follow-up и немигрированных EDT-задач.
-
-## CI contract hooks (2026-04-17)
-
-- [x] Перевести `scripts/test/ci-rust.sh` на контрактные scope'ы `contract|runtime-locks|happy-path`.
-- [x] Добавить helper entrypoint `scripts/test/ci-happy-path.sh` для одинаковой Linux/Windows цепочки `build -> syntax/check -> test -> package -> deploy-ready artifacts`.
-- [x] Перевести `scripts/test/live-cli-fixture.sh` на mandatory profile без `load/apply/launch` и с подтверждением непустых `.cf/.cfe/.epf/.erf`.
-- [x] Убрать fixture-config fallback как неявный "live" default; mandatory designer smoke теперь требует явный `V8TR_DESIGNER_REAL_CONFIG`, а soft-skip разрешается только через hook `V8TR_DESIGNER_ALLOW_MISSING_CONFIG=1`.
-- [x] Зафиксировать в `spec/REAL_ENV_TEST_PLAN.md`, что будущий GitHub Actions matrix на `ubuntu-latest` и `windows-latest` является source of truth, а `live-mcp-http` и `live-cli-ibcmd` остаются non-blocking.
-- [ ] Добавить workflow wiring для установки 1С на GitHub-hosted runner'ах, bootstrap файловой ИБ через `ibsrv`, trusted/fork gating и upload deploy-ready артефактов.
+- [ ] `ADR-TASK-010`: Добавить архитектурные guardrails для ADR-инвариантов (`ADR-0005`, `ADR-0006`, `ADR-0008`, `ADR-0009`, `ADR-0011`, `ADR-0017`, `ADR-0018`): границы зависимостей use case, platform DSL boundary, workspace lock boundary, validation/docs для config contract, checklist изменения MCP surface.

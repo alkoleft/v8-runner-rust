@@ -37,7 +37,8 @@
 12. `EXTENSION` source-set требует наличия хотя бы одного `CONFIGURATION` source-set.
 13. EDT source-set path не должен пересекаться с generated work target под `workPath/designer/<sourceSetName>`.
 14. `workPath` является owned runtime root для logs, temp files, hash storages, EDT workspace и generated Designer output; его нельзя трактовать как произвольный scratch без контракта.
-15. Config validation должна отклонять неподдерживаемые или unsafe combinations до вызова platform DSL.
+15. Контракт подключения информационной базы описан в [ADR-0018](0018-perenesti-kontrakt-informatsionnoy-bazy-v-infobase.md): `infobase.connection` заменяет top-level `connection`, а `infobase.user/password` заменяют top-level `credentials`.
+16. Config validation должна отклонять неподдерживаемые или unsafe combinations до вызова platform DSL.
 
 ## Неграницы (Non-goals)
 
@@ -54,6 +55,7 @@
 3. Изменение supported source-set types, path safety rules или reserved names требует обновления этого ADR или нового ADR.
 4. Новые сценарии должны добавлять config fields в typed model и validation boundary, а не читать ad-hoc YAML ниже по стеку.
 5. Ошибки unsupported config combinations должны быть user-facing validation errors, а не поздние platform failures.
+6. Изменение структуры `infobase` требует обновления ADR-0018 или нового ADR.
 
 ## План реализации
 

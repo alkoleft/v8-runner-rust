@@ -53,6 +53,7 @@ Workspace ownership is governed by [ADR-0011](docs/decisions/0011-eksklyuzivnoe-
 CLI and MCP commands must share the same timeout/cancellation semantics.
 The target contract is that every public command has a deadline, cancellation is routed through a transport-neutral execution context, and a cancelled/timed-out operation is reported only after the underlying operation reaches a terminal state.
 Mutating DB operations must mark critical phases where hard kill is not allowed by default.
+Cancellation representation фиксируется на command boundary: фактическая terminal cancellation использует `ExecutionStatus::Cancelled`, а cancellation/shutdown/timeout внутри successful critical phase возвращается как `Succeeded` с warning, без per-step cancellation state machine.
 This policy is governed by [ADR-0014](docs/decisions/0014-edinaya-timeout-cancellation-policy-dlya-cli-i-mcp-komand.md).
 
 Runner-like and pipeline-like commands should be assembled in the use-case layer as transport-neutral pipelines of validation, target resolution, workspace preparation, platform execution, output parsing, publication, cleanup, and diagnostics blocks.

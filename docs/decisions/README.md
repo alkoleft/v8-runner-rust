@@ -21,6 +21,7 @@
 - [ADR-0015: Атомарная публикация dump/artifacts через staging/backup](0015-atomarnaya-publikatsiya-dump-artifacts-cherez-staging-backup.md) — `accepted`, `2026-04-21`
 - [ADR-0016: Единый `ExecutionOutcome` и pipeline steps для runner-like сценариев](0016-edinyy-executionoutcome-i-pipeline-steps-dlya-runner-like-stsenariev.md) — `accepted`, `2026-04-21`
 - [ADR-0017: `v8project.yaml` / `source-set` как главный конфигурационный контракт](0017-v8project-yaml-source-set-kak-glavnyy-konfiguratsionnyy-kontrakt.md) — `accepted`, `2026-04-20`
+- [ADR-0018: Перенести контракт информационной базы в `infobase`](0018-perenesti-kontrakt-informatsionnoy-bazy-v-infobase.md) — `accepted`, `2026-04-21`
 
 ## Правила обновления
 

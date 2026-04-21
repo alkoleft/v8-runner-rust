@@ -23,13 +23,17 @@
 ## Config Contract
 
 1. `v8project.yaml`, загруженный в `AppConfig` и прошедший `config::validate`, является главным конфигурационным контрактом проекта.
-2. `source-set[].type` является поддержанным ключом типа source-set; legacy `purpose` не является публичным контрактом.
-3. `source-set.name` является stable identity для ordering, diagnostics, runtime contexts, generated directories и selection logic.
-4. `source-set.name` должен быть уникальным и безопасным path segment; resolved paths должны быть уникальны после normalization.
-5. EDT/external source-set paths и generated work targets не должны пересекаться; reserved work directory names нельзя использовать как EDT source-set names.
-6. Unsupported или unsafe config combinations должны отклоняться на validation boundary до вызова platform DSL.
+2. `infobase.connection` является обязательным supported ключом строки подключения; top-level `connection` не является публичным контрактом.
+3. `infobase.user/password` являются supported ключами пользователя ИБ; top-level `credentials` не является публичным контрактом.
+4. `infobase.dbms` описывает DBMS-level доступ для server-based ИБ; для `builder=IBCMD` + server connection обязательны `kind`, `server` и `name`.
+5. `infobase.dbms` не должен задаваться для file-based ИБ.
+6. `source-set[].type` является поддержанным ключом типа source-set; legacy `purpose` не является публичным контрактом.
+7. `source-set.name` является stable identity для ordering, diagnostics, runtime contexts, generated directories и selection logic.
+8. `source-set.name` должен быть уникальным и безопасным path segment; resolved paths должны быть уникальны после normalization.
+9. EDT/external source-set paths и generated work targets не должны пересекаться; reserved work directory names нельзя использовать как EDT source-set names.
+10. Unsupported или unsafe config combinations должны отклоняться на validation boundary до вызова platform DSL.
 
-См. [ADR-0017](../decisions/0017-v8project-yaml-source-set-kak-glavnyy-konfiguratsionnyy-kontrakt.md).
+См. [ADR-0017](../decisions/0017-v8project-yaml-source-set-kak-glavnyy-konfiguratsionnyy-kontrakt.md) и [ADR-0018](../decisions/0018-perenesti-kontrakt-informatsionnoy-bazy-v-infobase.md).
 
 ## Workspace Lock
 
@@ -60,7 +64,9 @@
 4. Команда не считается cancelled/timed out наружу, пока underlying operation не доведена до terminal state.
 5. Operations должны иметь interruption safety class: `Interruptible`, `GracefulThenKill`, `CriticalNonAbortable` или `NoExternalProcess`.
 6. Mutating DB operations после входа в critical phase не hard-kill by default; cancellation/timeout recorded и команда ждёт terminal outcome.
-7. Result payloads должны показывать cancellation/timeout request, stage/phase, interruption action и diagnostic paths.
+7. Cancellation policy живёт на command boundary; use case pipeline проверяет cancellation/deadline в safe points и не обязан моделировать отдельное cancellation state на каждом step.
+8. `ExecutionStatus::Cancelled` используется только для фактической terminal cancellation.
+9. Если cancellation/shutdown/timeout пришёл в critical phase, но operation безопасно завершилась success, итог остаётся `Succeeded`, а result содержит warning/diagnostic о deferred interruption.
 
 См. [ADR-0014](../decisions/0014-edinaya-timeout-cancellation-policy-dlya-cli-i-mcp-komand.md).
 
@@ -85,7 +91,8 @@
 5. Значимые pipeline blocks должны иметь step entry; минимальная текущая форма `StepResult` должна эволюционировать к richer `ExecutionStep` перед массовым добавлением новых combinations.
 6. `ExecutionOutcome<T>` не заменяет CLI `Envelope<T>`, MCP DTO или `UseCaseFailure<T>`.
 7. Timeout/cancellation statuses in outcome должны следовать terminal-state semantics из ADR-0014.
-8. Не вводить generic pipeline engine до появления повторяемой необходимости; сначала стандартизируются vocabulary, step contract and outcome shape.
+8. Cancellation representation остаётся command-level: `ExecutionStatus::Cancelled` для фактической отмены и diagnostic/warning для deferred interruption при successful critical phase.
+9. Не вводить generic pipeline engine до появления повторяемой необходимости; сначала стандартизируются vocabulary, step contract and outcome shape.
 
 См. [ADR-0016](../decisions/0016-edinyy-executionoutcome-i-pipeline-steps-dlya-runner-like-stsenariev.md).
 

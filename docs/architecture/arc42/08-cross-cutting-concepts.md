@@ -30,7 +30,8 @@
 - Команды рассматриваются как pipeline из стандартных блоков: validation, resolve target, prepare workspace, platform command, parse output, publish, cleanup and diagnostics.
 - Pipeline composition находится в use case слое; adapters не собирают blocks, а только мапят request/response.
 - Blocks должны обмениваться typed context/input/output и оставлять step/outcome trail для skipped/degraded/failure behavior.
-- `ExecutionStatus::TimedOut` допустим только после terminal-state semantics из ADR-0014; cancellation должен получить stable representation при реализации общей policy.
+- `ExecutionStatus::TimedOut` и `ExecutionStatus::Cancelled` допустимы только после terminal-state semantics из ADR-0014.
+- Если cancellation/shutdown/timeout был requested внутри successful `CriticalNonAbortable` phase, итог остаётся `Succeeded`, а result содержит warning/diagnostic о deferred interruption.
 - Degraded success, например cleanup warning после успешного publish, не должен маскироваться как полностью чистый success.
 - CLI решает на адаптерной границе, печатать ли `Envelope<T>`, text rendering или top-level error.
 - CLI output дополнительно разделяет human-oriented highlights и agent-oriented minimal signal; это presentation concern, а не use-case behavior.
@@ -65,6 +66,7 @@
 - Mutating DB operations должны иметь critical phase, где hard kill запрещён по умолчанию.
 - Timeout budget покрывает очередь/admission, подготовку, platform process, log collection, cleanup и result mapping.
 - Queued cancellation может завершиться до запуска work; running cancellation должна идти через controlled interruption flow.
+- Cancellation policy применяется на command boundary и safe points, без отдельной cancellation state machine на каждом pipeline step.
 - HTTP MCP-сессии ограничены по ёмкости и управляются через TTL.
 - Для интерактивного EDT-исполнения заданы отдельные ограничения на startup и command timeout.
 - Серверные отмены и shutdown строятся вокруг cooperative cancellation и bounded drain, а не вокруг мгновенного прерывания любой внешней работы.

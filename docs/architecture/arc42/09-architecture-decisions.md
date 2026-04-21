@@ -21,6 +21,7 @@
 | [ADR-0015: Атомарная публикация dump/artifacts через staging/backup](../../decisions/0015-atomarnaya-publikatsiya-dump-artifacts-cherez-staging-backup.md) | `accepted`, `2026-04-21` | Full replacement dump/artifacts публикуются через sibling staging/backup, rollback context и metadata-based orphan cleanup; incremental/partial остаются non-atomic. |
 | [ADR-0016: Единый `ExecutionOutcome` и pipeline steps для runner-like сценариев](../../decisions/0016-edinyy-executionoutcome-i-pipeline-steps-dlya-runner-like-stsenariev.md) | `accepted`, `2026-04-21` | Runner-like и pipeline-like сценарии используют `ExecutionOutcome<T>` как canonical domain outcome и общую vocabulary pipeline blocks/steps. |
 | [ADR-0017: `v8project.yaml` / `source-set` как главный конфигурационный контракт](../../decisions/0017-v8project-yaml-source-set-kak-glavnyy-konfiguratsionnyy-kontrakt.md) | `accepted`, `2026-04-20` | `v8project.yaml` -> `AppConfig` -> `config::validate` является главным config contract; `source-set[].type`, `source-set.name` и `workPath` задают runtime identity. |
+| [ADR-0018: Перенести контракт информационной базы в `infobase`](../../decisions/0018-perenesti-kontrakt-informatsionnoy-bazy-v-infobase.md) | `accepted`, `2026-04-21` | `infobase.connection` и `infobase.user/password` заменяют top-level `connection`/`credentials`; `infobase.dbms` задаёт DBMS-level contract для `IBCMD` server connection. |
 
 Архитектурные инварианты для агентов и контрибьюторов зафиксированы в [docs/architecture/invariants.md](../invariants.md).
 
@@ -29,6 +30,7 @@
 - Public surface changes нужно оценивать отдельно для CLI и MCP: наличие CLI-команды не означает доступность MCP tool.
 - Use case layer остаётся общей транспортно-нейтральной orchestration boundary, а adapters отвечают за presentation, DTO и transport/runtime failures.
 - `source-set.name` и canonical `workPath` являются runtime identity. Изменения naming/path rules затрагивают config validation, change detection, generated directories и workspace lock.
+- `infobase` является единственным config contract для строки подключения, пользователя ИБ и DBMS-level доступа; top-level `connection`/`credentials` не поддерживаются.
 - MCP concurrency имеет два независимых контура: execution admission для tool calls и HTTP session capacity для stateful transport lifecycle.
 - Target publication safety не обеспечивается workspace lock: full replacement outputs требуют staging/backup contract рядом с target.
 - ADR-0014 и ADR-0016 описывают целевую архитектуру с известными migration gaps. Новые команды должны следовать этим контрактам, даже если часть старых сценариев ещё находится в переходном состоянии.
