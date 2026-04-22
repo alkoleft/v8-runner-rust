@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mdclass:InformationRegister xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:core="http://g5.1c.ru/v8/dt/mcore" xmlns:mdclass="http://g5.1c.ru/v8/dt/metadata/mdclass" uuid="430f0cd1-e254-4d8c-8033-27bfa16f3b3a">
+  <producedTypes>
+    <selectionType typeId="f179741e-2ff3-4793-8cef-039ece854093" valueTypeId="4477ab5d-5753-4fb5-b4ad-037179de3acd"/>
+    <listType typeId="35fed39a-8145-4d77-aafb-4250aecf9d9c" valueTypeId="c5c552cd-4851-4edf-8aae-c767b106c7d7"/>
+    <managerType typeId="8b90b30e-fc45-4343-a6ea-12b84b2e6d33" valueTypeId="bc671306-8d9f-401a-a17e-638c3560e7d0"/>
+    <recordSetType typeId="db61db2b-9213-419c-920a-07df9e9afefb" valueTypeId="3b42c5e1-6ce9-4fcf-811a-ca5c4d1c2951"/>
+    <recordKeyType typeId="5355b64a-c1fa-4cf1-95ee-a0f76264778b" valueTypeId="9bfb858e-d12f-4ad0-b04e-d21bebc5306f"/>
+    <recordType typeId="c54f5799-0598-44cb-bfd8-d5bb9cc3487c" valueTypeId="7c80717f-2e45-4268-aaba-4a1367f822b6"/>
+    <recordManagerType typeId="3912a7b0-ea5f-4c4c-8c9d-2039c9818492" valueTypeId="0e2b27c0-8db3-4d1d-b55d-c42fe410e581"/>
+  </producedTypes>
+  <name>РегистрСведений1</name>
+  <useStandardCommands>true</useStandardCommands>
+  <editType>InDialog</editType>
+  <dataLockControlMode>Managed</dataLockControlMode>
+  <resources uuid="f71e5ea9-816f-4c03-9c49-d64d7016891e">
+    <name>Ресурс1</name>
+    <type>
+      <types>String</types>
+      <stringQualifiers>
+        <length>10</length>
+      </stringQualifiers>
+    </type>
+    <minValue xsi:type="core:UndefinedValue"/>
+    <maxValue xsi:type="core:UndefinedValue"/>
+    <fullTextSearch>Use</fullTextSearch>
+    <dataHistory>Use</dataHistory>
+    <fillValue xsi:type="core:StringValue"/>
+  </resources>
+  <attributes uuid="057c8b78-f773-4fb9-a569-3769ddf1cde4">
+    <name>Реквизит1</name>
+    <type>
+      <types>String</types>
+      <stringQualifiers>
+        <length>10</length>
+      </stringQualifiers>
+    </type>
+    <minValue xsi:type="core:UndefinedValue"/>
+    <maxValue xsi:type="core:UndefinedValue"/>
+    <fullTextSearch>Use</fullTextSearch>
+    <dataHistory>Use</dataHistory>
+    <fillValue xsi:type="core:StringValue"/>
+  </attributes>
+  <dimensions uuid="b3b82089-231c-4a49-94d4-0d2ea9c359e5">
+    <name>Измерение1</name>
+    <type>
+      <types>String</types>
+      <stringQualifiers>
+        <length>10</length>
+      </stringQualifiers>
+    </type>
+    <minValue xsi:type="core:UndefinedValue"/>
+    <maxValue xsi:type="core:UndefinedValue"/>
+    <fullTextSearch>Use</fullTextSearch>
+    <dataHistory>Use</dataHistory>
+    <fillValue xsi:type="core:StringValue"/>
+    <mainFilter>true</mainFilter>
+  </dimensions>
+</mdclass:InformationRegister>

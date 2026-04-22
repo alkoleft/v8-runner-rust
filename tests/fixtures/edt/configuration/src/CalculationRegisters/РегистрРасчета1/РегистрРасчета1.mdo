@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mdclass:CalculationRegister xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:core="http://g5.1c.ru/v8/dt/mcore" xmlns:mdclass="http://g5.1c.ru/v8/dt/metadata/mdclass" uuid="747f33fb-33a0-4ece-9977-9269ea20b1c2">
+  <producedTypes>
+    <selectionType typeId="1c2e1c00-115c-4277-88d1-0f15fac129bd" valueTypeId="2fca0879-69db-4d23-9da6-980cbacc6e4b"/>
+    <listType typeId="5ec676c9-39e8-49f8-9607-51514a4a2c79" valueTypeId="622da3b4-ca3b-408d-a0d2-255c6f96c039"/>
+    <managerType typeId="0079b2d6-cdd4-4a7e-8682-8032817090b3" valueTypeId="c8b4fdfc-db12-4e5c-b69e-3bc0b49aa7f6"/>
+    <recordSetType typeId="1818c8a3-b86c-4156-9acd-92b10c67de84" valueTypeId="451c1624-ecdf-4c18-ac9e-d930643a8efc"/>
+    <recordKeyType typeId="0deed375-fb8e-44e6-b329-0e5118c5cda8" valueTypeId="0e1c26f8-8ddf-45a6-bcb3-950e00a81e2c"/>
+    <recordType typeId="6a1c666d-3958-4e4b-bcee-4832ea188fcf" valueTypeId="44722b0d-2aac-4bb4-80d0-0bf69e361df0"/>
+    <recalcsType typeId="a8604c3d-b4c5-42ae-8dad-7cbbc56beff9" valueTypeId="d4e74ab4-fa8b-4f99-9a2f-5b68be9d278c"/>
+  </producedTypes>
+  <name>РегистрРасчета1</name>
+  <useStandardCommands>true</useStandardCommands>
+  <periodicity>Month</periodicity>
+  <chartOfCalculationTypes>ChartOfCalculationTypes.ПланВидовРасчета1</chartOfCalculationTypes>
+  <dataLockControlMode>Managed</dataLockControlMode>
+  <resources uuid="17144baa-4a34-4a05-bf18-b07afd117c9f">
+    <name>Ресурс1</name>
+    <type>
+      <types>Number</types>
+      <numberQualifiers>
+        <precision>10</precision>
+      </numberQualifiers>
+    </type>
+    <minValue xsi:type="core:UndefinedValue"/>
+    <maxValue xsi:type="core:UndefinedValue"/>
+    <fullTextSearch>Use</fullTextSearch>
+  </resources>
+  <attributes uuid="2ed1f6fc-c689-4da0-8f9b-874131030305">
+    <name>Реквизит1</name>
+    <type>
+      <types>String</types>
+      <stringQualifiers>
+        <length>10</length>
+      </stringQualifiers>
+    </type>
+    <minValue xsi:type="core:UndefinedValue"/>
+    <maxValue xsi:type="core:UndefinedValue"/>
+    <fullTextSearch>Use</fullTextSearch>
+  </attributes>
+  <dimensions uuid="7f47c5f7-c1ad-4a15-8763-0ac73d775a4b">
+    <name>Измерение1</name>
+    <type>
+      <types>String</types>
+      <stringQualifiers>
+        <length>10</length>
+      </stringQualifiers>
+    </type>
+    <minValue xsi:type="core:UndefinedValue"/>
+    <maxValue xsi:type="core:UndefinedValue"/>
+    <fullTextSearch>Use</fullTextSearch>
+  </dimensions>
+</mdclass:CalculationRegister>

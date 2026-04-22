@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mdclass:ChartOfAccounts xmlns:mdclass="http://g5.1c.ru/v8/dt/metadata/mdclass" uuid="db9cbd35-a885-45ba-884c-35ec74b9c452">
+  <producedTypes>
+    <objectType typeId="ccab33dd-fbb1-4f3e-9b6f-46f916b3e3ee" valueTypeId="4feac322-e5bf-4a07-acac-3b522d40b283"/>
+    <refType typeId="eb150568-d779-483e-927b-3db9a16faf14" valueTypeId="301d3105-3d7e-44e2-861e-3bb2ccca607c"/>
+    <selectionType typeId="a7105f71-5b72-44ed-8b37-eb171a9c03b9" valueTypeId="0fc74884-4715-4957-bc00-50504aaef8df"/>
+    <listType typeId="ed991d93-53cb-4eaa-a474-d2aea908fac2" valueTypeId="a06133d1-5262-4a04-8311-fd6ec6078600"/>
+    <managerType typeId="218cf49d-f2ba-483b-a149-d6155b9457c1" valueTypeId="5c8c4d45-ebdb-4459-b995-0d53ea84d450"/>
+    <extDimensionTypes typeId="ef397b4b-6ab1-4d57-9b01-53c351b2c980" valueTypeId="2c3331ab-7307-47c1-81f5-cf6c72cb27b9"/>
+    <extDimensionTypesRow typeId="8ead5c50-cc16-436b-8838-6b961209f66c" valueTypeId="3a068ea9-7da0-40d6-b11b-8fb84e7626a5"/>
+  </producedTypes>
+  <name>ПланСчетов1</name>
+  <useStandardCommands>true</useStandardCommands>
+  <inputByString>ChartOfAccounts.ПланСчетов1.StandardAttribute.Description</inputByString>
+  <inputByString>ChartOfAccounts.ПланСчетов1.StandardAttribute.Code</inputByString>
+  <fullTextSearchOnInputByString>DontUse</fullTextSearchOnInputByString>
+  <createOnInput>DontUse</createOnInput>
+  <dataLockControlMode>Managed</dataLockControlMode>
+  <fullTextSearch>Use</fullTextSearch>
+  <codeLength>9</codeLength>
+  <descriptionLength>25</descriptionLength>
+  <checkUnique>true</checkUnique>
+  <editType>InDialog</editType>
+  <choiceMode>BothWays</choiceMode>
+</mdclass:ChartOfAccounts>

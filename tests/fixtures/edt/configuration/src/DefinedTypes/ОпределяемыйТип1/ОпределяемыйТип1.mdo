@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mdclass:DefinedType xmlns:mdclass="http://g5.1c.ru/v8/dt/metadata/mdclass" uuid="20fee6d4-610d-4a90-967a-80e5dabd0cda">
+  <producedTypes>
+    <containerType typeId="e8b02f90-be1a-4249-a99e-0c38c43b0f34" valueTypeId="950a5527-7763-44b0-b58e-7bcb61262134"/>
+  </producedTypes>
+  <name>ОпределяемыйТип1</name>
+  <type>
+    <types>String</types>
+    <stringQualifiers>
+      <length>10</length>
+    </stringQualifiers>
+  </type>
+</mdclass:DefinedType>

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mdclass:EventSubscription xmlns:mdclass="http://g5.1c.ru/v8/dt/metadata/mdclass" uuid="8af290cb-1041-41e5-b820-5994bfe5ff8b">
+  <name>ПодпискаНаСобытие1</name>
+  <source>
+    <types>CatalogObject</types>
+  </source>
+  <event>OnSetNewCode</event>
+  <handler>CommonModule.ОбщийМодуль1.ПодпискаНаСобытие1ПриУстановкеНовогоКода</handler>
+</mdclass:EventSubscription>

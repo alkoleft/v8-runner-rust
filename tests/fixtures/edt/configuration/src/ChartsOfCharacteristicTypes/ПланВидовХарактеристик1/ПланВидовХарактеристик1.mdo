@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mdclass:ChartOfCharacteristicTypes xmlns:mdclass="http://g5.1c.ru/v8/dt/metadata/mdclass" uuid="be3e01b9-3fb7-4ea6-900b-44fa7e74ce85">
+  <producedTypes>
+    <objectType typeId="7090737d-84ee-4962-b6d8-8f865122d3d7" valueTypeId="79b27fbf-e4b0-43e4-9db2-9cb1c3d90b09"/>
+    <refType typeId="92469256-1d49-42f1-b962-131d6f3b6a43" valueTypeId="0d20df64-d78f-40b4-93a9-bed6f84e1682"/>
+    <selectionType typeId="f7f0cdc6-230f-457c-872b-513652e516aa" valueTypeId="31da1bec-327a-4fee-b50f-8fad235760cf"/>
+    <listType typeId="aa8106b1-d39c-462f-b34e-c85c3b2fd638" valueTypeId="39afe477-bac5-433d-befc-c4b5122422e2"/>
+    <managerType typeId="c86bbf4c-5910-4d44-a8b6-f0320babcf4f" valueTypeId="72d8370e-945c-4869-b361-0bfde6887059"/>
+    <containerType typeId="d47563bc-c35d-401d-aea3-91acd7dde5c9" valueTypeId="4f7c0102-7f1b-489e-ad06-3bff8f12beae"/>
+  </producedTypes>
+  <name>ПланВидовХарактеристик1</name>
+  <useStandardCommands>true</useStandardCommands>
+  <inputByString>ChartOfCharacteristicTypes.ПланВидовХарактеристик1.StandardAttribute.Description</inputByString>
+  <inputByString>ChartOfCharacteristicTypes.ПланВидовХарактеристик1.StandardAttribute.Code</inputByString>
+  <fullTextSearchOnInputByString>DontUse</fullTextSearchOnInputByString>
+  <createOnInput>DontUse</createOnInput>
+  <dataLockControlMode>Managed</dataLockControlMode>
+  <fullTextSearch>Use</fullTextSearch>
+  <type>
+    <types>String</types>
+    <stringQualifiers>
+      <length>10</length>
+    </stringQualifiers>
+  </type>
+  <foldersOnTop>true</foldersOnTop>
+  <codeLength>9</codeLength>
+  <codeAllowedLength>Variable</codeAllowedLength>
+  <descriptionLength>25</descriptionLength>
+  <checkUnique>true</checkUnique>
+  <autonumbering>true</autonumbering>
+  <defaultPresentation>AsDescription</defaultPresentation>
+  <editType>InDialog</editType>
+  <choiceMode>BothWays</choiceMode>
+</mdclass:ChartOfCharacteristicTypes>

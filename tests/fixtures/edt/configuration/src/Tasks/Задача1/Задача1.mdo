@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mdclass:Task xmlns:mdclass="http://g5.1c.ru/v8/dt/metadata/mdclass" uuid="d978b7d5-9660-44a7-a248-930e6b8b964c">
+  <producedTypes>
+    <objectType typeId="7ddce026-d470-482d-baec-c6258704aeb4" valueTypeId="aa511a62-3d33-4716-8187-7de021a7bf9e"/>
+    <refType typeId="bce79a35-f535-47d5-816a-afb63bcfdcae" valueTypeId="807ac0ac-e22f-48ce-9bad-513fe465853c"/>
+    <selectionType typeId="9cd112b5-1598-43bc-b043-364e78d411c6" valueTypeId="7a4d06f8-dcf0-41c4-8a30-2629db23cf18"/>
+    <listType typeId="7a924747-f609-4170-a41d-fd8a962c1a21" valueTypeId="fe251de8-d560-4734-a5a2-fd03c31b81b0"/>
+    <managerType typeId="c7ba07ad-bc82-4561-9780-7b631b34ddf0" valueTypeId="7452b3bc-dc04-415f-a557-199a3265f026"/>
+  </producedTypes>
+  <name>Задача1</name>
+  <useStandardCommands>true</useStandardCommands>
+  <inputByString>Task.Задача1.StandardAttribute.Description</inputByString>
+  <inputByString>Task.Задача1.StandardAttribute.Number</inputByString>
+  <fullTextSearchOnInputByString>DontUse</fullTextSearchOnInputByString>
+  <createOnInput>DontUse</createOnInput>
+  <dataLockControlMode>Managed</dataLockControlMode>
+  <fullTextSearch>Use</fullTextSearch>
+  <numberType>String</numberType>
+  <numberLength>9</numberLength>
+  <numberAllowedLength>Variable</numberAllowedLength>
+  <checkUnique>true</checkUnique>
+  <autonumbering>true</autonumbering>
+  <taskNumberAutoPrefix>DontUse</taskNumberAutoPrefix>
+  <descriptionLength>25</descriptionLength>
+  <defaultPresentation>AsDescription</defaultPresentation>
+  <editType>InDialog</editType>
+</mdclass:Task>

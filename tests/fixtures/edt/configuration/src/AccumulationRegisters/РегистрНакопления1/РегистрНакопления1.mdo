@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mdclass:AccumulationRegister xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:core="http://g5.1c.ru/v8/dt/mcore" xmlns:mdclass="http://g5.1c.ru/v8/dt/metadata/mdclass" uuid="d2426bbd-213a-4c27-b6be-2e339c9df072">
+  <producedTypes>
+    <selectionType typeId="41ebaef6-ab82-43f0-82ff-3341e322b0f0" valueTypeId="d816a2e6-a152-4f5d-8e19-8e59a0e89bb4"/>
+    <listType typeId="bca73fcf-9e83-4bb4-8417-d55f031fe40b" valueTypeId="237869a9-9c81-4b09-bf52-4d8ef131882b"/>
+    <managerType typeId="fe43b9eb-53ac-4cae-9038-0c1275c21961" valueTypeId="949f17fa-bd1a-4aae-9cee-8ddd25dedbf5"/>
+    <recordSetType typeId="014bfa14-97e4-4d95-a27b-971dc3a96f9f" valueTypeId="c8470eab-66ba-49a8-b144-0920bed4e94c"/>
+    <recordKeyType typeId="2b531ca1-4e42-46a3-94e7-76724ce2a9f3" valueTypeId="7ef58ee8-be38-4e42-bf07-927000cb03b0"/>
+    <recordType typeId="a2bee788-3f3e-4e19-87f1-102546c65929" valueTypeId="5c47024d-f878-4656-bb2f-2f632796d31b"/>
+  </producedTypes>
+  <name>РегистрНакопления1</name>
+  <useStandardCommands>true</useStandardCommands>
+  <dataLockControlMode>Managed</dataLockControlMode>
+  <enableTotalsSplitting>true</enableTotalsSplitting>
+  <resources uuid="26066f7c-338f-455e-857f-e24ee78bbe85">
+    <name>Ресурс1</name>
+    <type>
+      <types>Number</types>
+      <numberQualifiers>
+        <precision>10</precision>
+      </numberQualifiers>
+    </type>
+    <minValue xsi:type="core:UndefinedValue"/>
+    <maxValue xsi:type="core:UndefinedValue"/>
+    <fullTextSearch>Use</fullTextSearch>
+  </resources>
+  <attributes uuid="86447220-2fc3-448c-8c6e-6d2f0c116d3a">
+    <name>Реквизит1</name>
+    <type>
+      <types>String</types>
+      <stringQualifiers>
+        <length>10</length>
+      </stringQualifiers>
+    </type>
+    <minValue xsi:type="core:UndefinedValue"/>
+    <maxValue xsi:type="core:UndefinedValue"/>
+    <fullTextSearch>Use</fullTextSearch>
+  </attributes>
+  <dimensions uuid="cd32e5eb-c112-481b-9bcf-658388a53ea6">
+    <name>Измерение1</name>
+    <type>
+      <types>String</types>
+      <stringQualifiers>
+        <length>10</length>
+      </stringQualifiers>
+    </type>
+    <minValue xsi:type="core:UndefinedValue"/>
+    <maxValue xsi:type="core:UndefinedValue"/>
+    <fullTextSearch>Use</fullTextSearch>
+    <useInTotals>true</useInTotals>
+  </dimensions>
+</mdclass:AccumulationRegister>
