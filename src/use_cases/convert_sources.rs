@@ -12,6 +12,7 @@ use crate::platform::edt_session::{EdtSessionHostOptions, EdtSessionManager};
 use crate::platform::locator::UtilityType;
 use crate::platform::result::PlatformCommandResult;
 use crate::platform::utilities::PlatformUtilities;
+use crate::support::edt_project::{self, EdtProjectKind};
 use crate::support::error::AppError;
 use crate::support::fs::{
     ensure_dir, remove_path_if_exists, replace_dir_atomically, write_temp_dir_metadata, TempDirKind,
@@ -19,7 +20,7 @@ use crate::support::fs::{
 use crate::support::path::{nearest_existing_canonical_path, stable_path_identity};
 use crate::use_cases::context::{CommandName, ExecutionContext, InterruptionSafetyClass};
 use crate::use_cases::external_artifacts::{
-    discover_designer_external_artifacts, ExternalArtifactKind,
+    discover_designer_external_artifacts, parse_external_descriptor, ExternalArtifactKind,
 };
 use crate::use_cases::request::{ConvertRequest, ConvertScopeRequest};
 use crate::use_cases::result::{UseCaseFailure, UseCaseResult};
@@ -351,23 +352,25 @@ fn execute_with_dsl(
                 )
             })?;
 
-        validate_staging_output(resolved.direction, item, &staging_dir).map_err(|error| {
-            let _ = remove_path_if_exists(&staging_dir);
-            let message = error.to_string();
-            ConvertExecutionFailure::with_payload(
-                error,
-                result_snapshot(
-                    false,
-                    resolved.direction,
-                    resolved.scope,
-                    resolved.source_set.clone(),
-                    resolved.workspace_path.clone(),
-                    outputs.clone(),
-                    started,
-                    Some(message),
-                ),
-            )
-        })?;
+        validate_staging_output(resolved.direction, item, &import_options, &staging_dir).map_err(
+            |error| {
+                let _ = remove_path_if_exists(&staging_dir);
+                let message = error.to_string();
+                ConvertExecutionFailure::with_payload(
+                    error,
+                    result_snapshot(
+                        false,
+                        resolved.direction,
+                        resolved.scope,
+                        resolved.source_set.clone(),
+                        resolved.workspace_path.clone(),
+                        outputs.clone(),
+                        started,
+                        Some(message),
+                    ),
+                )
+            },
+        )?;
 
         if let Some(interruption) = context.interruption() {
             let _ = remove_path_if_exists(&staging_dir);
@@ -613,9 +616,16 @@ fn validate_selected_source(
     match direction {
         ConvertDirection::EdtToDesigner => {
             if source_set.purpose.is_external() {
-                discover_edt_external_projects(&source_set.name, path).map(|_| ())
+                discover_edt_external_projects(&source_set.name, source_set.purpose, path)
+                    .map(|_| ())
             } else {
-                validate_required_marker(path, ".project", "EDT source-set path")
+                validate_native_ordinary_edt_project(
+                    &source_set.name,
+                    source_set.purpose,
+                    path,
+                    "EDT source-set path",
+                    None,
+                )
             }
         }
         ConvertDirection::DesignerToEdt => {
@@ -678,16 +688,30 @@ fn validate_directory_path(path: &Path, label: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-fn validate_required_marker(path: &Path, marker: &str, label: &str) -> Result<(), AppError> {
-    let marker_path = path.join(marker);
-    if !marker_path.exists() {
-        return Err(AppError::Validation(format!(
-            "{label} must contain '{}': {}",
-            marker,
-            path.display()
-        )));
-    }
-    Ok(())
+fn validate_native_ordinary_edt_project(
+    source_set_name: &str,
+    purpose: SourceSetPurpose,
+    path: &Path,
+    label: &str,
+    expected_base_project: Option<&str>,
+) -> Result<(), AppError> {
+    let expected_kind = match purpose {
+        SourceSetPurpose::Configuration => EdtProjectKind::Configuration,
+        SourceSetPurpose::Extension => EdtProjectKind::Extension,
+        _ => {
+            return Err(AppError::Validation(format!(
+                "{label} for source-set '{source_set_name}' must resolve to an ordinary EDT project: {}",
+                path.display()
+            )));
+        }
+    };
+    edt_project::validate_native_ordinary_project(path, expected_kind, expected_base_project)
+        .map(|_| ())
+        .map_err(|error| {
+            AppError::Validation(format!(
+                "{label} for source-set '{source_set_name}' is not a valid native EDT project: {error}"
+            ))
+        })
 }
 
 fn validate_designer_layout(path: &Path, label: &str) -> Result<(), AppError> {
@@ -739,8 +763,12 @@ fn validate_designer_external_source(
 
 fn discover_edt_external_projects(
     source_set_name: &str,
+    purpose: SourceSetPurpose,
     path: &Path,
 ) -> Result<Vec<PathBuf>, AppError> {
+    let expected_kind = external_artifact_kind(purpose).ok_or_else(|| {
+        AppError::Validation(format!("source-set '{source_set_name}' is not external"))
+    })?;
     let mut projects = Vec::new();
     for entry in std::fs::read_dir(path).map_err(|error| {
         AppError::Runtime(format!(
@@ -752,15 +780,52 @@ fn discover_edt_external_projects(
                 "failed to read EDT external source-set entry for '{source_set_name}': {error}"
             ))
         })?;
-        let child = entry.path();
-        if child.is_dir() && child.join(".project").is_file() {
-            projects.push(child);
+        let file_type = entry.file_type().map_err(|error| {
+            AppError::Runtime(format!(
+                "failed to inspect EDT external source-set entry for '{source_set_name}': {error}"
+            ))
+        })?;
+        if file_type.is_symlink() || !file_type.is_dir() {
+            continue;
         }
+        let child = entry.path();
+        if !edt_project::project_descriptor_path(&child).is_file() {
+            continue;
+        }
+        edt_project::validate_native_external_project(&child).map_err(|error| {
+            AppError::Validation(format!(
+                "external EDT child project '{}' in source-set '{}' is invalid: {error}",
+                child.display(),
+                source_set_name
+            ))
+        })?;
+        let descriptor =
+            parse_external_descriptor(&edt_project::external_root_descriptor_path(&child))
+                .map_err(|error| match error {
+                    AppError::Validation(message) => AppError::Validation(format!(
+                        "external EDT child project '{}' in source-set '{}' is invalid: {message}",
+                        child.display(),
+                        source_set_name
+                    )),
+                    AppError::Runtime(message) => AppError::Runtime(message),
+                    AppError::Platform(message) => AppError::Platform(message),
+                    AppError::Config(error) => AppError::Config(error),
+                })?;
+        if descriptor.artifact_type != expected_kind {
+            return Err(AppError::Validation(format!(
+                "external EDT child project '{}' in source-set '{}' resolves to {}, expected {}",
+                child.display(),
+                source_set_name,
+                descriptor.artifact_type.root_tag(),
+                expected_kind.root_tag()
+            )));
+        }
+        projects.push(child);
     }
 
     if projects.is_empty() {
         return Err(AppError::Validation(format!(
-            "external EDT source-set '{source_set_name}' must contain at least one child project with .project"
+            "external EDT source-set '{source_set_name}' must contain at least one valid native EDT child project"
         )));
     }
 
@@ -947,30 +1012,11 @@ fn infer_runtime_base_project_name(
 }
 
 fn read_edt_project_name(path: &Path, label: &str) -> Result<String, AppError> {
-    let project_file = path.join(".project");
-    let contents = std::fs::read_to_string(&project_file).map_err(|error| {
-        AppError::Runtime(format!(
-            "failed to read {label} project file '{}': {error}",
-            project_file.display()
+    edt_project::read_project_name_from_dir(path).map_err(|error| {
+        AppError::Validation(format!(
+            "{label} must contain a valid EDT project name in '.project': {error}"
         ))
-    })?;
-    extract_xml_tag_text(&contents, "name")
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            AppError::Validation(format!(
-                "{label} must contain a non-empty EDT project name: {}",
-                project_file.display()
-            ))
-        })
-}
-
-fn extract_xml_tag_text(contents: &str, tag_name: &str) -> Option<String> {
-    let open_tag = format!("<{tag_name}>");
-    let close_tag = format!("</{tag_name}>");
-    let start = contents.find(&open_tag)? + open_tag.len();
-    let rest = &contents[start..];
-    let end = rest.find(&close_tag)?;
-    Some(rest[..end].trim().to_owned())
+    })
 }
 
 fn run_platform_conversion(
@@ -983,8 +1029,11 @@ fn run_platform_conversion(
     match direction {
         ConvertDirection::EdtToDesigner => {
             if item.purpose.is_external() {
-                let project_paths =
-                    discover_edt_external_projects(&item.source_set_name, &item.source_path)?;
+                let project_paths = discover_edt_external_projects(
+                    &item.source_set_name,
+                    item.purpose,
+                    &item.source_path,
+                )?;
                 let expected_kind = external_artifact_kind(item.purpose).ok_or_else(|| {
                     AppError::Validation(format!(
                         "source-set '{}' is not external",
@@ -1100,6 +1149,7 @@ fn ensure_platform_success(
 fn validate_staging_output(
     direction: ConvertDirection,
     item: &ResolvedConvertItem,
+    import_options: &ConvertImportOptions,
     staging_dir: &Path,
 ) -> Result<(), AppError> {
     match direction {
@@ -1112,9 +1162,16 @@ fn validate_staging_output(
         }
         ConvertDirection::DesignerToEdt => {
             if item.purpose.is_external() {
-                discover_edt_external_projects(&item.source_set_name, staging_dir).map(|_| ())
+                discover_edt_external_projects(&item.source_set_name, item.purpose, staging_dir)
+                    .map(|_| ())
             } else {
-                validate_required_marker(staging_dir, ".project", "EDT convert output")
+                validate_native_ordinary_edt_project(
+                    &item.source_set_name,
+                    item.purpose,
+                    staging_dir,
+                    "EDT convert output",
+                    import_options.base_project_name.as_deref(),
+                )
             }
         }
     }

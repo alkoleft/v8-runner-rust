@@ -20,6 +20,7 @@ use crate::platform::locator::UtilityType;
 use crate::platform::process::ProcessRunner;
 use crate::platform::result::PlatformCommandResult;
 use crate::platform::utilities::PlatformUtilities;
+use crate::support::edt_project::{self, EdtProjectKind};
 use crate::support::error::AppError;
 use crate::support::fs::{
     acquire_advisory_lock, ensure_dir, is_known_tool_name, metadata_sidecar_path,
@@ -68,6 +69,7 @@ type DumpExecutionFailure = UseCaseFailure<DumpResult>;
 #[derive(Debug, Clone)]
 struct ResolvedDumpTarget {
     source_set_name: String,
+    source_set_purpose: SourceSetPurpose,
     extension: Option<String>,
     target_path: PathBuf,
     canonical_target_path: PathBuf,
@@ -1045,8 +1047,12 @@ fn finalize_edt_dump(
     };
     ensure_import_success(resolved, &import_result)
         .map_err(|error| cleanup_staging_on_platform_failure(&staging_dir, error))?;
-    validate_edt_dump_staging_output(&staging_dir)
-        .map_err(|error| cleanup_staging_on_platform_failure(&staging_dir, error))?;
+    validate_edt_dump_staging_output(
+        &staging_dir,
+        resolved.source_set_purpose,
+        resolved.edt_base_project_name.as_deref(),
+    )
+    .map_err(|error| cleanup_staging_on_platform_failure(&staging_dir, error))?;
     validate_publish_target(resolved)
         .map_err(|error| cleanup_staging_on_platform_failure(&staging_dir, error))?;
 
@@ -1084,15 +1090,28 @@ fn finalize_edt_dump(
     ))
 }
 
-fn validate_edt_dump_staging_output(staging_dir: &Path) -> Result<(), AppError> {
-    if staging_dir.join(".project").is_file() {
-        Ok(())
-    } else {
-        Err(AppError::Validation(format!(
-            "EDT dump output must contain '.project': {}",
-            staging_dir.display()
-        )))
-    }
+fn validate_edt_dump_staging_output(
+    staging_dir: &Path,
+    expected_purpose: SourceSetPurpose,
+    expected_base_project: Option<&str>,
+) -> Result<(), AppError> {
+    let expected_kind = match expected_purpose {
+        SourceSetPurpose::Configuration => EdtProjectKind::Configuration,
+        SourceSetPurpose::Extension => EdtProjectKind::Extension,
+        _ => {
+            return Err(AppError::Validation(format!(
+                "EDT dump output validation supports only ordinary source-sets: {}",
+                staging_dir.display()
+            )));
+        }
+    };
+    edt_project::validate_native_ordinary_project(staging_dir, expected_kind, expected_base_project)
+        .map(|_| ())
+        .map_err(|error| {
+            AppError::Validation(format!(
+                "EDT dump output is not a valid native EDT project: {error}"
+            ))
+        })
 }
 
 fn ensure_import_success(
@@ -1467,6 +1486,7 @@ fn resolve_target(config: &AppConfig, args: &DumpArgs) -> Result<ResolvedDumpTar
 
     Ok(ResolvedDumpTarget {
         source_set_name: source_set.name.clone(),
+        source_set_purpose: source_set.purpose,
         extension,
         target_path,
         canonical_target_path,
@@ -1653,30 +1673,11 @@ fn resolve_dump_edt_base_project_name(config: &AppConfig) -> Result<String, AppE
 }
 
 fn read_edt_project_name(path: &Path, label: &str) -> Result<String, AppError> {
-    let project_file = path.join(".project");
-    let contents = std::fs::read_to_string(&project_file).map_err(|error| {
-        AppError::Runtime(format!(
-            "failed to read {label} project file '{}': {error}",
-            project_file.display()
+    edt_project::read_project_name_from_dir(path).map_err(|error| {
+        AppError::Validation(format!(
+            "{label} must contain a valid EDT project name in '.project': {error}"
         ))
-    })?;
-    extract_xml_tag_text(&contents, "name")
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            AppError::Validation(format!(
-                "{label} must contain a non-empty EDT project name: {}",
-                project_file.display()
-            ))
-        })
-}
-
-fn extract_xml_tag_text(contents: &str, tag_name: &str) -> Option<String> {
-    let open_tag = format!("<{tag_name}>");
-    let close_tag = format!("</{tag_name}>");
-    let start = contents.find(&open_tag)? + open_tag.len();
-    let rest = &contents[start..];
-    let end = rest.find(&close_tag)?;
-    Some(rest[..end].trim().to_owned())
+    })
 }
 
 fn build_designer_dsl<'a>(
@@ -2016,7 +2017,7 @@ mod tests {
             })
             .unwrap_or_default();
         let body = format!(
-            "args=\"$*\"\nout=\"\"\ntarget=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"/Out\" ]; then out=\"$arg\"; fi\n  if [ \"$prev\" = \"/DumpConfigToFiles\" ]; then target=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$out\" ]; then printf 'designer log for %s\\n' \"$args\" > \"$out\"; fi\nprintf '%s\\n' \"$args\" >> \"{}\"\n{}\nmkdir -p \"$target\"\nif printf '%s' \"$args\" | grep -F -q -- '-partial'; then\n  printf '<Partial />\\n' > \"$target/PartialOnly.xml\"\nelse\n  printf '<Configuration />\\n' > \"$target/Configuration.xml\"\nfi\nexit 0",
+            "args=\"$*\"\nout=\"\"\ntarget=\"\"\nextension_name=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"/Out\" ]; then out=\"$arg\"; fi\n  if [ \"$prev\" = \"/DumpConfigToFiles\" ]; then target=\"$arg\"; fi\n  if [ \"$prev\" = \"-Extension\" ]; then extension_name=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$out\" ]; then printf 'designer log for %s\\n' \"$args\" > \"$out\"; fi\nprintf '%s\\n' \"$args\" >> \"{}\"\n{}\nmkdir -p \"$target\"\nif [ -n \"$extension_name\" ]; then\n  config_xml='<Configuration><Properties><Name>ExtensionProject</Name></Properties><ConfigurationExtensionPurpose>Extension</ConfigurationExtensionPurpose></Configuration>'\nelse\n  config_xml='<Configuration><Properties><Name>BaseProject</Name></Properties></Configuration>'\nfi\nprintf '%s\\n' \"$config_xml\" > \"$target/Configuration.xml\"\nif printf '%s' \"$args\" | grep -F -q -- '-partial'; then\n  printf '<Partial />\\n' > \"$target/PartialOnly.xml\"\nfi\nexit 0",
             calls_log.display(),
             pattern_branch
         );
@@ -2033,7 +2034,7 @@ mod tests {
             })
             .unwrap_or_default();
         let body = format!(
-            "args=\"$*\"\ntarget=\"$(printf '%s' \"$args\" | awk '{{print $NF}}')\"\nprintf '%s\\n' \"$args\" >> \"{}\"\n{}\nmkdir -p \"$target\"\nprintf '<Configuration />\\n' > \"$target/Configuration.xml\"\nexit 0",
+            "args=\"$*\"\ntarget=\"$(printf '%s' \"$args\" | awk '{{print $NF}}')\"\nextension_name=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"-Extension\" ]; then extension_name=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nprintf '%s\\n' \"$args\" >> \"{}\"\n{}\nmkdir -p \"$target\"\nif [ -n \"$extension_name\" ]; then\n  printf '<Configuration><Properties><Name>ExtensionProject</Name></Properties><ConfigurationExtensionPurpose>Extension</ConfigurationExtensionPurpose></Configuration>\\n' > \"$target/Configuration.xml\"\nelse\n  printf '<Configuration><Properties><Name>BaseProject</Name></Properties></Configuration>\\n' > \"$target/Configuration.xml\"\nfi\nexit 0",
             calls_log.display(),
             pattern_branch
         );
@@ -2042,8 +2043,67 @@ mod tests {
 
     fn write_edt_import_script(path: &Path, calls_log: &Path) {
         let body = format!(
-            "args=\"$*\"\nprintf '%s\\n' \"$args\" >> \"{}\"\nproject=\"\"\nconfig_files=\"\"\nbase_project_name=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"--project\" ]; then project=\"$arg\"; fi\n  if [ \"$prev\" = \"--configuration-files\" ]; then config_files=\"$arg\"; fi\n  if [ \"$prev\" = \"--base-project-name\" ]; then base_project_name=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nsource_name=$(basename \"$config_files\")\nmkdir -p \"$project\"\ncase \"$source_name\" in\n  main)\n    imported_name=\"BaseProject\"\n    ;;\n  ext)\n    if [ \"$base_project_name\" != \"BaseProject\" ]; then\n      printf 'unexpected base project: %s\\n' \"$base_project_name\" >&2\n      exit 23\n    fi\n    imported_name=\"ExtensionProject\"\n    ;;\n  *)\n    imported_name=\"ImportedProject\"\n    ;;\nesac\nprintf '<projectDescription><name>%s</name></projectDescription>\\n' \"$imported_name\" > \"$project/.project\"\nexit 0",
-            calls_log.display()
+            r#"args="$*"
+printf '%s\n' "$args" >> "{}"
+project=""
+config_files=""
+base_project_name=""
+prev=""
+read_configuration_name() {{
+  config_file="$1/Configuration.xml"
+  if [ ! -f "$config_file" ]; then
+    printf 'ImportedProject'
+    return
+  fi
+  name=$(sed -n 's:.*<Name>\([^<][^<]*\)</Name>.*:\1:p' "$config_file" | head -n 1)
+  if [ -n "$name" ]; then
+    printf '%s' "$name"
+  else
+    printf 'ImportedProject'
+  fi
+}}
+configuration_is_extension() {{
+  config_file="$1/Configuration.xml"
+  [ -f "$config_file" ] && grep -q 'ConfigurationExtensionPurpose\|ObjectBelonging' "$config_file"
+}}
+for arg in "$@"; do
+  if [ "$prev" = "--project" ]; then project="$arg"; fi
+  if [ "$prev" = "--configuration-files" ]; then config_files="$arg"; fi
+  if [ "$prev" = "--base-project-name" ]; then base_project_name="$arg"; fi
+  prev="$arg"
+done
+imported_name=$(read_configuration_name "$config_files")
+mkdir -p "$project/DT-INF" "$project/src/Configuration"
+if configuration_is_extension "$config_files"; then
+  if [ "$base_project_name" != "BaseProject" ]; then
+    printf 'unexpected base project: %s\n' "$base_project_name" >&2
+    exit 23
+  fi
+  imported_nature="{}"
+  imported_base="BaseProject"
+else
+  imported_nature="{}"
+  imported_base=""
+fi
+cat > "$project/.project" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<projectDescription>
+  <name>$imported_name</name>
+  <natures>
+    <nature>$imported_nature</nature>
+  </natures>
+</projectDescription>
+EOF
+{{
+  if [ -n "$imported_base" ]; then printf 'Base-Project: %s\n' "$imported_base"; fi
+  printf 'Manifest-Version: 1.0\nRuntime-Version: 8.3.27\n'
+}} > "$project/DT-INF/PROJECT.PMF"
+printf '<Configuration />\n' > "$project/src/Configuration/Configuration.mdo"
+printf 'Procedure Test()\nEndProcedure\n' > "$project/src/Configuration/Module.bsl"
+exit 0"#,
+            calls_log.display(),
+            crate::support::edt_project::V8_EXTENSION_NATURE,
+            crate::support::edt_project::V8_CONFIGURATION_NATURE
         );
         write_script(path, &body);
     }
@@ -2204,19 +2264,57 @@ mod tests {
         .expect("ext bsl");
     }
 
+    fn write_native_edt_project(path: &Path, project_name: &str, nature: &str, base: Option<&str>) {
+        fs::create_dir_all(path.join("DT-INF")).expect("dt-inf");
+        fs::create_dir_all(path.join("src").join("Configuration")).expect("src");
+        let base_line = base
+            .map(|value| format!("Base-Project: {value}\n"))
+            .unwrap_or_default();
+        fs::write(
+            path.join(".project"),
+            format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<projectDescription>\n  <name>{project_name}</name>\n  <natures>\n    <nature>{nature}</nature>\n  </natures>\n</projectDescription>\n"
+            ),
+        )
+        .expect("project");
+        fs::write(
+            path.join("DT-INF").join("PROJECT.PMF"),
+            format!("{base_line}Manifest-Version: 1.0\nRuntime-Version: 8.3.27\n"),
+        )
+        .expect("manifest");
+        fs::write(
+            path.join("src")
+                .join("Configuration")
+                .join("Configuration.mdo"),
+            "<Configuration />\n",
+        )
+        .expect("configuration marker");
+        fs::write(
+            path.join("src").join("Configuration").join("Module.bsl"),
+            "Procedure Test()\nEndProcedure\n",
+        )
+        .expect("module marker");
+    }
+
     fn create_edt_source_tree(base_path: &Path) {
-        fs::create_dir_all(base_path.join("main")).expect("main");
-        fs::create_dir_all(base_path.join("ext")).expect("ext");
-        fs::write(
-            base_path.join("main").join(".project"),
-            "<projectDescription><name>BaseProject</name></projectDescription>\n",
-        )
-        .expect("main project");
-        fs::write(
-            base_path.join("ext").join(".project"),
-            "<projectDescription><name>ExtensionProject</name></projectDescription>\n",
-        )
-        .expect("ext project");
+        write_native_edt_project(
+            &base_path.join("main"),
+            "BaseProject",
+            crate::support::edt_project::V8_CONFIGURATION_NATURE,
+            None,
+        );
+        write_native_edt_project(
+            &base_path.join("ext"),
+            "ExtensionProject",
+            crate::support::edt_project::V8_EXTENSION_NATURE,
+            Some("BaseProject"),
+        );
+    }
+
+    fn assert_native_edt_project(path: &Path) {
+        assert!(path.join(".project").exists());
+        assert!(path.join("DT-INF").join("PROJECT.PMF").exists());
+        assert!(path.join("src/Configuration/Configuration.mdo").exists());
     }
 
     fn partial_list_paths(work_path: &Path) -> Vec<PathBuf> {
@@ -2481,6 +2579,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let resolved = super::ResolvedDumpTarget {
             source_set_name: "main".to_owned(),
+            source_set_purpose: SourceSetPurpose::Configuration,
             extension: None,
             target_path: dir.path().to_path_buf(),
             canonical_target_path: std::fs::canonicalize(dir.path()).expect("canonical"),
@@ -2532,6 +2631,7 @@ mod tests {
 
         let resolved = super::ResolvedDumpTarget {
             source_set_name: "main".to_owned(),
+            source_set_purpose: SourceSetPurpose::Configuration,
             extension: None,
             target_path: target.clone(),
             canonical_target_path: canonical.clone(),
@@ -2569,6 +2669,7 @@ mod tests {
 
         let resolved = super::ResolvedDumpTarget {
             source_set_name: "main".to_owned(),
+            source_set_purpose: SourceSetPurpose::Configuration,
             extension: None,
             target_path: target.clone(),
             canonical_target_path: canonical.clone(),
@@ -2601,6 +2702,7 @@ mod tests {
 
         let resolved = super::ResolvedDumpTarget {
             source_set_name: "main".to_owned(),
+            source_set_purpose: SourceSetPurpose::Configuration,
             extension: None,
             target_path: target.clone(),
             canonical_target_path: canonical.clone(),
@@ -2641,6 +2743,7 @@ mod tests {
 
         let resolved = super::ResolvedDumpTarget {
             source_set_name: "main".to_owned(),
+            source_set_purpose: SourceSetPurpose::Configuration,
             extension: None,
             target_path: target.clone(),
             canonical_target_path: canonical.clone(),
@@ -3195,7 +3298,7 @@ mod tests {
 
         assert!(result.ok);
         assert_eq!(result.target_path, base.join("main"));
-        assert!(base.join("main").join(".project").exists());
+        assert_native_edt_project(&base.join("main"));
         assert!(!base.join("main").join("stale.txt").exists());
         assert!(work
             .join("designer")
@@ -3242,7 +3345,7 @@ mod tests {
         .expect("dump");
 
         assert!(result.ok);
-        assert!(base.join("main").join(".project").exists());
+        assert_native_edt_project(&base.join("main"));
         assert!(work
             .join("designer")
             .join("main")
@@ -3287,7 +3390,7 @@ mod tests {
         .expect("dump");
 
         assert!(result.ok);
-        assert!(base.join("ext").join(".project").exists());
+        assert_native_edt_project(&base.join("ext"));
         let designer_calls = fs::read_to_string(designer_calls).expect("designer calls");
         let edt_calls = fs::read_to_string(edt_calls).expect("edt calls");
         assert!(designer_calls.contains("-Extension"));
@@ -3531,12 +3634,12 @@ mod tests {
                 .windows(2)
                 .find_map(|window| (window[0] == "--project").then(|| PathBuf::from(&window[1])))
                 .expect("project arg");
-            fs::create_dir_all(&project).expect("project dir");
-            fs::write(
-                project.join(".project"),
-                "<projectDescription><name>ImportedProject</name></projectDescription>\n",
-            )
-            .expect("project file");
+            write_native_edt_project(
+                &project,
+                "ImportedProject",
+                crate::support::edt_project::V8_CONFIGURATION_NATURE,
+                None,
+            );
             fs::remove_dir_all(&target_path).expect("remove target");
             symlink(&drift_path, &target_path).expect("retarget");
         });
@@ -3583,6 +3686,76 @@ mod tests {
             .filter(|name| name.starts_with(".dump-stage-"))
             .count();
         assert_eq!(leftover_stage_dirs, 0);
+    }
+
+    #[test]
+    fn validate_edt_dump_staging_output_rejects_wrong_ordinary_kind() {
+        let dir = tempdir().expect("tempdir");
+        write_native_edt_project(
+            dir.path(),
+            "ImportedProject",
+            crate::support::edt_project::V8_CONFIGURATION_NATURE,
+            None,
+        );
+
+        let error =
+            super::validate_edt_dump_staging_output(dir.path(), SourceSetPurpose::Extension, None)
+                .expect_err("expected wrong ordinary kind");
+
+        match error {
+            AppError::Validation(message) => {
+                assert!(message.contains("expected Extension"));
+            }
+            other => panic!("expected validation error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_edt_dump_staging_output_rejects_extension_without_base_project() {
+        let dir = tempdir().expect("tempdir");
+        write_native_edt_project(
+            dir.path(),
+            "ImportedExtension",
+            crate::support::edt_project::V8_EXTENSION_NATURE,
+            None,
+        );
+
+        let error =
+            super::validate_edt_dump_staging_output(dir.path(), SourceSetPurpose::Extension, None)
+                .expect_err("expected missing Base-Project validation error");
+
+        match error {
+            AppError::Validation(message) => {
+                assert!(message.contains("Base-Project"));
+            }
+            other => panic!("expected validation error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_edt_dump_staging_output_rejects_unexpected_extension_base_project() {
+        let dir = tempdir().expect("tempdir");
+        write_native_edt_project(
+            dir.path(),
+            "ImportedExtension",
+            crate::support::edt_project::V8_EXTENSION_NATURE,
+            Some("WrongBase"),
+        );
+
+        let error = super::validate_edt_dump_staging_output(
+            dir.path(),
+            SourceSetPurpose::Extension,
+            Some("BaseProject"),
+        )
+        .expect_err("expected mismatched Base-Project validation error");
+
+        match error {
+            AppError::Validation(message) => {
+                assert!(message.contains("BaseProject"));
+                assert!(message.contains("WrongBase"));
+            }
+            other => panic!("expected validation error, got {other:?}"),
+        }
     }
 
     #[test]

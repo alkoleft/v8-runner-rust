@@ -1006,8 +1006,6 @@ fn run_worker(inner: Arc<EdtSessionManagerInner>, factory: Arc<dyn SessionFactor
                 }));
             }
             Err(InteractiveProcessError::CommandTimeout { .. }) => {
-                queued.state.finish();
-                queued.reply(Err(EdtSessionError::RunningTimeout));
                 if kill_and_drop_session(&mut session, inner.active_pid.as_ref()) {
                     inner
                         .observer
@@ -1019,12 +1017,10 @@ fn run_worker(inner: Arc<EdtSessionManagerInner>, factory: Arc<dyn SessionFactor
                     },
                     EdtSessionDrainReason::Restart,
                 );
+                queued.state.finish();
+                queued.reply(Err(EdtSessionError::RunningTimeout));
             }
             Err(error) => {
-                queued.state.finish();
-                queued.reply(Err(EdtSessionError::SessionFailed {
-                    message: error.to_string(),
-                }));
                 if kill_and_drop_session(&mut session, inner.active_pid.as_ref()) {
                     inner
                         .observer
@@ -1036,6 +1032,10 @@ fn run_worker(inner: Arc<EdtSessionManagerInner>, factory: Arc<dyn SessionFactor
                     },
                     EdtSessionDrainReason::Restart,
                 );
+                queued.state.finish();
+                queued.reply(Err(EdtSessionError::SessionFailed {
+                    message: error.to_string(),
+                }));
             }
         }
     }
@@ -1250,6 +1250,12 @@ fn test_session_kill_registry() -> &'static Mutex<HashMap<u32, Arc<AtomicBool>>>
 }
 
 #[cfg(test)]
+fn next_test_session_pid() -> u32 {
+    static NEXT_PID: AtomicU32 = AtomicU32::new(41);
+    NEXT_PID.fetch_add(1, Ordering::SeqCst)
+}
+
+#[cfg(test)]
 fn register_test_session(pid: u32, killed: Arc<AtomicBool>) {
     test_session_kill_registry()
         .lock()
@@ -1293,7 +1299,7 @@ mod tests {
     };
     use std::collections::VecDeque;
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::{Duration, Instant};
@@ -1309,7 +1315,6 @@ mod tests {
         pre_dispatch_delay: Duration,
         post_mark_running_cancel: Option<CancellationToken>,
         shutdowns: Arc<AtomicUsize>,
-        next_pid: Arc<AtomicU32>,
     }
 
     impl FakeSessionFactory {
@@ -1322,7 +1327,6 @@ mod tests {
                 pre_dispatch_delay: Duration::ZERO,
                 post_mark_running_cancel: None,
                 shutdowns: Arc::new(AtomicUsize::new(0)),
-                next_pid: Arc::new(AtomicU32::new(41)),
             }
         }
 
@@ -1364,7 +1368,7 @@ mod tests {
                     Err(EdtSessionError::StartupFailed { message })
                 }
                 SessionPlan::Session(behaviors) => Ok(Box::new(FakeSession::new(
-                    self.next_pid.fetch_add(1, Ordering::SeqCst),
+                    super::next_test_session_pid(),
                     self.commands.clone(),
                     self.shutdowns.clone(),
                     behaviors,
@@ -1696,6 +1700,20 @@ mod tests {
         panic!("timed out waiting for {expected} commands");
     }
 
+    #[test]
+    fn fake_session_factories_allocate_distinct_pids() {
+        let first_factory = FakeSessionFactory::new(vec![SessionPlan::Session(vec![])]);
+        let second_factory = FakeSessionFactory::new(vec![SessionPlan::Session(vec![])]);
+
+        let first_session = first_factory.spawn_session().expect("first session");
+        let second_session = second_factory.spawn_session().expect("second session");
+
+        assert_ne!(
+            first_session.pid().expect("first pid"),
+            second_session.pid().expect("second pid")
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn single_flight_startup_reuses_one_session_for_multiple_calls() {
         let factory = FakeSessionFactory::new(vec![SessionPlan::Session(vec![
@@ -1712,31 +1730,19 @@ mod tests {
         ])]);
         let manager = manager(factory.clone(), 2, Duration::from_millis(50));
 
-        let first = tokio::spawn({
+        let first = {
             let manager = manager.clone();
             async move { manager.execute(request("cmd-1", 200)).await }
-        });
-        let second = tokio::spawn({
+        };
+        let second = {
             let manager = manager.clone();
             async move { manager.execute(request("cmd-2", 200)).await }
-        });
+        };
 
-        assert_eq!(
-            first
-                .await
-                .expect("first join")
-                .expect("first result")
-                .stdout,
-            "one"
-        );
-        assert_eq!(
-            second
-                .await
-                .expect("second join")
-                .expect("second result")
-                .stdout,
-            "two"
-        );
+        let (first_result, second_result) = tokio::join!(first, second);
+
+        assert_eq!(first_result.expect("first result").stdout, "one");
+        assert_eq!(second_result.expect("second result").stdout, "two");
         assert_eq!(factory.start_count(), 1);
         assert_eq!(
             factory.commands(),

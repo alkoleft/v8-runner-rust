@@ -60,8 +60,9 @@ v8-runner config init [--force] [--file <FILE>] [--connection <CONNECTION>] [--f
 - По умолчанию создаёт конфиг в текущем каталоге; путь можно переопределить через `--file` или глобальный `--config`.
 - Не перезаписывает существующий файл без `--force`.
 - Ищет Designer-исходники по `Configuration.xml`, EDT-проекты по `.project`, а внешние обработки и отчёты autodetect-ит только как aggregate-root source-set.
+- Для ordinary EDT type `CONFIGURATION`/`EXTENSION` выводится из `.project` natures (`V8ConfigurationNature` / `V8ExtensionNature`), runtime version берётся из `DT-INF/PROJECT.PMF`, `EXTENSION` дополнительно требует `Base-Project`, а valid native layout подтверждается `src/Configuration/Configuration.mdo`.
 - Для Designer external root нужны однородные top-level XML descriptors одного external-kind.
-- Для EDT external root нужны однородные direct child projects одного external-kind.
+- Для EDT external root нужны однородные direct child projects одного external-kind с валидными `.project`, `DT-INF/PROJECT.PMF`, `Base-Project` и canonical `src/root.xml`.
 - Mixed/ambiguous external roots не autodetect-ятся.
 - Не пишет synthetic `CONFIGURATION`: если autodiscovery не нашёл `CONFIGURATION`, команда завершается validation error.
 - При `--builder IBCMD` найденные external source-set считаются validation error и требуют `--builder DESIGNER` или ручной правки конфига.

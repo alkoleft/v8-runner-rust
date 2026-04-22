@@ -21,8 +21,8 @@ v8-runner config init
 - автопоиск опирается на имена файлов-маркеров и их содержимое, а не на имена каталогов;
 - Designer-исходники находятся по файлу `Configuration.xml`, а тип определяется по содержимому этого XML;
 - Designer external aggregate root autodetect-ится как один `source-set`, только если top-level XML descriptors каталога однородно классифицируются по содержимому как `ExternalDataProcessor` или `ExternalReport`;
-- EDT-проекты находятся по файлу `.project`, а для различения конфигурации, расширения и external project классифицируются по содержимому project-local XML descriptors;
-- EDT external aggregate root autodetect-ится как один `source-set`, только если direct child projects каталога однородно классифицируются как внешние обработки или внешние отчёты;
+- ordinary EDT-проекты находятся по файлу `.project`: `CONFIGURATION`/`EXTENSION` определяются по `V8ConfigurationNature` / `V8ExtensionNature`, runtime version читается из `DT-INF/PROJECT.PMF`, для `EXTENSION` дополнительно требуется `Base-Project`, а наличие native EDT layout подтверждается `src/Configuration/Configuration.mdo`;
+- EDT external aggregate root autodetect-ится как один `source-set`, только если direct child projects каталога однородно классифицируются как внешние обработки или внешние отчёты по canonical `src/root.xml` и имеют валидные `.project` / `DT-INF/PROJECT.PMF` / `Base-Project`;
 - mixed или ambiguous external roots не autodetect-ятся и остаются manual config case;
 - команда не пишет synthetic `CONFIGURATION`: если autodiscovery не нашёл ни одного `CONFIGURATION`, `config init` завершается validation error;
 - external `source-set` требуют `builder=DESIGNER`, поэтому при `--builder IBCMD` и найденных external root команда завершается validation error;
@@ -210,7 +210,7 @@ tests:
 
 - `EXTENSION` требует хотя бы один `CONFIGURATION`, но external-only конфиг допустим;
 - `name` должен быть уникальным;
-- для `format=EDT` ordinary `CONFIGURATION`/`EXTENSION` path должен быть valid EDT project root: каталог с `.project` и project-local XML descriptors, совпадающими с объявленным `type`;
+- для `format=EDT` ordinary `CONFIGURATION`/`EXTENSION` path должен быть valid EDT project root: каталог с `.project`, правильным `V8ConfigurationNature` / `V8ExtensionNature`, `DT-INF/PROJECT.PMF` c `Runtime-Version` и project-local native markers под `src` (`*.mdo`, `*.bsl`, `*.form`);
 - для `format=EDT` external path должен быть каталогом и содержать хотя бы один child project с `.project`, а все найденные child projects должны совпадать с объявленным external `type`;
 - для `format=DESIGNER` external path должен быть aggregate root с top-level XML descriptors, совпадающими с объявленным `type`;
 - для `format=EDT` generated Designer copy идёт в `workPath/designer/<name>`.

@@ -10,6 +10,8 @@ use serde_json::{json, Value};
 use tempfile::tempdir;
 
 const ACCEPT_BOTH: &str = "application/json, text/event-stream";
+const V8_CONFIGURATION_NATURE: &str = "com._1c.g5.v8.dt.core.V8ConfigurationNature";
+const EDT_RUNTIME_VERSION: &str = "8.3.27";
 
 fn reserve_local_address() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral listener");
@@ -158,13 +160,37 @@ fn write_ibcmd_script(path: &Path, calls_log: &Path, fail_pattern: Option<&str>)
 
 fn write_edt_configuration_source(path: &Path, project_name: &str) {
     fs::create_dir_all(path.join("metadata")).expect("metadata");
+    fs::create_dir_all(path.join("DT-INF")).expect("dt-inf");
+    fs::create_dir_all(path.join("src").join("Configuration")).expect("src");
     fs::write(
         path.join(".project"),
-        format!("<projectDescription><name>{project_name}</name></projectDescription>\n"),
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<projectDescription>\n  <name>{project_name}</name>\n  <natures>\n    <nature>{V8_CONFIGURATION_NATURE}</nature>\n  </natures>\n</projectDescription>\n"
+        ),
     )
     .expect("project");
-    fs::write(path.join("metadata").join("Configuration.xml"), "<Configuration />\n")
-        .expect("descriptor");
+    fs::write(
+        path.join("DT-INF").join("PROJECT.PMF"),
+        format!("Manifest-Version: 1.0\nRuntime-Version: {EDT_RUNTIME_VERSION}\n"),
+    )
+    .expect("manifest");
+    fs::write(
+        path.join("metadata").join("Configuration.xml"),
+        "<Configuration />\n",
+    )
+    .expect("descriptor");
+    fs::write(
+        path.join("src")
+            .join("Configuration")
+            .join("Configuration.mdo"),
+        "<Configuration />\n",
+    )
+    .expect("configuration marker");
+    fs::write(
+        path.join("src").join("Configuration").join("Module.bsl"),
+        "Procedure Test()\nEndProcedure\n",
+    )
+    .expect("module marker");
 }
 
 fn write_http_edt_config(

@@ -11,6 +11,10 @@ use std::time::{Duration, Instant};
 use assert_cmd::prelude::*;
 use tempfile::tempdir;
 
+const V8_CONFIGURATION_NATURE: &str = "com._1c.g5.v8.dt.core.V8ConfigurationNature";
+const V8_EXTENSION_NATURE: &str = "com._1c.g5.v8.dt.core.V8ExtensionNature";
+const EDT_RUNTIME_VERSION: &str = "8.3.27";
+
 fn make_executable(path: &Path) {
     let mut perms = fs::metadata(path).expect("metadata").permissions();
     perms.set_mode(0o755);
@@ -25,24 +29,62 @@ fn write_script(path: &Path, body: &str) {
     make_executable(path);
 }
 
-fn write_edt_configuration_source(path: &Path, project_name: &str) {
+fn write_native_edt_project(
+    path: &Path,
+    project_name: &str,
+    nature: &str,
+    base_project: Option<&str>,
+) {
     fs::create_dir_all(path.join("metadata")).expect("metadata");
+    fs::create_dir_all(path.join("DT-INF")).expect("dt-inf");
+    fs::create_dir_all(path.join("src").join("Configuration")).expect("src");
     fs::write(
         path.join(".project"),
-        format!("<projectDescription><name>{project_name}</name></projectDescription>"),
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<projectDescription>\n  <name>{project_name}</name>\n  <natures>\n    <nature>{nature}</nature>\n  </natures>\n</projectDescription>\n"
+        ),
     )
     .expect("project");
-    fs::write(path.join("metadata").join("Configuration.xml"), "<Configuration />")
-        .expect("descriptor");
+    let base_project_line = base_project
+        .map(|value| format!("Base-Project: {value}\n"))
+        .unwrap_or_default();
+    fs::write(
+        path.join("DT-INF").join("PROJECT.PMF"),
+        format!(
+            "{base_project_line}Manifest-Version: 1.0\nRuntime-Version: {EDT_RUNTIME_VERSION}\n"
+        ),
+    )
+    .expect("manifest");
+    fs::write(
+        path.join("src")
+            .join("Configuration")
+            .join("Configuration.mdo"),
+        "<Configuration />\n",
+    )
+    .expect("configuration marker");
+    fs::write(
+        path.join("src").join("Configuration").join("Module.bsl"),
+        "Procedure Test()\nEndProcedure\n",
+    )
+    .expect("module marker");
+}
+
+fn write_edt_configuration_source(path: &Path, project_name: &str) {
+    write_native_edt_project(path, project_name, V8_CONFIGURATION_NATURE, None);
+    fs::write(
+        path.join("metadata").join("Configuration.xml"),
+        "<Configuration />",
+    )
+    .expect("descriptor");
 }
 
 fn write_edt_extension_source(path: &Path, project_name: &str) {
-    fs::create_dir_all(path.join("metadata")).expect("metadata");
-    fs::write(
-        path.join(".project"),
-        format!("<projectDescription><name>{project_name}</name></projectDescription>"),
-    )
-    .expect("project");
+    write_native_edt_project(
+        path,
+        project_name,
+        V8_EXTENSION_NATURE,
+        Some("configuration"),
+    );
     fs::write(
         path.join("metadata").join("Configuration.xml"),
         "<Configuration><ConfigurationExtensionPurpose>Extension</ConfigurationExtensionPurpose></Configuration>",

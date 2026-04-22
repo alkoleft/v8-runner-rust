@@ -6,12 +6,12 @@ pub mod build_project;
 pub mod check_syntax;
 /// Config bootstrap use case.
 pub mod config_init;
-/// Source-format conversion use case.
-pub mod convert_sources;
 /// Extension properties orchestration use case.
 pub mod configure_extensions;
 /// Per-invocation execution metadata shared across transports.
 pub mod context;
+/// Source-format conversion use case.
+pub mod convert_sources;
 /// Dump orchestration use case.
 pub mod dump_config;
 /// Shared discovery and preparation helpers for external artifacts.

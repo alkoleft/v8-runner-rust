@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 
 use crate::config::model::{AppConfig, SourceSetConfig, SourceSetPurpose};
 use crate::platform::edt::EdtDsl;
+use crate::support::edt_project;
 use crate::support::error::AppError;
 use crate::support::fs::{ensure_dir, remove_path_if_exists};
 use crate::use_cases::build_project::ensure_platform_success as ensure_build_platform_success;
@@ -193,35 +194,32 @@ fn discover_edt_items(
                 "failed to read EDT external source-set entry: {error}"
             ))
         })?;
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let project_file = path.join(".project");
-        if !project_file.is_file() {
-            continue;
-        }
-        let logical_name = extract_xml_tag_text(
-            &std::fs::read_to_string(&project_file).map_err(|error| {
-                AppError::Runtime(format!(
-                    "failed to read EDT project '{}': {error}",
-                    project_file.display()
-                ))
-            })?,
-            "name",
-        )
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            AppError::Validation(format!(
-                "EDT external project '{}' must contain non-empty <name>",
-                project_file.display()
+        let file_type = entry.file_type().map_err(|error| {
+            AppError::Runtime(format!(
+                "failed to inspect EDT external source-set entry: {error}"
             ))
         })?;
+        if file_type.is_symlink() || !file_type.is_dir() {
+            continue;
+        }
+        let path = entry.path();
+        let project =
+            edt_project::validate_native_external_project(&path).map_err(AppError::Validation)?;
+        let root_xml = edt_project::external_root_descriptor_path(&path);
+        let descriptor = parse_external_descriptor(&root_xml)?;
+        if descriptor.artifact_type != expected_kind {
+            return Err(AppError::Validation(format!(
+                "external EDT project '{}' contains '{}', expected {}",
+                path.display(),
+                root_xml.display(),
+                expected_kind.root_tag()
+            )));
+        }
         items.push(ExternalArtifactDescriptor {
-            stable_id: stable_id_for_path(&logical_name, &path),
-            logical_name,
+            stable_id: stable_id_for_path(&project.name, &path),
+            logical_name: project.name,
             artifact_type: expected_kind,
-            descriptor_xml_path: project_file,
+            descriptor_xml_path: root_xml,
             root_path: path,
         });
     }
@@ -234,12 +232,12 @@ fn discover_edt_items(
     Ok(items)
 }
 
-struct ParsedExternalDescriptor {
-    logical_name: String,
-    artifact_type: ExternalArtifactKind,
+pub(crate) struct ParsedExternalDescriptor {
+    pub logical_name: String,
+    pub artifact_type: ExternalArtifactKind,
 }
 
-fn parse_external_descriptor(path: &Path) -> Result<ParsedExternalDescriptor, AppError> {
+pub(crate) fn parse_external_descriptor(path: &Path) -> Result<ParsedExternalDescriptor, AppError> {
     let contents = std::fs::read_to_string(path).map_err(|error| {
         AppError::Runtime(format!(
             "failed to read external descriptor '{}': {error}",
@@ -349,16 +347,6 @@ fn stable_id_for_path(logical_name: &str, path: &Path) -> String {
     let digest = format!("{:x}", hasher.finalize());
     format!("{}-{}", sanitize_file_stem(logical_name), &digest[..8])
 }
-
-fn extract_xml_tag_text(contents: &str, tag_name: &str) -> Option<String> {
-    let open_tag = format!("<{tag_name}>");
-    let close_tag = format!("</{tag_name}>");
-    let start = contents.find(&open_tag)? + open_tag.len();
-    let rest = &contents[start..];
-    let end = rest.find(&close_tag)?;
-    Some(rest[..end].trim().to_owned())
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -490,12 +478,26 @@ mod tests {
         let base = dir.path().join("base");
         let work = dir.path().join("work");
         let source = base.join("designer/reports/ReportOne");
-        fs::create_dir_all(&source).expect("source");
+        fs::create_dir_all(source.join("DT-INF")).expect("source dt-inf");
+        fs::create_dir_all(source.join("src")).expect("source src");
         fs::write(
             source.join(".project"),
-            "<projectDescription><name>Report One</name></projectDescription>",
+            format!(
+                "<projectDescription><name>Report One</name><natures><nature>{}</nature></natures></projectDescription>",
+                crate::support::edt_project::V8_EXTERNAL_OBJECTS_NATURE
+            ),
         )
         .expect("project");
+        fs::write(
+            source.join("DT-INF").join("PROJECT.PMF"),
+            "Base-Project: BaseProject\nManifest-Version: 1.0\nRuntime-Version: 8.3.27\n",
+        )
+        .expect("manifest");
+        fs::write(
+            source.join("src").join("root.xml"),
+            "<ExternalReport><Properties><Name>Report One</Name></Properties></ExternalReport>",
+        )
+        .expect("root xml");
         let edt = dir.path().join("edt");
         fs::create_dir_all(&edt).expect("edt");
         let binary = edt.join("1cedtcli");

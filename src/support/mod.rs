@@ -1,3 +1,4 @@
+pub mod edt_project;
 pub mod error;
 pub mod fs;
 pub mod logging;

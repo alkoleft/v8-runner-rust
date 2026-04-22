@@ -48,7 +48,7 @@ cargo build --release
 ./target/release/v8-runner config init
 ```
 
-Команда сканирует текущий каталог, опирается на файлы-маркеры и их содержимое: ищет Designer-исходники по `Configuration.xml`, EDT-проекты по `.project`, определяет `source-set[].type` по содержимому найденных XML, autodetect-ит aggregate-root каталоги внешних обработок и отчётов и не перезаписывает существующий файл без `--force`. Для Designer external root нужен однородный набор top-level XML дескрипторов, для EDT external root — однородные direct child projects одного external-kind. Mixed/ambiguous external roots не автогенерируются. Если autodiscovery не нашёл ни одного `CONFIGURATION` или external source-set требует `--builder DESIGNER`, команда завершится validation error вместо записи phantom-конфига.
+Команда сканирует текущий каталог, опирается на файлы-маркеры и их содержимое: ищет Designer-исходники по `Configuration.xml`, EDT-проекты по `.project`, определяет ordinary EDT `source-set[].type` по `V8ConfigurationNature` / `V8ExtensionNature`, читает runtime version из `DT-INF/PROJECT.PMF`, для `EXTENSION` дополнительно требует `Base-Project`, а native EDT layout подтверждает по `src/Configuration/Configuration.mdo`. Для Designer external root нужен однородный набор top-level XML дескрипторов, для EDT external root — однородные direct child projects одного external-kind с валидными `.project`, `DT-INF/PROJECT.PMF`, `Base-Project` и canonical `src/root.xml`. Mixed/ambiguous external roots не автогенерируются. Если autodiscovery не нашёл ни одного `CONFIGURATION` или external source-set требует `--builder DESIGNER`, команда завершится validation error вместо записи phantom-конфига.
 
 Или создайте минимальный `v8project.yaml` вручную:
 

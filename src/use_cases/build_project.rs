@@ -21,6 +21,7 @@ use crate::platform::locator::UtilityType;
 use crate::platform::process::ProcessRunner;
 use crate::platform::result::PlatformCommandResult;
 use crate::platform::utilities::PlatformUtilities;
+use crate::support::edt_project;
 use crate::support::error::AppError;
 use crate::support::temp::{partial_list_file, platform_logs_dir, reserved_source_set_dir};
 use crate::use_cases::context::{ExecutionContext, InterruptionSafetyClass};
@@ -1410,20 +1411,21 @@ fn run_build_edt(
                 }
                 Ok(AnalysisOutcome::Changes { changes, prepared }) => {
                     log_change_analysis(source_set.name.as_str(), &changes);
-                    let generated_load_decision =
-                        if source_set.purpose == SourceSetPurpose::Extension {
-                            debug!(
+                    let generated_load_decision = if source_set.purpose
+                        == SourceSetPurpose::Extension
+                    {
+                        debug!(
                                 source_set = source_set.name.as_str(),
                                 "generated designer change analysis decision: forcing full load for EDT extension source-set"
                             );
-                            LoadDecision::Full
-                        } else {
-                            partial_load::decide(
-                                &changes,
-                                designer_context.path(),
-                                config.build.partial_load_threshold,
-                            )
-                        };
+                        LoadDecision::Full
+                    } else {
+                        partial_load::decide(
+                            &changes,
+                            designer_context.path(),
+                            config.build.partial_load_threshold,
+                        )
+                    };
                     match generated_load_decision {
                         LoadDecision::Partial(paths) => {
                             debug!(
@@ -1667,7 +1669,7 @@ fn execute_edt_export_step(
         return Err(error);
     }
     let export_target = reserved_source_set_dir(&config.work_path, &source_set.name);
-    let project_name = resolve_edt_project_name(source_set, edt_context);
+    let project_name = resolve_edt_project_name(source_set, edt_context)?;
     recreate_directory(&export_target).map_err(|error| {
         AppError::Runtime(format!(
             "failed to prepare EDT export directory '{}': {error}",
@@ -1686,22 +1688,17 @@ fn execute_edt_export_step(
 fn resolve_edt_project_name(
     source_set: &SourceSetConfig,
     edt_context: &SourceSetContext,
-) -> String {
-    let project_file = edt_context.path().join(".project");
-    std::fs::read_to_string(&project_file)
-        .ok()
-        .and_then(|contents| extract_xml_tag_text(&contents, "name"))
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| source_set.name.clone())
-}
-
-fn extract_xml_tag_text(contents: &str, tag_name: &str) -> Option<String> {
-    let open_tag = format!("<{tag_name}>");
-    let close_tag = format!("</{tag_name}>");
-    let start = contents.find(&open_tag)? + open_tag.len();
-    let rest = &contents[start..];
-    let end = rest.find(&close_tag)?;
-    Some(rest[..end].trim().to_owned())
+) -> Result<String, AppError> {
+    edt_project::read_project_descriptor_from_dir(edt_context.path())
+        .map_err(AppError::Validation)?
+        .map(|project| project.name)
+        .ok_or_else(|| {
+            AppError::Validation(format!(
+                "EDT source-set '{}' must contain a valid '.project' with projectDescription/name: {}",
+                source_set.name,
+                edt_context.path().display()
+            ))
+        })
 }
 
 fn recreate_directory(path: &Path) -> std::io::Result<()> {
@@ -2490,8 +2487,53 @@ mod tests {
     }
 
     fn create_source_tree(base_path: &Path) {
+        fs::create_dir_all(base_path.join("main").join("DT-INF")).expect("main dt-inf");
+        fs::create_dir_all(base_path.join("main").join("src").join("Configuration"))
+            .expect("main edt marker dir");
         fs::create_dir_all(base_path.join("main").join("Catalogs.Items")).expect("main dir");
+        fs::write(
+            base_path.join("main").join(".project"),
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<projectDescription>\n  <name>main</name>\n  <natures>\n    <nature>com._1c.g5.v8.dt.core.V8ConfigurationNature</nature>\n  </natures>\n</projectDescription>\n",
+        )
+        .expect("main project");
+        fs::write(
+            base_path.join("main").join("DT-INF").join("PROJECT.PMF"),
+            "Manifest-Version: 1.0\nRuntime-Version: 8.3.27\n",
+        )
+        .expect("main manifest");
+        fs::write(
+            base_path
+                .join("main")
+                .join("src")
+                .join("Configuration")
+                .join("Configuration.mdo"),
+            "<Configuration />\n",
+        )
+        .expect("main edt marker");
+
+        fs::create_dir_all(base_path.join("ext").join("DT-INF")).expect("ext dt-inf");
+        fs::create_dir_all(base_path.join("ext").join("src").join("Configuration"))
+            .expect("ext edt marker dir");
         fs::create_dir_all(base_path.join("ext").join("CommonModules")).expect("ext dir");
+        fs::write(
+            base_path.join("ext").join(".project"),
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<projectDescription>\n  <name>ext</name>\n  <natures>\n    <nature>com._1c.g5.v8.dt.core.V8ExtensionNature</nature>\n  </natures>\n</projectDescription>\n",
+        )
+        .expect("ext project");
+        fs::write(
+            base_path.join("ext").join("DT-INF").join("PROJECT.PMF"),
+            "Base-Project: main\nManifest-Version: 1.0\nRuntime-Version: 8.3.27\n",
+        )
+        .expect("ext manifest");
+        fs::write(
+            base_path
+                .join("ext")
+                .join("src")
+                .join("Configuration")
+                .join("Configuration.mdo"),
+            "<Configuration />\n",
+        )
+        .expect("ext edt marker");
         fs::write(
             base_path
                 .join("main")
@@ -2857,7 +2899,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn edt_build_falls_back_to_source_set_name_when_dot_project_is_missing() {
+    fn edt_build_requires_valid_dot_project_for_project_name() {
         let dir = tempdir().expect("tempdir");
         let base = dir.path().join("base");
         let work = dir.path().join("work");
@@ -2887,17 +2929,19 @@ mod tests {
         )
         .expect("modify ext");
 
-        let result = run_build(
+        let error = run_build(
             &config,
             &BuildArgs {
                 full_rebuild: false,
             },
         )
-        .expect("build");
-        let edt_calls_text = fs::read_to_string(&edt_calls).expect("edt calls");
+        .expect_err("build should fail without valid .project");
 
-        assert!(result.ok);
-        assert!(edt_calls_text.contains("export --project-name client_mcp"));
+        assert_eq!(error.error.kind(), UseCaseErrorKind::Validation);
+        assert!(error
+            .error
+            .message()
+            .contains("must contain a valid '.project'"));
     }
 
     #[cfg(unix)]
@@ -2924,8 +2968,7 @@ mod tests {
         write_designer_script(&platform_script, &designer_calls, None);
         write_edt_script(&edt_script, &edt_calls, None);
 
-        let mut config =
-            build_edt_config(&base, &work, &dir.path().join("platform"), &edt_script);
+        let mut config = build_edt_config(&base, &work, &dir.path().join("platform"), &edt_script);
         config.source_sets = vec![SourceSetConfig {
             name: "client_mcp".to_owned(),
             purpose: SourceSetPurpose::Extension,
@@ -3081,8 +3124,7 @@ mod tests {
         );
         write_edt_script(&edt_script, &edt_calls, None);
 
-        let mut config =
-            build_edt_config(&base, &work, &dir.path().join("platform"), &edt_script);
+        let mut config = build_edt_config(&base, &work, &dir.path().join("platform"), &edt_script);
         config.source_sets = vec![SourceSetConfig {
             name: "client_mcp".to_owned(),
             purpose: SourceSetPurpose::Extension,

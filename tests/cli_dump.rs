@@ -8,6 +8,9 @@ use assert_cmd::prelude::*;
 use serde_json::Value;
 use tempfile::tempdir;
 
+const V8_CONFIGURATION_NATURE: &str = "com._1c.g5.v8.dt.core.V8ConfigurationNature";
+const EDT_RUNTIME_VERSION: &str = "8.3.27";
+
 fn make_executable(path: &Path) {
     let mut perms = fs::metadata(path).expect("metadata").permissions();
     perms.set_mode(0o755);
@@ -49,21 +52,68 @@ fn write_designer_dump_script_for_edt(path: &Path, calls_log: &Path) {
 
 fn write_edt_import_script(path: &Path, calls_log: &Path) {
     let body = format!(
-        "args=\"$*\"\nprintf '%s\\n' \"$args\" >> \"{}\"\nproject=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"--project\" ]; then project=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nmkdir -p \"$project\"\nprintf '<projectDescription><name>BaseProject</name></projectDescription>\\n' > \"$project/.project\"\nexit 0",
-        calls_log.display()
+        r#"args="$*"
+printf '%s\n' "$args" >> "{}"
+project=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "--project" ]; then project="$arg"; fi
+  prev="$arg"
+done
+mkdir -p "$project/DT-INF" "$project/src/Configuration"
+cat > "$project/.project" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<projectDescription>
+  <name>BaseProject</name>
+  <natures>
+    <nature>{}</nature>
+  </natures>
+</projectDescription>
+EOF
+printf 'Manifest-Version: 1.0\nRuntime-Version: {}\n' > "$project/DT-INF/PROJECT.PMF"
+printf '<Configuration />\n' > "$project/src/Configuration/Configuration.mdo"
+printf 'Procedure Test()\nEndProcedure\n' > "$project/src/Configuration/Module.bsl"
+exit 0"#,
+        calls_log.display(),
+        V8_CONFIGURATION_NATURE,
+        EDT_RUNTIME_VERSION
     );
     write_script(path, &body);
 }
 
+fn assert_native_edt_project(path: &Path) {
+    assert!(path.join(".project").exists());
+    assert!(path.join("DT-INF").join("PROJECT.PMF").exists());
+    assert!(path.join("src/Configuration/Configuration.mdo").exists());
+}
+
 fn write_edt_configuration_source(path: &Path, project_name: &str) {
-    fs::create_dir_all(path.join("metadata")).expect("metadata");
+    fs::create_dir_all(path.join("DT-INF")).expect("dt-inf");
+    fs::create_dir_all(path.join("src").join("Configuration")).expect("src");
     fs::write(
         path.join(".project"),
-        format!("<projectDescription><name>{project_name}</name></projectDescription>\n"),
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<projectDescription>\n  <name>{project_name}</name>\n  <natures>\n    <nature>{V8_CONFIGURATION_NATURE}</nature>\n  </natures>\n</projectDescription>\n"
+        ),
     )
     .expect("project");
-    fs::write(path.join("metadata").join("Configuration.xml"), "<Configuration />\n")
-        .expect("descriptor");
+    fs::write(
+        path.join("DT-INF").join("PROJECT.PMF"),
+        format!("Manifest-Version: 1.0\nRuntime-Version: {EDT_RUNTIME_VERSION}\n"),
+    )
+    .expect("manifest");
+    fs::write(
+        path.join("src")
+            .join("Configuration")
+            .join("Configuration.mdo"),
+        "<Configuration />\n",
+    )
+    .expect("configuration marker");
+    fs::write(
+        path.join("src").join("Configuration").join("Module.bsl"),
+        "Procedure Test()\nEndProcedure\n",
+    )
+    .expect("module marker");
 }
 
 fn write_config(path: &Path, base_path: &Path, work_path: &Path, platform_path: &Path) {
@@ -260,7 +310,7 @@ fn dump_edt_full_json_success_updates_designer_mirror_and_edt_target() {
         payload["data"]["target_path"],
         base_path.join("main").display().to_string()
     );
-    assert!(base_path.join("main").join(".project").exists());
+    assert_native_edt_project(&base_path.join("main"));
     assert!(!base_path.join("main").join("old.txt").exists());
     assert!(work_path
         .join("designer")

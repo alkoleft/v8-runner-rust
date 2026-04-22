@@ -47,9 +47,7 @@ pub fn free_function_tokens(path: &Path, fn_name: &str) -> String {
     file.items
         .iter()
         .find_map(|item| match item {
-            Item::Fn(item_fn)
-                if !has_cfg_test(&item_fn.attrs) && item_fn.sig.ident == fn_name =>
-            {
+            Item::Fn(item_fn) if !has_cfg_test(&item_fn.attrs) && item_fn.sig.ident == fn_name => {
                 Some(normalize_tokens(item_fn))
             }
             _ => None,
@@ -72,14 +70,17 @@ pub fn trait_impl_method_tokens(
                     && impl_trait_name(item_impl).as_deref() == Some(trait_name)
                     && impl_self_type(item_impl).as_deref() == Some(self_ty) =>
             {
-                item_impl.items.iter().find_map(|impl_item| match impl_item {
-                    ImplItem::Fn(method)
-                        if !has_cfg_test(&method.attrs) && method.sig.ident == fn_name =>
-                    {
-                        Some(normalize_tokens(method))
-                    }
-                    _ => None,
-                })
+                item_impl
+                    .items
+                    .iter()
+                    .find_map(|impl_item| match impl_item {
+                        ImplItem::Fn(method)
+                            if !has_cfg_test(&method.attrs) && method.sig.ident == fn_name =>
+                        {
+                            Some(normalize_tokens(method))
+                        }
+                        _ => None,
+                    })
             }
             _ => None,
         })
@@ -182,12 +183,16 @@ fn has_cfg_test(attrs: &[Attribute]) -> bool {
 fn cfg_requires_test(body: &str) -> bool {
     match body {
         "test" => true,
-        _ if body.starts_with("all(") && body.ends_with(')') => split_cfg_args(&body[4..body.len() - 1])
-            .into_iter()
-            .any(cfg_requires_test),
-        _ if body.starts_with("any(") && body.ends_with(')') => split_cfg_args(&body[4..body.len() - 1])
-            .into_iter()
-            .all(cfg_requires_test),
+        _ if body.starts_with("all(") && body.ends_with(')') => {
+            split_cfg_args(&body[4..body.len() - 1])
+                .into_iter()
+                .any(cfg_requires_test)
+        }
+        _ if body.starts_with("any(") && body.ends_with(')') => {
+            split_cfg_args(&body[4..body.len() - 1])
+                .into_iter()
+                .all(cfg_requires_test)
+        }
         _ => false,
     }
 }

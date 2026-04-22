@@ -9,6 +9,10 @@ use insta::assert_debug_snapshot;
 use serde_json::Value;
 use tempfile::tempdir;
 
+const V8_CONFIGURATION_NATURE: &str = "com._1c.g5.v8.dt.core.V8ConfigurationNature";
+const V8_EXTENSION_NATURE: &str = "com._1c.g5.v8.dt.core.V8ExtensionNature";
+const EDT_RUNTIME_VERSION: &str = "8.3.27";
+
 const JUNIT_SMOKE_REPORT_FIXTURE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/parsers/junit_smoke_report.xml"
@@ -76,6 +80,45 @@ fn write_edt_script(path: &Path, calls_log: &Path) {
         calls_log.display()
     );
     write_script(path, &body);
+}
+
+fn write_native_edt_project(
+    path: &Path,
+    project_name: &str,
+    nature: &str,
+    base_project: Option<&str>,
+) {
+    fs::create_dir_all(path.join("DT-INF")).expect("dt-inf");
+    fs::create_dir_all(path.join("src").join("Configuration")).expect("src");
+    fs::write(
+        path.join(".project"),
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<projectDescription>\n  <name>{project_name}</name>\n  <natures>\n    <nature>{nature}</nature>\n  </natures>\n</projectDescription>\n"
+        ),
+    )
+    .expect("project");
+    let base_project_line = base_project
+        .map(|value| format!("Base-Project: {value}\n"))
+        .unwrap_or_default();
+    fs::write(
+        path.join("DT-INF").join("PROJECT.PMF"),
+        format!(
+            "{base_project_line}Manifest-Version: 1.0\nRuntime-Version: {EDT_RUNTIME_VERSION}\n"
+        ),
+    )
+    .expect("manifest");
+    fs::write(
+        path.join("src")
+            .join("Configuration")
+            .join("Configuration.mdo"),
+        "<Configuration />\n",
+    )
+    .expect("configuration marker");
+    fs::write(
+        path.join("src").join("Configuration").join("Module.bsl"),
+        "Procedure Test()\nEndProcedure\n",
+    )
+    .expect("module marker");
 }
 
 fn write_va_test_script(
@@ -688,20 +731,12 @@ fn test_module_edt_extension_build_uses_full_load_before_enterprise_launch() {
         .expect("configuration");
     fs::create_dir_all(base_path.join("exts").join("client-mcp")).expect("extension");
     fs::create_dir_all(&work_path).expect("work");
-    fs::write(
-        base_path.join("configuration").join(".project"),
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<projectDescription>\n  <name>configuration</name>\n</projectDescription>\n",
-    )
-    .expect("configuration project");
-    fs::create_dir_all(base_path.join("configuration").join("metadata")).expect("config metadata");
-    fs::write(
-        base_path
-            .join("configuration")
-            .join("metadata")
-            .join("Configuration.xml"),
-        "<Configuration />",
-    )
-    .expect("configuration descriptor");
+    write_native_edt_project(
+        &base_path.join("configuration"),
+        "configuration",
+        V8_CONFIGURATION_NATURE,
+        None,
+    );
     fs::write(
         base_path
             .join("configuration")
@@ -718,22 +753,12 @@ fn test_module_edt_extension_build_uses_full_load_before_enterprise_launch() {
         "<MetaDataObject />",
     )
     .expect("configuration xml");
-    fs::write(
-        base_path.join("exts").join("client-mcp").join(".project"),
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<projectDescription>\n  <name>client_mcp</name>\n</projectDescription>\n",
-    )
-    .expect("extension project");
-    fs::create_dir_all(base_path.join("exts").join("client-mcp").join("metadata"))
-        .expect("extension metadata");
-    fs::write(
-        base_path
-            .join("exts")
-            .join("client-mcp")
-            .join("metadata")
-            .join("Configuration.xml"),
-        "<Configuration><ConfigurationExtensionPurpose>Extension</ConfigurationExtensionPurpose></Configuration>",
-    )
-    .expect("extension descriptor");
+    write_native_edt_project(
+        &base_path.join("exts").join("client-mcp"),
+        "client_mcp",
+        V8_EXTENSION_NATURE,
+        Some("configuration"),
+    );
     fs::write(
         base_path.join("exts").join("client-mcp").join("Module.bsl"),
         "procedure Test() endprocedure",

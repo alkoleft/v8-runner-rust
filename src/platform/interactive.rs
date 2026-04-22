@@ -14,6 +14,8 @@ use crate::platform::process::{
 };
 
 const DEFAULT_PROMPT: &[u8] = b"1C:EDT>";
+const EXECUTABLE_BUSY_MAX_RETRIES: usize = 5;
+const EXECUTABLE_BUSY_RETRY_DELAY: Duration = Duration::from_millis(10);
 const IO_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const PROMPT_DRAIN_GRACE: Duration = Duration::from_millis(20);
 const STREAM_BUFFER_SIZE: usize = 1024;
@@ -190,22 +192,7 @@ impl InteractiveProcessExecutor {
         startup_timeout: Duration,
     ) -> Result<Self, InteractiveProcessError> {
         let rendered_command = render_command(&request);
-        let mut command = Command::new(&request.program);
-        command.args(&request.args);
-        command.stdin(Stdio::piped());
-        command.stdout(Stdio::piped());
-        command.stderr(Stdio::piped());
-        if let Some(workdir) = &request.workdir {
-            command.current_dir(workdir);
-        }
-        configure_process_group(&mut command);
-
-        let mut child = command
-            .spawn()
-            .map_err(|source| InteractiveProcessError::SpawnFailed {
-                cmd: rendered_command.clone(),
-                source,
-            })?;
+        let mut child = spawn_command(&request, &rendered_command)?;
         let stdin = child
             .stdin
             .take()
@@ -931,6 +918,75 @@ fn render_command(request: &InteractiveProcessRequest) -> String {
     parts.join(" ")
 }
 
+fn spawn_command(
+    request: &InteractiveProcessRequest,
+    rendered_command: &str,
+) -> Result<Child, InteractiveProcessError> {
+    spawn_with_executable_busy_retry(rendered_command, || {
+        let mut command = build_command(request);
+        command.spawn()
+    })
+}
+
+fn build_command(request: &InteractiveProcessRequest) -> Command {
+    let mut command = Command::new(&request.program);
+    command.args(&request.args);
+    command.stdin(Stdio::piped());
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+    if let Some(workdir) = &request.workdir {
+        command.current_dir(workdir);
+    }
+    configure_process_group(&mut command);
+    command
+}
+
+fn is_executable_busy(error: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        matches!(error.raw_os_error(), Some(libc::ETXTBSY))
+            || error.kind() == std::io::ErrorKind::ExecutableFileBusy
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = error;
+        false
+    }
+}
+
+fn spawn_with_executable_busy_retry<F>(
+    rendered_command: &str,
+    mut spawn: F,
+) -> Result<Child, InteractiveProcessError>
+where
+    F: FnMut() -> Result<Child, std::io::Error>,
+{
+    for attempt in 0..=EXECUTABLE_BUSY_MAX_RETRIES {
+        match spawn() {
+            Ok(child) => return Ok(child),
+            Err(source) if is_executable_busy(&source) && attempt < EXECUTABLE_BUSY_MAX_RETRIES => {
+                warn!(
+                    command = rendered_command,
+                    attempt = attempt + 1,
+                    max_retries = EXECUTABLE_BUSY_MAX_RETRIES,
+                    delay_ms = EXECUTABLE_BUSY_RETRY_DELAY.as_millis() as u64,
+                    "interactive spawn hit executable-busy race, retrying"
+                );
+                thread::sleep(EXECUTABLE_BUSY_RETRY_DELAY);
+            }
+            Err(source) => {
+                return Err(InteractiveProcessError::SpawnFailed {
+                    cmd: rendered_command.to_owned(),
+                    source,
+                });
+            }
+        }
+    }
+
+    unreachable!("interactive spawn loop must return on success or final error");
+}
+
 #[cfg(unix)]
 fn configure_process_group(command: &mut Command) {
     use std::os::unix::process::CommandExt;
@@ -984,12 +1040,14 @@ fn exit_status_unavailable() -> std::process::ExitStatus {
 #[cfg(test)]
 mod tests {
     use super::{
-        InteractiveCommandOutput, InteractiveProcessError, InteractiveProcessExecutor,
-        InteractiveProcessRequest, ShutdownOutcome,
+        spawn_with_executable_busy_retry, InteractiveCommandOutput, InteractiveProcessError,
+        InteractiveProcessExecutor, InteractiveProcessRequest, ShutdownOutcome,
     };
     use std::fs;
     use std::path::Path;
-    use std::process::Command;
+    use std::process::{Command, Stdio};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     use std::thread;
     use std::time::Duration;
     use tempfile::tempdir;
@@ -1185,6 +1243,54 @@ mod tests {
         timeout: Duration,
     ) -> InteractiveCommandOutput {
         executor.execute(command, timeout).expect("execute command")
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn interactive_spawn_retries_executable_busy_before_succeeding() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let child = spawn_with_executable_busy_retry("fake interactive command", {
+            let attempts = attempts.clone();
+            move || {
+                let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+                if attempt == 0 {
+                    return Err(std::io::Error::from_raw_os_error(libc::ETXTBSY));
+                }
+
+                let mut command = Command::new("/bin/sh");
+                command.arg("-c").arg("printf '1C:EDT>'");
+                command.stdin(Stdio::null());
+                command.stdout(Stdio::piped());
+                command.stderr(Stdio::piped());
+                command.spawn()
+            }
+        })
+        .expect("spawn with retry");
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        let output = child.wait_with_output().expect("child output");
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "1C:EDT>");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn interactive_spawn_does_not_retry_non_executable_busy_errors() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let err = spawn_with_executable_busy_retry("fake interactive command", {
+            let attempts = attempts.clone();
+            move || {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "missing binary",
+                ))
+            }
+        })
+        .expect_err("spawn must fail");
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert!(matches!(err, InteractiveProcessError::SpawnFailed { .. }));
     }
 
     #[cfg(unix)]

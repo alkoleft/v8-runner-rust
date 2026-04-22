@@ -6,6 +6,7 @@ use quick_xml::events::Event;
 use quick_xml::Reader;
 
 use crate::domain::config_init::{ConfigInitResult, ConfigInitSourceSet};
+use crate::support::edt_project::{self, EdtProjectKind};
 use crate::support::error::AppError;
 use crate::support::path::is_safe_path_segment;
 
@@ -270,7 +271,16 @@ fn scan_dir(
                 dir.display()
             ))
         })?;
+        let file_type = entry.file_type().map_err(|error| {
+            AppError::Runtime(format!(
+                "failed to inspect source directory entry '{}': {error}",
+                dir.display()
+            ))
+        })?;
         let path = entry.path();
+        if file_type.is_symlink() || !file_type.is_dir() {
+            continue;
+        }
         if path.is_dir() {
             scan_dir(root, &path, designer, edt, seen_designer, seen_edt)?;
         }
@@ -295,17 +305,8 @@ fn should_skip_dir(root: &Path, dir: &Path) -> bool {
 fn has_valid_edt_project_ancestor(root: &Path, start: &Path) -> Result<bool, AppError> {
     let mut current = Some(start);
     while let Some(path) = current {
-        let project_file = path.join(".project");
-        if project_file.is_file() {
-            let content = std::fs::read_to_string(&project_file).map_err(|error| {
-                AppError::Runtime(format!(
-                    "failed to read source marker '{}': {error}",
-                    project_file.display()
-                ))
-            })?;
-            if parse_edt_project_name(&content, &project_file)?.is_some() {
-                return Ok(true);
-            }
+        if has_valid_edt_project_root(path)? {
+            return Ok(true);
         }
         if path == root {
             break;
@@ -313,6 +314,16 @@ fn has_valid_edt_project_ancestor(root: &Path, start: &Path) -> Result<bool, App
         current = path.parent();
     }
     Ok(false)
+}
+
+fn has_valid_edt_project_root(project_dir: &Path) -> Result<bool, AppError> {
+    Ok(
+        edt_project::detect_native_ordinary_project_kind(project_dir)
+            .map_err(AppError::Validation)?
+            .is_some()
+            || edt_project::has_native_external_project_layout(project_dir)
+                .map_err(AppError::Validation)?,
+    )
 }
 
 fn detect_designer_source_root(root: &Path, dir: &Path) -> Result<Option<SourcePurpose>, AppError> {
@@ -334,7 +345,10 @@ fn detect_designer_purpose(configuration_xml: &Path) -> Result<Option<SourcePurp
     })
 }
 
-fn detect_designer_external_root(root: &Path, dir: &Path) -> Result<Option<SourcePurpose>, AppError> {
+fn detect_designer_external_root(
+    root: &Path,
+    dir: &Path,
+) -> Result<Option<SourcePurpose>, AppError> {
     if has_valid_edt_project_ancestor(root, dir)? || dir.join("Configuration.xml").is_file() {
         return Ok(None);
     }
@@ -355,8 +369,17 @@ fn detect_designer_external_root(root: &Path, dir: &Path) -> Result<Option<Sourc
                 dir.display()
             ))
         })?;
+        let file_type = entry.file_type().map_err(|error| {
+            AppError::Runtime(format!(
+                "failed to inspect source directory entry '{}': {error}",
+                dir.display()
+            ))
+        })?;
         let path = entry.path();
-        if !path.is_file() || path.extension().and_then(|value| value.to_str()) != Some("xml") {
+        if file_type.is_symlink()
+            || !file_type.is_file()
+            || path.extension().and_then(|value| value.to_str()) != Some("xml")
+        {
             continue;
         }
         has_top_level_xml = true;
@@ -374,94 +397,29 @@ fn detect_designer_external_root(root: &Path, dir: &Path) -> Result<Option<Sourc
 }
 
 fn detect_edt_project_purpose(project_dir: &Path) -> Result<Option<SourcePurpose>, AppError> {
-    let project_file = project_dir.join(".project");
-    let content = std::fs::read_to_string(&project_file).map_err(|error| {
-        AppError::Runtime(format!(
-            "failed to read source marker '{}': {error}",
-            project_file.display()
-        ))
-    })?;
-    if parse_edt_project_name(&content, &project_file)?.is_none() {
+    let Some(kind) = edt_project::detect_native_ordinary_project_kind(project_dir)
+        .map_err(AppError::Validation)?
+    else {
         return Ok(None);
-    }
+    };
 
-    classify_edt_project_contents(project_dir)
+    match kind {
+        EdtProjectKind::Configuration => Ok(Some(SourcePurpose::Configuration)),
+        EdtProjectKind::Extension => Ok(Some(SourcePurpose::Extension)),
+        EdtProjectKind::ExternalObjects => Ok(None),
+    }
 }
 
-fn parse_edt_project_name(content: &str, source_path: &Path) -> Result<Option<String>, AppError> {
-    let mut reader = Reader::from_str(content);
-    reader.config_mut().trim_text(true);
-    let mut buf = Vec::new();
-    let mut root_tag = None::<String>;
-    let mut depth = 0usize;
-    let mut inside_name = false;
-    let mut project_name = None::<String>;
-
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(event)) => {
-                let tag = xml_local_name(event.name().as_ref());
-                if root_tag.is_none() {
-                    root_tag = Some(tag);
-                    depth = 1;
-                } else {
-                    if depth == 1 && tag == "name" {
-                        inside_name = true;
-                    }
-                    depth += 1;
-                }
-            }
-            Ok(Event::Empty(event)) => {
-                let tag = xml_local_name(event.name().as_ref());
-                if root_tag.is_none() {
-                    root_tag = Some(tag);
-                    break;
-                }
-            }
-            Ok(Event::Text(text)) if inside_name && project_name.is_none() => {
-                project_name = Some(
-                    text.unescape()
-                        .map_err(|error| {
-                            AppError::Validation(format!(
-                                "failed to decode EDT project marker '{}': {error}",
-                                source_path.display()
-                            ))
-                        })?
-                        .trim()
-                        .to_owned(),
-                );
-            }
-            Ok(Event::End(event)) => {
-                let tag = xml_local_name(event.name().as_ref());
-                if tag == "name" {
-                    inside_name = false;
-                }
-                depth = depth.saturating_sub(1);
-            }
-            Ok(Event::Eof) => break,
-            Err(error) => {
-                return Err(AppError::Validation(format!(
-                    "failed to parse EDT project marker '{}': {error}",
-                    source_path.display()
-                )));
-            }
-            _ => {}
-        }
-        buf.clear();
-    }
-
-    if depth > 0 {
-        return Err(AppError::Validation(format!(
-            "failed to parse EDT project marker '{}': unexpected EOF",
-            source_path.display()
-        )));
-    }
-
-    if root_tag.as_deref() != Some("projectDescription") {
+fn detect_edt_external_project_purpose(
+    project_dir: &Path,
+) -> Result<Option<SourcePurpose>, AppError> {
+    if !edt_project::has_native_external_project_layout(project_dir)
+        .map_err(AppError::Validation)?
+    {
         return Ok(None);
     }
 
-    Ok(project_name.filter(|value| !value.is_empty()))
+    classify_external_descriptor_file(&edt_project::external_root_descriptor_path(project_dir))
 }
 
 fn detect_edt_external_root(dir: &Path) -> Result<Option<SourcePurpose>, AppError> {
@@ -481,12 +439,18 @@ fn detect_edt_external_root(dir: &Path) -> Result<Option<SourcePurpose>, AppErro
                 dir.display()
             ))
         })?;
+        let file_type = entry.file_type().map_err(|error| {
+            AppError::Runtime(format!(
+                "failed to inspect source directory entry '{}': {error}",
+                dir.display()
+            ))
+        })?;
         let path = entry.path();
-        if !path.is_dir() || !path.join(".project").is_file() {
+        if file_type.is_symlink() || !file_type.is_dir() || !path.join(".project").is_file() {
             continue;
         }
         has_child_project = true;
-        let Some(kind) = detect_edt_project_purpose(&path)? else {
+        let Some(kind) = detect_edt_external_project_purpose(&path)? else {
             return Ok(None);
         };
         if !kind.is_external() {
@@ -501,55 +465,6 @@ fn detect_edt_external_root(dir: &Path) -> Result<Option<SourcePurpose>, AppErro
 
     Ok(kinds.into_iter().next())
 }
-
-fn classify_edt_project_contents(project_dir: &Path) -> Result<Option<SourcePurpose>, AppError> {
-    let mut detected = HashSet::new();
-    collect_edt_project_descriptor_kinds(project_dir, project_dir, &mut detected)?;
-    if detected.len() == 1 {
-        Ok(detected.into_iter().next())
-    } else {
-        Ok(None)
-    }
-}
-
-fn collect_edt_project_descriptor_kinds(
-    project_root: &Path,
-    dir: &Path,
-    detected: &mut HashSet<SourcePurpose>,
-) -> Result<(), AppError> {
-    let entries = std::fs::read_dir(dir).map_err(|error| {
-        AppError::Runtime(format!(
-            "failed to read EDT project directory '{}': {error}",
-            dir.display()
-        ))
-    })?;
-    for entry in entries {
-        let entry = entry.map_err(|error| {
-            AppError::Runtime(format!(
-                "failed to read EDT project entry '{}': {error}",
-                dir.display()
-            ))
-        })?;
-        let path = entry.path();
-        if path.is_dir() {
-            if path != project_root && path.join(".project").is_file() {
-                continue;
-            }
-            if !should_skip_dir(project_root, &path) {
-                collect_edt_project_descriptor_kinds(project_root, &path, detected)?;
-            }
-            continue;
-        }
-        if path.extension().and_then(|value| value.to_str()) != Some("xml") {
-            continue;
-        }
-        if let Some(kind) = classify_source_descriptor_file(&path)? {
-            detected.insert(kind);
-        }
-    }
-    Ok(())
-}
-
 fn classify_source_descriptor_file(path: &Path) -> Result<Option<SourcePurpose>, AppError> {
     let content = std::fs::read_to_string(path).map_err(|error| {
         AppError::Runtime(format!(
@@ -867,10 +782,61 @@ mod tests {
         std::fs::write(path, contents).expect("write file");
     }
 
-    fn create_edt_project(project_dir: &Path, name: &str) {
+    fn create_native_edt_external_project(
+        project_dir: &Path,
+        name: &str,
+        descriptor_xml: &str,
+        base_project: Option<&str>,
+    ) {
         write_file(
             &project_dir.join(".project"),
-            &format!("<projectDescription><name>{name}</name></projectDescription>"),
+            &format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<projectDescription>\n  <name>{name}</name>\n  <natures>\n    <nature>{}</nature>\n  </natures>\n</projectDescription>\n",
+                crate::support::edt_project::V8_EXTERNAL_OBJECTS_NATURE
+            ),
+        );
+        let base_line = base_project
+            .map(|value| format!("Base-Project: {value}\n"))
+            .unwrap_or_default();
+        write_file(
+            &project_dir.join("DT-INF").join("PROJECT.PMF"),
+            &format!("{base_line}Manifest-Version: 1.0\nRuntime-Version: 8.3.27\n"),
+        );
+        write_file(&project_dir.join("src").join("root.xml"), descriptor_xml);
+    }
+
+    fn create_native_edt_project(
+        project_dir: &Path,
+        name: &str,
+        nature: &str,
+        base_project: Option<&str>,
+    ) {
+        write_file(
+            &project_dir.join(".project"),
+            &format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<projectDescription>\n  <name>{name}</name>\n  <natures>\n    <nature>{nature}</nature>\n  </natures>\n</projectDescription>\n"
+            ),
+        );
+        let base_line = base_project
+            .map(|value| format!("Base-Project: {value}\n"))
+            .unwrap_or_default();
+        write_file(
+            &project_dir.join("DT-INF").join("PROJECT.PMF"),
+            &format!("{base_line}Manifest-Version: 1.0\nRuntime-Version: 8.3.27\n"),
+        );
+        write_file(
+            &project_dir
+                .join("src")
+                .join("Configuration")
+                .join("Configuration.mdo"),
+            "<Configuration />\n",
+        );
+        write_file(
+            &project_dir
+                .join("src")
+                .join("Configuration")
+                .join("Module.bsl"),
+            "Procedure Test()\nEndProcedure\n",
         );
     }
 
@@ -972,19 +938,21 @@ mod tests {
     }
 
     #[test]
-    fn detects_edt_extension_from_configuration_xml_content_instead_of_path_name() {
+    fn detects_native_edt_source_sets_from_project_markers_instead_of_path_name() {
         let dir = tempdir().expect("tempdir");
         let config_project = dir.path().join("workspace").join("cfg-project");
         let extension_project = dir.path().join("workspace").join("addon-project");
-        create_edt_project(&config_project, "configuration");
-        write_file(
-            &config_project.join("metadata").join("Configuration.xml"),
-            "<Configuration/>",
+        create_native_edt_project(
+            &config_project,
+            "configuration",
+            crate::support::edt_project::V8_CONFIGURATION_NATURE,
+            None,
         );
-        create_edt_project(&extension_project, "sales");
-        write_file(
-            &extension_project.join("metadata").join("Configuration.xml"),
-            "<Configuration><ObjectBelonging>Adopted</ObjectBelonging></Configuration>",
+        create_native_edt_project(
+            &extension_project,
+            "sales",
+            crate::support::edt_project::V8_EXTENSION_NATURE,
+            Some("configuration"),
         );
 
         let result = execute(&ConfigInitRequest {
@@ -1004,6 +972,31 @@ mod tests {
         assert!(result.source_sets.iter().any(|source| {
             source.path == "workspace/addon-project" && source.source_type == "EXTENSION"
         }));
+    }
+
+    #[test]
+    fn native_edt_extension_without_base_project_is_not_detected() {
+        let dir = tempdir().expect("tempdir");
+        let config_project = dir.path().join("workspace").join("cfg-project");
+        let extension_project = dir.path().join("workspace").join("addon-project");
+        create_native_edt_project(
+            &config_project,
+            "configuration",
+            crate::support::edt_project::V8_CONFIGURATION_NATURE,
+            None,
+        );
+        create_native_edt_project(
+            &extension_project,
+            "sales",
+            crate::support::edt_project::V8_EXTENSION_NATURE,
+            None,
+        );
+
+        let detected = discover_sources(dir.path()).expect("discover sources");
+
+        assert_eq!(detected.edt.len(), 1);
+        assert_eq!(detected.edt[0].path, config_project);
+        assert_eq!(detected.edt[0].purpose, SourcePurpose::Configuration);
     }
 
     #[test]
@@ -1071,29 +1064,29 @@ mod tests {
         let workspace = dir.path().join("workspace");
         let config_project = workspace.join("cfg");
         let external_root = workspace.join("processors");
-        create_edt_project(&config_project, "configuration");
-        write_file(
-            &config_project.join("metadata").join("Configuration.xml"),
-            "<Configuration/>",
+        create_native_edt_project(
+            &config_project,
+            "configuration",
+            crate::support::edt_project::V8_CONFIGURATION_NATURE,
+            None,
         );
-        create_edt_project(&external_root.join("alpha"), "alpha");
-        write_file(
-            &external_root.join("alpha").join("src").join("root.xml"),
+        create_native_edt_external_project(
+            &external_root.join("alpha"),
+            "alpha",
             "<ExternalDataProcessor><Properties><Name>Alpha</Name></Properties></ExternalDataProcessor>",
+            Some("configuration"),
         );
-        create_edt_project(&external_root.join("beta"), "beta");
-        write_file(
-            &external_root.join("beta").join("src").join("root.xml"),
+        create_native_edt_external_project(
+            &external_root.join("beta"),
+            "beta",
             "<MetaDataObject><ExternalDataProcessor><Properties><Name>Beta</Name></Properties></ExternalDataProcessor></MetaDataObject>",
+            Some("configuration"),
         );
-        create_edt_project(&external_root.join("nested").join("gamma"), "gamma");
-        write_file(
-            &external_root
-                .join("nested")
-                .join("gamma")
-                .join("src")
-                .join("root.xml"),
+        create_native_edt_external_project(
+            &external_root.join("nested").join("gamma"),
+            "gamma",
             "<ExternalReport><Properties><Name>Gamma</Name></Properties></ExternalReport>",
+            Some("configuration"),
         );
 
         let result = execute(&ConfigInitRequest {
@@ -1120,10 +1113,11 @@ mod tests {
     fn edt_internal_markers_do_not_create_designer_candidates() {
         let dir = tempdir().expect("tempdir");
         let project = dir.path().join("workspace").join("cfg");
-        create_edt_project(&project, "configuration");
-        write_file(
-            &project.join("metadata").join("Configuration.xml"),
-            "<Configuration/>",
+        create_native_edt_project(
+            &project,
+            "configuration",
+            crate::support::edt_project::V8_CONFIGURATION_NATURE,
+            None,
         );
 
         let detected = discover_sources(dir.path()).expect("discover sources");
@@ -1162,20 +1156,23 @@ mod tests {
         let workspace = dir.path().join("workspace");
         let config_project = workspace.join("cfg");
         let external_root = workspace.join("processors");
-        create_edt_project(&config_project, "configuration");
-        write_file(
-            &config_project.join("metadata").join("Configuration.xml"),
-            "<Configuration/>",
+        create_native_edt_project(
+            &config_project,
+            "configuration",
+            crate::support::edt_project::V8_CONFIGURATION_NATURE,
+            None,
         );
-        create_edt_project(&external_root.join("alpha"), "alpha");
-        write_file(
-            &external_root.join("alpha").join("src").join("root.xml"),
+        create_native_edt_external_project(
+            &external_root.join("alpha"),
+            "alpha",
             "<ExternalDataProcessor><Properties><Name>Alpha</Name></Properties></ExternalDataProcessor>",
+            Some("configuration"),
         );
-        create_edt_project(&external_root.join("beta"), "beta");
-        write_file(
-            &external_root.join("beta").join("src").join("form.xml"),
+        create_native_edt_external_project(
+            &external_root.join("beta"),
+            "beta",
             "<Form/>",
+            Some("configuration"),
         );
 
         let result = execute(&ConfigInitRequest {
@@ -1189,6 +1186,85 @@ mod tests {
         .expect("init config");
 
         assert_eq!(result.source_sets.len(), 1);
+        assert_eq!(result.source_sets[0].source_type, "CONFIGURATION");
+    }
+
+    #[test]
+    fn edt_external_root_requires_canonical_root_descriptor() {
+        let dir = tempdir().expect("tempdir");
+        let workspace = dir.path().join("workspace");
+        let config_project = workspace.join("cfg");
+        let external_root = workspace.join("processors");
+        create_native_edt_project(
+            &config_project,
+            "configuration",
+            crate::support::edt_project::V8_CONFIGURATION_NATURE,
+            None,
+        );
+        create_native_edt_external_project(
+            &external_root.join("alpha"),
+            "alpha",
+            "<ExternalDataProcessor><Properties><Name>Alpha</Name></Properties></ExternalDataProcessor>",
+            Some("configuration"),
+        );
+        std::fs::create_dir_all(external_root.join("alpha").join("src").join("nested"))
+            .expect("nested dir");
+        std::fs::rename(
+            external_root.join("alpha").join("src").join("root.xml"),
+            external_root
+                .join("alpha")
+                .join("src")
+                .join("nested")
+                .join("alpha.xml"),
+        )
+        .expect("move root descriptor");
+
+        let result = execute(&ConfigInitRequest {
+            project_dir: dir.path().to_path_buf(),
+            output_path: "v8project.yaml".into(),
+            force: false,
+            connection: None,
+            format: ConfigFormatRequest::Edt,
+            builder: ConfigBuilderRequest::Designer,
+        })
+        .expect("init config");
+
+        assert_eq!(result.source_sets.len(), 1);
+        assert_eq!(result.source_sets[0].path, "workspace/cfg");
+        assert_eq!(result.source_sets[0].source_type, "CONFIGURATION");
+    }
+
+    #[test]
+    fn edt_external_root_requires_base_project_in_manifest() {
+        let dir = tempdir().expect("tempdir");
+        let workspace = dir.path().join("workspace");
+        let config_project = workspace.join("cfg");
+        let external_root = workspace.join("processors");
+        create_native_edt_project(
+            &config_project,
+            "configuration",
+            crate::support::edt_project::V8_CONFIGURATION_NATURE,
+            None,
+        );
+        create_native_edt_external_project(
+            &external_root.join("alpha"),
+            "alpha",
+            "<ExternalDataProcessor><Properties><Name>Alpha</Name></Properties></ExternalDataProcessor>",
+            None,
+        );
+
+        let result = execute(&ConfigInitRequest {
+            project_dir: dir.path().to_path_buf(),
+            output_path: "v8project.yaml".into(),
+            force: false,
+            connection: None,
+            format: ConfigFormatRequest::Edt,
+            builder: ConfigBuilderRequest::Designer,
+        })
+        .expect("init config");
+
+        assert_eq!(result.source_sets.len(), 1);
+        assert_eq!(result.source_sets[0].path, "workspace/cfg");
         assert_eq!(result.source_sets[0].source_type, "CONFIGURATION");
     }
 
@@ -1218,10 +1294,11 @@ mod tests {
     fn auto_prefers_edt_when_designer_only_has_external_roots() {
         let dir = tempdir().expect("tempdir");
         let config_project = dir.path().join("workspace").join("cfg");
-        create_edt_project(&config_project, "configuration");
-        write_file(
-            &config_project.join("metadata").join("Configuration.xml"),
-            "<Configuration/>",
+        create_native_edt_project(
+            &config_project,
+            "configuration",
+            crate::support::edt_project::V8_CONFIGURATION_NATURE,
+            None,
         );
         write_file(
             &dir.path().join("tools").join("alpha.xml"),
@@ -1249,10 +1326,11 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         write_file(&dir.path().join(".project"), "<root/>");
         let config_project = dir.path().join("workspace").join("cfg");
-        create_edt_project(&config_project, "configuration");
-        write_file(
-            &config_project.join("metadata").join("Configuration.xml"),
-            "<Configuration/>",
+        create_native_edt_project(
+            &config_project,
+            "configuration",
+            crate::support::edt_project::V8_CONFIGURATION_NATURE,
+            None,
         );
 
         let result = execute(&ConfigInitRequest {
@@ -1268,6 +1346,25 @@ mod tests {
         assert!(result.source_sets.iter().any(|source| {
             source.path == "workspace/cfg" && source.source_type == "CONFIGURATION"
         }));
+    }
+
+    #[test]
+    fn parseable_non_native_project_marker_does_not_hide_designer_sources() {
+        let dir = tempdir().expect("tempdir");
+        write_file(
+            &dir.path().join(".project"),
+            "<projectDescription><name>legacy</name></projectDescription>",
+        );
+        write_file(
+            &dir.path().join("designer").join("Configuration.xml"),
+            "<Configuration/>",
+        );
+
+        let detected = discover_sources(dir.path()).expect("discover sources");
+
+        assert_eq!(detected.designer.len(), 1);
+        assert_eq!(detected.designer[0].path, dir.path().join("designer"));
+        assert_eq!(detected.designer[0].purpose, SourcePurpose::Configuration);
     }
 
     #[test]
@@ -1295,21 +1392,24 @@ mod tests {
     fn edt_aggregate_root_does_not_hide_nested_configuration_project() {
         let dir = tempdir().expect("tempdir");
         let external_root = dir.path().join("processors");
-        create_edt_project(&external_root.join("alpha"), "alpha");
-        write_file(
-            &external_root.join("alpha").join("src").join("root.xml"),
+        create_native_edt_external_project(
+            &external_root.join("alpha"),
+            "alpha",
             "<ExternalDataProcessor><Properties><Name>Alpha</Name></Properties></ExternalDataProcessor>",
+            Some("configuration"),
         );
-        create_edt_project(&external_root.join("beta"), "beta");
-        write_file(
-            &external_root.join("beta").join("src").join("root.xml"),
+        create_native_edt_external_project(
+            &external_root.join("beta"),
+            "beta",
             "<ExternalDataProcessor><Properties><Name>Beta</Name></Properties></ExternalDataProcessor>",
+            Some("configuration"),
         );
         let config_project = external_root.join("apps").join("cfg");
-        create_edt_project(&config_project, "configuration");
-        write_file(
-            &config_project.join("metadata").join("Configuration.xml"),
-            "<Configuration/>",
+        create_native_edt_project(
+            &config_project,
+            "configuration",
+            crate::support::edt_project::V8_CONFIGURATION_NATURE,
+            None,
         );
 
         let result = execute(&ConfigInitRequest {

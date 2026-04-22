@@ -1,8 +1,8 @@
+use quick_xml::events::Event;
+use quick_xml::Reader;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::Path;
-use quick_xml::events::Event;
-use quick_xml::Reader;
 use thiserror::Error;
 
 use crate::config::model::{
@@ -10,6 +10,7 @@ use crate::config::model::{
     VanessaProfileConfig,
 };
 use crate::platform::locator::PlatformVersionRequirement;
+use crate::support::edt_project::{self, EdtProjectKind};
 use crate::support::path::is_safe_path_segment;
 
 #[derive(Debug, Error)]
@@ -297,38 +298,88 @@ fn validate_ordinary_edt_source_set_layout(
     source_set: &SourceSetConfig,
     path: &Path,
 ) -> Result<(), ConfigValidationError> {
-    let project_file = path.join(".project");
-    if !project_file.is_file() {
+    let Some(project) = read_edt_project_descriptor(path, &source_set.name)? else {
+        return Err(source_set_layout_error(
+            &source_set.name,
+            format!("EDT source-set must contain '.project': {}", path.display()),
+        ));
+    };
+
+    let kind = project.kind();
+    let detected = if let Some(mapped) = kind.and_then(map_native_edt_kind) {
+        mapped
+    } else if kind == Some(EdtProjectKind::ExternalObjects) {
         return Err(source_set_layout_error(
             &source_set.name,
             format!(
-                "EDT source-set must contain '.project': {}",
+                "EDT project nature resolves to external objects but source-set declares {}: {}",
+                source_set_type_label(source_set.purpose),
                 path.display()
             ),
         ));
-    }
-
-    let detected = detect_edt_project_purpose(path, &source_set.name, EdtProjectLayout::Ordinary)?;
-    match detected {
-        Some(detected) if detected == source_set.purpose => Ok(()),
-        Some(detected) => Err(source_set_layout_error(
+    } else {
+        return Err(source_set_layout_error(
             &source_set.name,
             format!(
-                "EDT project layout resolves to {} but source-set declares {}: {}",
+                "EDT source-set must declare exactly one ordinary EDT nature ({} or {}): {}",
+                edt_project::V8_CONFIGURATION_NATURE,
+                edt_project::V8_EXTENSION_NATURE,
+                path.display()
+            ),
+        ));
+    };
+    if detected != source_set.purpose {
+        return Err(source_set_layout_error(
+            &source_set.name,
+            format!(
+                "EDT project nature resolves to {} but source-set declares {}: {}",
                 source_set_type_label(detected),
                 source_set_type_label(source_set.purpose),
                 path.display()
             ),
-        )),
-        None => Err(source_set_layout_error(
+        ));
+    }
+    let Some(manifest) = read_edt_project_manifest(path, &source_set.name)? else {
+        return Err(source_set_layout_error(
             &source_set.name,
             format!(
-                "EDT source-set must contain project-local descriptors for {}: {}",
-                source_set_type_label(source_set.purpose),
+                "EDT source-set must contain 'DT-INF/PROJECT.PMF': {}",
                 path.display()
             ),
-        )),
+        ));
+    };
+    if !manifest
+        .runtime_version
+        .as_deref()
+        .is_some_and(edt_project::is_valid_runtime_version)
+    {
+        return Err(source_set_layout_error(
+            &source_set.name,
+            format!(
+                "EDT source-set must declare Runtime-Version in 'DT-INF/PROJECT.PMF' using 'x.y.z': {}",
+                path.display()
+            ),
+        ));
     }
+    if detected == SourceSetPurpose::Extension && manifest.base_project.is_none() {
+        return Err(source_set_layout_error(
+            &source_set.name,
+            format!(
+                "EDT extension source-set must declare Base-Project in 'DT-INF/PROJECT.PMF': {}",
+                path.display()
+            ),
+        ));
+    }
+    if !has_native_ordinary_edt_root_marker(path) {
+        return Err(source_set_layout_error(
+            &source_set.name,
+            format!(
+                "EDT source-set must contain 'src/Configuration/Configuration.mdo': {}",
+                path.display()
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_edt_external_source_set_layout(
@@ -373,8 +424,7 @@ fn validate_edt_external_source_set_layout(
             continue;
         }
         has_child_project = true;
-        let detected =
-            detect_edt_project_purpose(&child, &source_set.name, EdtProjectLayout::External)?;
+        let detected = detect_edt_external_project_purpose(&child, &source_set.name)?;
         match detected {
             Some(detected) if detected == source_set.purpose => {}
             Some(detected) => {
@@ -456,8 +506,8 @@ fn validate_designer_external_source_set_layout(
             continue;
         }
         has_top_level_xml = true;
-        let detected =
-            classify_external_descriptor_file(&descriptor, &source_set.name)?.ok_or_else(|| {
+        let detected = classify_external_descriptor_file(&descriptor, &source_set.name)?
+            .ok_or_else(|| {
                 source_set_layout_error(
                     &source_set.name,
                     format!(
@@ -493,252 +543,59 @@ fn validate_designer_external_source_set_layout(
     }
 }
 
-fn detect_edt_project_purpose(
+fn detect_edt_external_project_purpose(
     project_dir: &Path,
     source_set_name: &str,
-    layout: EdtProjectLayout,
 ) -> Result<Option<SourceSetPurpose>, ConfigValidationError> {
-    let project_file = project_dir.join(".project");
-    let content = std::fs::read_to_string(&project_file).map_err(|error| {
-        source_set_layout_error(
-            source_set_name,
-            format!(
-                "failed to read EDT project marker '{}': {error}",
-                project_file.display()
-            ),
-        )
-    })?;
-    if parse_edt_project_name(&content, &project_file, source_set_name)?.is_none() {
+    let Some(project) = read_edt_project_descriptor(project_dir, source_set_name)? else {
         return Ok(None);
-    }
-
-    classify_edt_project_contents(project_dir, source_set_name, layout)
-}
-
-fn parse_edt_project_name(
-    content: &str,
-    source_path: &Path,
-    source_set_name: &str,
-) -> Result<Option<String>, ConfigValidationError> {
-    let mut reader = Reader::from_str(content);
-    reader.config_mut().trim_text(true);
-    let mut buf = Vec::new();
-    let mut root_tag = None::<String>;
-    let mut depth = 0usize;
-    let mut inside_name = false;
-    let mut project_name = None::<String>;
-
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(event)) => {
-                let tag = xml_local_name(event.name().as_ref());
-                if root_tag.is_none() {
-                    root_tag = Some(tag);
-                    depth = 1;
-                } else {
-                    if depth == 1 && tag == "name" {
-                        inside_name = true;
-                    }
-                    depth += 1;
-                }
-            }
-            Ok(Event::Empty(event)) => {
-                let tag = xml_local_name(event.name().as_ref());
-                if root_tag.is_none() {
-                    root_tag = Some(tag);
-                    break;
-                }
-            }
-            Ok(Event::Text(text)) if inside_name && project_name.is_none() => {
-                project_name = Some(
-                    text.unescape()
-                        .map_err(|error| {
-                            source_set_layout_error(
-                                source_set_name,
-                                format!(
-                                    "failed to decode EDT project marker '{}': {error}",
-                                    source_path.display()
-                                ),
-                            )
-                        })?
-                        .trim()
-                        .to_owned(),
-                );
-            }
-            Ok(Event::End(event)) => {
-                let tag = xml_local_name(event.name().as_ref());
-                if tag == "name" {
-                    inside_name = false;
-                }
-                depth = depth.saturating_sub(1);
-            }
-            Ok(Event::Eof) => break,
-            Err(error) => {
-                return Err(source_set_layout_error(
-                    source_set_name,
-                    format!(
-                        "failed to parse EDT project marker '{}': {error}",
-                        source_path.display()
-                    ),
-                ));
-            }
-            _ => {}
-        }
-        buf.clear();
-    }
-
-    if depth > 0 {
-        return Err(source_set_layout_error(
-            source_set_name,
-            format!(
-                "failed to parse EDT project marker '{}': unexpected EOF",
-                source_path.display()
-            ),
-        ));
-    }
-
-    if root_tag.as_deref() != Some("projectDescription") {
-        return Ok(None);
-    }
-
-    Ok(project_name.filter(|value| !value.is_empty()))
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EdtProjectLayout {
-    Ordinary,
-    External,
-}
-
-fn classify_edt_project_contents(
-    project_dir: &Path,
-    source_set_name: &str,
-    layout: EdtProjectLayout,
-) -> Result<Option<SourceSetPurpose>, ConfigValidationError> {
-    let mut detected = None;
-    let mut conflict = false;
-    collect_edt_project_descriptor_kind(
-        project_dir,
-        project_dir,
-        source_set_name,
-        layout,
-        &mut detected,
-        &mut conflict,
-    )?;
-    if conflict {
-        Ok(None)
-    } else {
-        Ok(detected)
-    }
-}
-
-fn collect_edt_project_descriptor_kind(
-    project_root: &Path,
-    dir: &Path,
-    source_set_name: &str,
-    layout: EdtProjectLayout,
-    detected: &mut Option<SourceSetPurpose>,
-    conflict: &mut bool,
-) -> Result<(), ConfigValidationError> {
-    if *conflict {
-        return Ok(());
-    }
-
-    let entries = std::fs::read_dir(dir).map_err(|error| {
-        source_set_layout_error(
-            source_set_name,
-            format!(
-                "failed to inspect EDT project directory '{}': {error}",
-                dir.display()
-            ),
-        )
-    })?;
-    for entry in entries {
-        let entry = entry.map_err(|error| {
-            source_set_layout_error(
-                source_set_name,
-                format!(
-                    "failed to read EDT project entry '{}': {error}",
-                    dir.display()
-                ),
-            )
-        })?;
-        let file_type = entry.file_type().map_err(|error| {
-            source_set_layout_error(
-                source_set_name,
-                format!(
-                    "failed to inspect EDT project entry '{}': {error}",
-                    dir.display()
-                ),
-            )
-        })?;
-        // Layout validation must stay within the declared project root and never
-        // traverse symlinked directories or descriptor files that may point outside it.
-        if file_type.is_symlink() {
-            continue;
-        }
-        let path = entry.path();
-        if file_type.is_dir() {
-            if path != project_root && path.join(".project").is_file() {
-                continue;
-            }
-            if !should_skip_project_dir(project_root, &path) {
-                collect_edt_project_descriptor_kind(
-                    project_root,
-                    &path,
-                    source_set_name,
-                    layout,
-                    detected,
-                    conflict,
-                )?;
-            }
-            continue;
-        }
-        if !file_type.is_file() {
-            continue;
-        }
-        if !is_relevant_edt_descriptor(&path, layout) {
-            continue;
-        }
-        let Some(kind) = classify_source_descriptor_file(&path, source_set_name)? else {
-            continue;
-        };
-        match detected {
-            None => *detected = Some(kind),
-            Some(existing) if *existing != kind => {
-                *conflict = true;
-                return Ok(());
-            }
-            _ => {}
-        }
-    }
-    Ok(())
-}
-
-fn is_relevant_edt_descriptor(path: &Path, layout: EdtProjectLayout) -> bool {
-    match layout {
-        EdtProjectLayout::Ordinary => path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .is_some_and(|value| value.eq_ignore_ascii_case("Configuration.xml")),
-        EdtProjectLayout::External => path
-            .extension()
-            .and_then(|value| value.to_str())
-            .is_some_and(|value| value.eq_ignore_ascii_case("xml")),
-    }
-}
-
-fn should_skip_project_dir(project_root: &Path, dir: &Path) -> bool {
-    if dir == project_root {
-        return false;
-    }
-    let Some(name) = dir.file_name().and_then(|name| name.to_str()) else {
-        return false;
     };
-    matches!(
-        name,
-        ".git" | ".idea" | ".vscode" | ".v8-runner" | "target" | "node_modules" | "dist" | "build"
+    if project.kind() != Some(EdtProjectKind::ExternalObjects)
+        || !has_native_external_edt_layout(project_dir, source_set_name)?
+    {
+        return Ok(None);
+    }
+
+    classify_external_descriptor_file(
+        &edt_project::external_root_descriptor_path(project_dir),
+        source_set_name,
     )
+}
+
+fn map_native_edt_kind(kind: EdtProjectKind) -> Option<SourceSetPurpose> {
+    match kind {
+        EdtProjectKind::Configuration => Some(SourceSetPurpose::Configuration),
+        EdtProjectKind::Extension => Some(SourceSetPurpose::Extension),
+        EdtProjectKind::ExternalObjects => None,
+    }
+}
+
+fn read_edt_project_descriptor(
+    project_dir: &Path,
+    source_set_name: &str,
+) -> Result<Option<edt_project::EdtProjectDescriptor>, ConfigValidationError> {
+    edt_project::read_project_descriptor_from_dir(project_dir)
+        .map_err(|error| source_set_layout_error(source_set_name, error))
+}
+
+fn read_edt_project_manifest(
+    project_dir: &Path,
+    source_set_name: &str,
+) -> Result<Option<edt_project::EdtProjectManifest>, ConfigValidationError> {
+    edt_project::read_project_manifest_from_dir(project_dir)
+        .map_err(|error| source_set_layout_error(source_set_name, error))
+}
+
+fn has_native_external_edt_layout(
+    project_dir: &Path,
+    source_set_name: &str,
+) -> Result<bool, ConfigValidationError> {
+    edt_project::has_native_external_project_layout(project_dir)
+        .map_err(|error| source_set_layout_error(source_set_name, error))
+}
+
+fn has_native_ordinary_edt_root_marker(project_dir: &Path) -> bool {
+    edt_project::ordinary_root_marker_path(project_dir).is_file()
 }
 
 fn classify_external_descriptor_file(
@@ -896,10 +753,7 @@ fn xml_local_name(name: &[u8]) -> String {
     raw.rsplit(':').next().unwrap_or(raw.as_ref()).to_owned()
 }
 
-fn source_set_layout_error(
-    name: &str,
-    details: impl Into<String>,
-) -> ConfigValidationError {
+fn source_set_layout_error(name: &str, details: impl Into<String>) -> ConfigValidationError {
     ConfigValidationError::SourceSetLayoutInvalid {
         name: name.to_owned(),
         details: details.into(),
@@ -1234,6 +1088,68 @@ mod tests {
             std::fs::write(metadata_dir.join("Configuration.xml"), descriptor_xml)
                 .expect("descriptor xml");
         }
+    }
+
+    fn write_native_edt_project(
+        project_dir: &Path,
+        name: &str,
+        nature: &str,
+        base_project: Option<&str>,
+    ) {
+        std::fs::create_dir_all(project_dir.join("DT-INF")).expect("dt-inf dir");
+        std::fs::create_dir_all(project_dir.join("src").join("Configuration"))
+            .expect("configuration dir");
+        let base_line = base_project
+            .map(|value| format!("Base-Project: {value}\n"))
+            .unwrap_or_default();
+        std::fs::write(
+            project_dir.join(".project"),
+            format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<projectDescription>\n  <name>{name}</name>\n  <natures>\n    <nature>{nature}</nature>\n  </natures>\n</projectDescription>\n"
+            ),
+        )
+        .expect(".project");
+        std::fs::write(
+            project_dir.join("DT-INF").join("PROJECT.PMF"),
+            format!("{base_line}Manifest-Version: 1.0\nRuntime-Version: 8.3.27\n"),
+        )
+        .expect("pmf");
+        std::fs::write(
+            project_dir
+                .join("src")
+                .join("Configuration")
+                .join("Configuration.mdo"),
+            "<Configuration />",
+        )
+        .expect("configuration.mdo");
+        std::fs::write(
+            project_dir
+                .join("src")
+                .join("Configuration")
+                .join("Module.bsl"),
+            "Procedure Test()\nEndProcedure\n",
+        )
+        .expect("module");
+    }
+
+    fn write_native_edt_external_project(project_dir: &Path, name: &str, descriptor_xml: &str) {
+        std::fs::create_dir_all(project_dir.join("DT-INF")).expect("dt-inf dir");
+        std::fs::create_dir_all(project_dir.join("src")).expect("src dir");
+        std::fs::write(
+            project_dir.join(".project"),
+            format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<projectDescription>\n  <name>{name}</name>\n  <natures>\n    <nature>{}</nature>\n  </natures>\n</projectDescription>\n",
+                crate::support::edt_project::V8_EXTERNAL_OBJECTS_NATURE
+            ),
+        )
+        .expect(".project");
+        std::fs::write(
+            project_dir.join("DT-INF").join("PROJECT.PMF"),
+            "Base-Project: BaseProject\nManifest-Version: 1.0\nRuntime-Version: 8.3.27\n",
+        )
+        .expect("pmf");
+        std::fs::write(project_dir.join("src").join("root.xml"), descriptor_xml)
+            .expect("descriptor");
     }
 
     #[test]
@@ -1679,11 +1595,155 @@ mod tests {
     }
 
     #[test]
-    fn edt_format_rejects_non_external_source_set_without_project_local_descriptors() {
+    fn edt_format_accepts_native_configuration_project_layout() {
         let base = tempdir().expect("base");
         let work = tempdir().expect("work");
         let source_dir = base.path().join("edt-main");
-        write_edt_project(&source_dir, None);
+        write_native_edt_project(
+            &source_dir,
+            "BaseProject",
+            crate::support::edt_project::V8_CONFIGURATION_NATURE,
+            None,
+        );
+
+        let config = single_source_set_config(
+            base.path(),
+            work.path(),
+            SourceFormat::Edt,
+            BuilderBackend::Designer,
+            SourceSetPurpose::Configuration,
+            "main",
+            &source_dir,
+        );
+
+        validate(&config).expect("native EDT configuration project should be valid");
+    }
+
+    #[test]
+    fn edt_format_rejects_native_configuration_project_without_manifest() {
+        let base = tempdir().expect("base");
+        let work = tempdir().expect("work");
+        let source_dir = base.path().join("edt-main");
+        write_native_edt_project(
+            &source_dir,
+            "BaseProject",
+            crate::support::edt_project::V8_CONFIGURATION_NATURE,
+            None,
+        );
+        std::fs::remove_file(source_dir.join("DT-INF").join("PROJECT.PMF")).expect("remove pmf");
+
+        let config = single_source_set_config(
+            base.path(),
+            work.path(),
+            SourceFormat::Edt,
+            BuilderBackend::Designer,
+            SourceSetPurpose::Configuration,
+            "main",
+            &source_dir,
+        );
+
+        let err = validate(&config).expect_err("expected missing PMF validation error");
+        assert!(matches!(
+            err,
+            ConfigValidationError::SourceSetLayoutInvalid { name, details }
+                if name == "main" && details.contains("PROJECT.PMF")
+        ));
+    }
+
+    #[test]
+    fn edt_format_rejects_native_extension_project_when_purpose_mismatches_nature() {
+        let base = tempdir().expect("base");
+        let work = tempdir().expect("work");
+        let source_dir = base.path().join("edt-main");
+        write_native_edt_project(
+            &source_dir,
+            "ExtensionProject",
+            crate::support::edt_project::V8_EXTENSION_NATURE,
+            Some("BaseProject"),
+        );
+
+        let config = single_source_set_config(
+            base.path(),
+            work.path(),
+            SourceFormat::Edt,
+            BuilderBackend::Designer,
+            SourceSetPurpose::Configuration,
+            "main",
+            &source_dir,
+        );
+
+        let err = validate(&config).expect_err("expected mismatched nature validation error");
+        assert!(matches!(
+            err,
+            ConfigValidationError::SourceSetLayoutInvalid { name, details }
+                if name == "main" && details.contains("EXTENSION")
+        ));
+    }
+
+    #[test]
+    fn edt_format_rejects_native_extension_project_without_base_project() {
+        let base = tempdir().expect("base");
+        let work = tempdir().expect("work");
+        let config_dir = base.path().join("edt-main");
+        let extension_dir = base.path().join("edt-ext");
+        write_native_edt_project(
+            &config_dir,
+            "BaseProject",
+            crate::support::edt_project::V8_CONFIGURATION_NATURE,
+            None,
+        );
+        write_native_edt_project(
+            &extension_dir,
+            "ExtensionProject",
+            crate::support::edt_project::V8_EXTENSION_NATURE,
+            None,
+        );
+
+        let config = AppConfig {
+            base_path: base.path().to_path_buf(),
+            work_path: work.path().to_path_buf(),
+            execution_timeout: 300_000,
+            format: SourceFormat::Edt,
+            builder: BuilderBackend::Designer,
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
+            source_sets: vec![
+                SourceSetConfig {
+                    name: "main".to_owned(),
+                    purpose: SourceSetPurpose::Configuration,
+                    path: config_dir
+                        .strip_prefix(base.path())
+                        .expect("relative")
+                        .to_path_buf(),
+                },
+                SourceSetConfig {
+                    name: "ext".to_owned(),
+                    purpose: SourceSetPurpose::Extension,
+                    path: extension_dir
+                        .strip_prefix(base.path())
+                        .expect("relative")
+                        .to_path_buf(),
+                },
+            ],
+            build: BuildConfig::default(),
+            tools: ToolsConfig::default(),
+            mcp: Default::default(),
+            tests: TestsConfig::default(),
+        };
+
+        let err = validate(&config).expect_err("expected missing Base-Project validation error");
+        assert!(matches!(
+            err,
+            ConfigValidationError::SourceSetLayoutInvalid { name, details }
+                if name == "ext" && details.contains("Base-Project")
+        ));
+    }
+
+    #[test]
+    fn edt_format_rejects_non_external_source_set_without_supported_nature() {
+        let base = tempdir().expect("base");
+        let work = tempdir().expect("work");
+        let source_dir = base.path().join("edt-main");
+        write_edt_project(&source_dir, Some("<Configuration />"));
 
         let config = single_source_set_config(
             base.path(),
@@ -1699,7 +1759,7 @@ mod tests {
         assert!(matches!(
             err,
             ConfigValidationError::SourceSetLayoutInvalid { name, details }
-                if name == "main" && details.contains("project-local descriptors")
+                if name == "main" && details.contains("V8ConfigurationNature")
         ));
     }
 
@@ -1708,10 +1768,14 @@ mod tests {
         let base = tempdir().expect("base");
         let work = tempdir().expect("work");
         let source_dir = base.path().join("edt-main");
-        write_edt_project(&source_dir, Some("<Configuration />"));
+        write_native_edt_project(
+            &source_dir,
+            "BaseProject",
+            crate::support::edt_project::V8_CONFIGURATION_NATURE,
+            None,
+        );
         std::fs::create_dir_all(source_dir.join("misc")).expect("misc dir");
-        std::fs::write(source_dir.join("misc").join("broken.xml"), "<broken")
-            .expect("broken xml");
+        std::fs::write(source_dir.join("misc").join("broken.xml"), "<broken").expect("broken xml");
 
         let config = single_source_set_config(
             base.path(),
@@ -1732,7 +1796,12 @@ mod tests {
         let base = tempdir().expect("base");
         let work = tempdir().expect("work");
         let source_dir = base.path().join("edt-main");
-        write_edt_project(&source_dir, Some("<Configuration />"));
+        write_native_edt_project(
+            &source_dir,
+            "BaseProject",
+            crate::support::edt_project::V8_CONFIGURATION_NATURE,
+            None,
+        );
 
         let outside_dir = base.path().join("outside");
         std::fs::create_dir_all(outside_dir.join("foreign")).expect("outside dir");
@@ -1762,9 +1831,10 @@ mod tests {
         let work = tempdir().expect("work");
         let source_dir = base.path().join("external");
         let child_project = source_dir.join("report-project");
-        write_edt_project(
+        write_native_edt_external_project(
             &child_project,
-            Some("<ExternalReport><Properties><Name>Alpha</Name></Properties></ExternalReport>"),
+            "ReportProject",
+            "<ExternalReport><Properties><Name>Alpha</Name></Properties></ExternalReport>",
         );
 
         let config = single_source_set_config(
@@ -1785,6 +1855,77 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn edt_external_source_set_rejects_child_project_without_base_project() {
+        let base = tempdir().expect("base");
+        let work = tempdir().expect("work");
+        let source_dir = base.path().join("external");
+        let child_project = source_dir.join("processor-project");
+        write_native_edt_external_project(
+            &child_project,
+            "ProcessorProject",
+            "<ExternalDataProcessor><Properties><Name>Alpha</Name></Properties></ExternalDataProcessor>",
+        );
+        std::fs::write(
+            child_project.join("DT-INF").join("PROJECT.PMF"),
+            "Manifest-Version: 1.0\nRuntime-Version: 8.3.27\n",
+        )
+        .expect("rewrite pmf");
+
+        let config = single_source_set_config(
+            base.path(),
+            work.path(),
+            SourceFormat::Edt,
+            BuilderBackend::Designer,
+            SourceSetPurpose::ExternalDataProcessors,
+            "external",
+            &source_dir,
+        );
+
+        let err = validate(&config).expect_err("expected missing Base-Project validation error");
+        assert!(matches!(
+            err,
+            ConfigValidationError::SourceSetLayoutInvalid { name, details }
+                if name == "external" && details.contains("must contain descriptors")
+        ));
+    }
+
+    #[test]
+    fn edt_external_source_set_rejects_child_project_without_canonical_root_descriptor() {
+        let base = tempdir().expect("base");
+        let work = tempdir().expect("work");
+        let source_dir = base.path().join("external");
+        let child_project = source_dir.join("processor-project");
+        write_native_edt_external_project(
+            &child_project,
+            "ProcessorProject",
+            "<ExternalDataProcessor><Properties><Name>Alpha</Name></Properties></ExternalDataProcessor>",
+        );
+        std::fs::create_dir_all(child_project.join("src").join("nested")).expect("nested dir");
+        std::fs::rename(
+            child_project.join("src").join("root.xml"),
+            child_project.join("src").join("nested").join("alpha.xml"),
+        )
+        .expect("move root descriptor");
+
+        let config = single_source_set_config(
+            base.path(),
+            work.path(),
+            SourceFormat::Edt,
+            BuilderBackend::Designer,
+            SourceSetPurpose::ExternalDataProcessors,
+            "external",
+            &source_dir,
+        );
+
+        let err = validate(&config).expect_err("expected missing canonical root descriptor");
+        assert!(matches!(
+            err,
+            ConfigValidationError::SourceSetLayoutInvalid { name, details }
+                if name == "external" && details.contains("must contain descriptors")
+        ));
+    }
+
     #[cfg(unix)]
     #[test]
     fn edt_external_source_set_ignores_symlinked_child_projects() {
@@ -1792,17 +1933,17 @@ mod tests {
         let work = tempdir().expect("work");
         let source_dir = base.path().join("external");
         let valid_child = source_dir.join("processor-project");
-        write_edt_project(
+        write_native_edt_external_project(
             &valid_child,
-            Some(
-                "<ExternalDataProcessor><Properties><Name>Alpha</Name></Properties></ExternalDataProcessor>",
-            ),
+            "ProcessorProject",
+            "<ExternalDataProcessor><Properties><Name>Alpha</Name></Properties></ExternalDataProcessor>",
         );
 
         let outside_project = base.path().join("outside-report");
-        write_edt_project(
+        write_native_edt_external_project(
             &outside_project,
-            Some("<ExternalReport><Properties><Name>Beta</Name></Properties></ExternalReport>"),
+            "OutsideReport",
+            "<ExternalReport><Properties><Name>Beta</Name></Properties></ExternalReport>",
         );
         std::os::unix::fs::symlink(&outside_project, source_dir.join("leak")).expect("symlink");
 
@@ -1824,7 +1965,12 @@ mod tests {
         let base = tempdir().expect("base");
         let work = tempdir().expect("work");
         let source_dir = base.path().join("edt-main");
-        write_edt_project(&source_dir, Some("<Configuration />"));
+        write_native_edt_project(
+            &source_dir,
+            "BaseProject",
+            crate::support::edt_project::V8_CONFIGURATION_NATURE,
+            None,
+        );
 
         let config = AppConfig {
             base_path: base.path().to_path_buf(),
@@ -1973,7 +2119,12 @@ mod tests {
     fn rejects_edt_source_set_path_overlapping_generated_work_target() {
         let shared = tempdir().expect("shared");
         let source_dir = shared.path().join("designer").join("main");
-        write_edt_project(&source_dir, Some("<Configuration />"));
+        write_native_edt_project(
+            &source_dir,
+            "BaseProject",
+            crate::support::edt_project::V8_CONFIGURATION_NATURE,
+            None,
+        );
 
         let config = AppConfig {
             base_path: shared.path().to_path_buf(),
@@ -2044,7 +2195,12 @@ mod tests {
         let base = tempdir().expect("base");
         let work = tempdir().expect("work");
         let source_dir = base.path().join("edt-main");
-        write_edt_project(&source_dir, Some("<Configuration />"));
+        write_native_edt_project(
+            &source_dir,
+            "BaseProject",
+            crate::support::edt_project::V8_CONFIGURATION_NATURE,
+            None,
+        );
 
         let config = AppConfig {
             base_path: base.path().to_path_buf(),
@@ -2084,7 +2240,12 @@ mod tests {
         let base = tempdir().expect("base");
         let work = tempdir().expect("work");
         let source_dir = base.path().join("edt-main");
-        write_edt_project(&source_dir, Some("<Configuration />"));
+        write_native_edt_project(
+            &source_dir,
+            "BaseProject",
+            crate::support::edt_project::V8_CONFIGURATION_NATURE,
+            None,
+        );
 
         let config = AppConfig {
             base_path: base.path().to_path_buf(),

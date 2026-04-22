@@ -157,9 +157,69 @@
 
    Готово, когда: text output остается удобным для ручного запуска, но не шумит подробным успешным журналом без необходимости; JSON output остается стабильным structured contract для автоматизации; оба формата не скрывают ошибки, warnings, degraded behavior, artifacts и diagnostic paths; use case слой не знает presentation rules.
 
+12. `ADR-TASK-020`: Разбить oversized orchestration use-case модули на сценарные coordinator-и и переиспользуемые policy/helper компоненты.
+
+   Источники: `ADR-0006`, `ADR-0008`, `ADR-0016`.
+
+   Объем: зафиксировать целевой рефакторинг для `build`, `dump`, `test` и shared EDT session path: отделить orchestration, platform dispatch, change-detection commit logic, publication/staging logic и rendering-oriented message assembly в самостоятельные stage/policy/helper компоненты.
+
+   Готово, когда: новые backend/mode ветки добавляются через отдельные coordinator/stage/policy компоненты, а не через рост `src/use_cases/build_project.rs`, `src/use_cases/dump_config.rs`, `src/use_cases/run_tests.rs` и `src/platform/edt_session.rs`.
+
+   Сверка 2026-04-23: review всего проекта подтвердил, что крупнейшие use-case/platform модули продолжают совмещать orchestration, platform execution, staging/publication, timeline/logging и error mapping в одном файле, что напрямую повышает стоимость сопровождения и риск регрессий.
+
+13. `ADR-TASK-021`: Централизовать source-set/config classification и убрать дублирование XML/layout правил.
+
+   Источники: `ADR-0017`.
+
+   Объем: вынести общий typed classifier/parser для EDT/Designer source-set и external descriptors, который переиспользуют `config validate`, `config init`, `dump` reverse sync и external artifacts flow, включая project-name extraction и descriptor classification.
+
+   Готово, когда: в репозитории есть один canonical implementation для project/descriptor classification и project-name extraction без копирования XML/layout логики между `config`, `use_cases` и вспомогательными flow.
+
+   Сверка 2026-04-23: review показал дублирование XML/layout classification и project-name extraction между `src/config/validate.rs`, `src/use_cases/config_init.rs`, `src/use_cases/external_artifacts.rs` и `src/use_cases/dump_config.rs`.
+
+14. `ADR-TASK-022`: Сузить transport adapters CLI/MCP и убрать дублирование normalization/mapping boundary.
+
+   Источники: `ADR-0005`, `ADR-0006`, `ADR-0009`.
+
+   Объем: свести request normalization, common validation, lock-boundary policy и failure shaping к общему adapter-neutral слою, чтобы CLI и MCP не дублировали одинаковые mapping rules, fallback response assembly и transport-neutral pre-validation.
+
+   Готово, когда: добавление новой команды или флага не требует параллельно менять несколько почти одинаковых mapper-ов и fallback response builder-ов в `cli` и `mcp`, а use-case boundary остается transport-neutral.
+
+   Сверка 2026-04-23: review подтвердил, что `src/cli/execute.rs`, `src/mcp/service.rs` и `src/mcp/port.rs` дублируют normalization, request mapping, failure shaping и lock-boundary orchestration поверх одних и тех же use case.
+
+15. `ADR-TASK-023`: Перепроектировать syntax/launch request contract с boolean-heavy DTO на typed policy model.
+
+   Источники: `ADR-0005`, `ADR-0006`.
+
+   Объем: заменить large bool-struct-ы для syntax/launch на enum/struct policy objects, где client scopes, extension scope, extended-modules checks, modality/sync-call checks и launch target groups моделируются типами и constructors, а не набором флагов.
+
+   Готово, когда: invalid combinations отсеиваются типами и constructors, а не ручной пост-валидацией в service layer; добавление нового режима расширяет typed policy model, а не truth table из взаимозависимых bool-полей.
+
+   Сверка 2026-04-23: review показал, что текущие `cli`/`mcp`/`use_cases` request DTO для syntax и launch уже представляют собой large bool-struct-ы с ручной нормализацией и dependency checks.
+
+16. `ADR-TASK-024`: Укрепить typed error contract и убрать string erasure на use-case boundary.
+
+   Источники: `ADR-0009`, `ADR-0016`.
+
+   Объем: эволюционировать `AppError` от `String`-категорий к typed variants/embedded source errors, сохранить различимость platform/runtime/validation subclasses для retry, diagnostics и telemetry, и отдельно разжать broad error mapping в test runner.
+
+   Готово, когда: use case не теряют тип ошибки через `to_string()` в середине pipeline, а downstream mapping использует exhaustive match по error kind; `ProcessError`-варианты в enterprise test flow не схлопываются в один `EnterpriseSpawnFailed`.
+
+   Сверка 2026-04-23: review подтвердил, что `AppError` остается stringly-typed, use-case слой рано erases typed source errors, а `run_tests` broad-match-ит разные `ProcessError` как один spawn failure.
+
+17. `ADR-TASK-025`: Завершить migration на canonical `ExecutionOutcome<T>` и убрать legacy duplicated result fields.
+
+   Источники: `ADR-0016`.
+
+   Объем: для runner-like/result-heavy команд сделать `execution` единственным source of truth, а legacy top-level projections либо удалить, либо вычислять только на adapter boundary; не допускать расхождения между canonical outcome и дублирующими top-level полями.
+
+   Готово, когда: domain result не допускает расхождения между `ok/status/diagnostics/report` и `execution`, а tests не фиксируют intentionally inconsistent state; адаптеры строят presentation-friendly projections поверх canonical outcome, а не наоборот.
+
+   Сверка 2026-04-23: review показал, что часть domain result model одновременно хранит `ExecutionOutcome<T>` и legacy projections, что создает недопустимое пространство состояний и лишнее копирование данных.
+
 ### P2
 
-12. `ADR-TASK-009`: Усилить regression coverage platform locator.
+18. `ADR-TASK-009`: Усилить regression coverage platform locator.
 
    Источники: `ADR-0004`.
 
@@ -171,7 +231,7 @@
 
 ### P3
 
-13. `ADR-TASK-010`: Добавить архитектурные guardrails для ADR-инвариантов.
+19. `ADR-TASK-010`: Добавить архитектурные guardrails для ADR-инвариантов.
 
     Источники: `ADR-0005`, `ADR-0006`, `ADR-0008`, `ADR-0009`, `ADR-0011`, `ADR-0017`.
 
@@ -244,25 +304,25 @@
 | `ADR-0002` | Целевое состояние требует двух context для EDT flow; текущему build нужна generated Designer analysis. | `ADR-TASK-001`, `ADR-TASK-002` |
 | `ADR-0003` | Server infobase support для IBCMD требует явный DBMS-level config contract. | `ADR-TASK-008` |
 | `ADR-0004` | Locator реализован, но ADR требует сопровождать mask behavior regression tests. | `ADR-TASK-009` |
-| `ADR-0005` | MCP surface не должен меняться неявно. | `ADR-TASK-010` |
-| `ADR-0006` | Use case layer остается transport-neutral. | `ADR-TASK-007`, `ADR-TASK-010` |
+| `ADR-0005` | MCP surface не должен меняться неявно. | `ADR-TASK-010`, `ADR-TASK-022`, `ADR-TASK-023` |
+| `ADR-0006` | Use case layer остается transport-neutral. | `ADR-TASK-007`, `ADR-TASK-010`, `ADR-TASK-020`, `ADR-TASK-022`, `ADR-TASK-023` |
 | `ADR-0007` | Shared EDT actor/manager вынесен в общий execution слой; direct non-shared interactive CLI path закрыт `2026-04-22`. | Закрыто `ADR-TASK-004` |
-| `ADR-0008` | Граница platform DSL требует постоянных guardrails. | `ADR-TASK-010` |
-| `ADR-0009` | Business/runtime failure split реализован как contract и требует защиты при добавлении новых tools. | `ADR-TASK-010` |
+| `ADR-0008` | Граница platform DSL требует постоянных guardrails. | `ADR-TASK-010`, `ADR-TASK-020` |
+| `ADR-0009` | Business/runtime failure split реализован как contract и требует защиты при добавлении новых tools. | `ADR-TASK-010`, `ADR-TASK-022`, `ADR-TASK-024` |
 | `ADR-0010` | Для CLI output зафиксирована единая high-signal policy без отдельной audience-оси; открытой остаётся только реализация rendering rules. | `ADR-TASK-007` |
 | `ADR-0011` | Workspace lock реализован; будущим public commands нужен lock guardrail. | `ADR-TASK-010` |
 | `ADR-0012` | EDT generated Designer partial-load decision remains key gap. | `ADR-TASK-002` |
 | `ADR-0013` | MCP admission/session capacity уже есть; cancellation/deadline должны идти через общую policy. | `ADR-TASK-003` |
 | `ADR-0014` | Общая timeout/cancellation policy является целевой архитектурой и реализована не полностью. | `ADR-TASK-003`, `ADR-TASK-005`, `ADR-TASK-006` |
 | `ADR-0015` | Atomic publication в основном есть, но остаются явные cleanup/prefix/critical-phase follow-ups. | `ADR-TASK-005` |
-| `ADR-0016` | `ExecutionOutcome<T>` есть частично; миграция к canonical outcome остается открытой. | `ADR-TASK-003`, `ADR-TASK-006` |
-| `ADR-0017` | Config contract реализован частично; структура подключения ИБ уточнена отдельным ADR-0018, а content-based autodiscovery `config init` и external aggregate detection остаются отдельным gap. | `ADR-TASK-008`, `ADR-TASK-010`, `ADR-TASK-012` |
+| `ADR-0016` | `ExecutionOutcome<T>` есть частично; миграция к canonical outcome остается открытой. | `ADR-TASK-003`, `ADR-TASK-006`, `ADR-TASK-020`, `ADR-TASK-024`, `ADR-TASK-025` |
+| `ADR-0017` | Config contract реализован частично; структура подключения ИБ уточнена отдельным ADR-0018, а content-based autodiscovery `config init` и external aggregate detection остаются отдельным gap. | `ADR-TASK-008`, `ADR-TASK-010`, `ADR-TASK-012`, `ADR-TASK-021` |
 | `ADR-0018` | `infobase` становится единственным контрактом подключения, credentials и DBMS-level настроек. | `ADR-TASK-008` |
 | `ADR-0020` | Repo-aware `convert [--source-set <name>]` и отдельный `dump format=EDT` reverse-sync flow реализованы как разные сценарии; `convert` не подменяет `dump`. | `ADR-TASK-014` |
 
 ## Следующий рекомендуемый порядок
 
-1. Следующим брать `ADR-TASK-015`: перенести оставшиеся `source-set` layout-checks на config validation boundary по ADR-0017.
-2. Затем `ADR-TASK-016`, чтобы довести CLI JSON error contract для ранних failures по ADR-0010.
-3. Дальше возвращаться к новым follow-up задачам вокруг outcome/output contract по мере появления.
-4. Затем `ADR-TASK-007`, `ADR-TASK-009` и `ADR-TASK-010` как следующий слой rendering, regression и guardrail работ.
+1. Следующим брать `ADR-TASK-019` как ближайший открытый public-contract пункт по help/output-path naming.
+2. Затем `ADR-TASK-020`, `ADR-TASK-021` и `ADR-TASK-022`, чтобы снять основные архитектурные hotspots в orchestration, source-set classification и adapter boundary.
+3. После этого идти в `ADR-TASK-023`, `ADR-TASK-024` и `ADR-TASK-025` как в следующий слой типобезопасности request/error/result contract.
+4. Затем возвращаться к `ADR-TASK-018`, `ADR-TASK-016` и `ADR-TASK-026` как к product-contract и test-maintenance follow-up задачам.

@@ -24,7 +24,8 @@ fn use_cases_do_not_depend_on_transport_or_presentation_types() {
     let files = collect_rust_files(&root);
     for expected in ["build_project.rs", "result.rs", "workspace_lock.rs"] {
         assert!(
-            files.iter()
+            files
+                .iter()
                 .any(|path| path.file_name().is_some_and(|name| name == expected)),
             "expected recursive scan to include src/use_cases/{expected}"
         );
