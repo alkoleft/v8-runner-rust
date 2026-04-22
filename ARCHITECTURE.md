@@ -111,7 +111,7 @@ Important staging note:
 `build` and `dump` use cases dispatch by `builder`:
 
 - `builder=DESIGNER` uses the existing `DesignerDsl`.
-- `builder=IBCMD` uses `IbcmdDsl` with `config import/apply` for build and `config export` for dump; for EDT build, the EDT export step still produces Designer-format files first.
+- `builder=IBCMD` uses `IbcmdDsl` with `config import/apply` for build and `config export` for dump; for EDT build the EDT export step still produces Designer-format files first, and for EDT dump the reverse path first updates an internal Designer snapshot before EDT import/publication.
 - Builder backends are expected to stay interchangeable for implemented builder scenarios. Functionality added for the Designer builder should also be available through the IBCMD builder, or the gap must be documented explicitly. Future Designer agent mode should be added behind the same use-case contract.
 - Server infobase support is a target contract for all tools; file-only behavior must be documented as a current gap rather than treated as the permanent architecture.
 

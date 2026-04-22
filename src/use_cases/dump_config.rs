@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tempfile::NamedTempFile;
@@ -12,6 +13,8 @@ use crate::config::model::{
 use crate::domain::dump::{DumpMode, DumpResult};
 use crate::domain::source_set::SourceSetContext;
 use crate::platform::designer::DesignerDsl;
+use crate::platform::edt::EdtDsl;
+use crate::platform::edt_session::{EdtSessionHostOptions, EdtSessionManager};
 use crate::platform::ibcmd::{IbcmdConnection, IbcmdDsl, IbcmdError};
 use crate::platform::locator::UtilityType;
 use crate::platform::process::ProcessRunner;
@@ -38,8 +41,7 @@ use tracing::debug;
 
 #[cfg(test)]
 const DUMP_COMMAND: &str = crate::use_cases::context::CommandName::Dump.as_str();
-const SUPPORTED_DUMP_ERROR: &str =
-    "dump currently supports only builder=DESIGNER or IBCMD with format=DESIGNER";
+const SUPPORTED_DUMP_ERROR: &str = "dump currently supports only builder=DESIGNER or IBCMD";
 const PARTIAL_OBJECTS_REQUIRED_ERROR: &str = "partial dump requires at least one object";
 const PARTIAL_OBJECT_BLANK_ERROR: &str = "partial dump objects must not be blank";
 const PARTIAL_OBJECT_CONTROL_ERROR: &str =
@@ -69,10 +71,14 @@ struct ResolvedDumpTarget {
     extension: Option<String>,
     target_path: PathBuf,
     canonical_target_path: PathBuf,
+    platform_target_path: PathBuf,
+    canonical_platform_target_path: PathBuf,
     canonical_base_path: PathBuf,
     canonical_work_path: PathBuf,
     target_identity: String,
+    platform_target_identity: String,
     lock_path: PathBuf,
+    edt_base_project_name: Option<String>,
 }
 
 #[cfg(test)]
@@ -172,6 +178,28 @@ fn run_dump_with_context(
             ));
         }
     };
+    let edt_binary = if config.format == SourceFormat::Edt {
+        Some(match utilities.locate(UtilityType::EdtCli) {
+            Ok(location) => location.path,
+            Err(error) => {
+                let message = error.to_string();
+                let app_error = AppError::Platform(message.clone());
+                return Err(DumpExecutionFailure::with_payload(
+                    app_error,
+                    empty_result(
+                        mode,
+                        started,
+                        Some(resolved.source_set_name.clone()),
+                        resolved.extension.clone(),
+                        Some(resolved.target_path.clone()),
+                        Some(message),
+                    ),
+                ));
+            }
+        })
+    } else {
+        None
+    };
 
     let lock_guard = match acquire_advisory_lock(&resolved.lock_path) {
         Ok(lock_guard) => lock_guard,
@@ -210,6 +238,23 @@ fn run_dump_with_context(
             ),
         ));
     }
+    if resolved.platform_target_path != resolved.target_path {
+        if let Err(error) = cleanup_platform_orphan_dirs(&resolved) {
+            let message = format!("failed to cleanup stale dump platform temp dirs: {error}");
+            let app_error = AppError::Runtime(message.clone());
+            return Err(DumpExecutionFailure::with_payload(
+                app_error,
+                empty_result(
+                    mode,
+                    started,
+                    Some(resolved.source_set_name.clone()),
+                    resolved.extension.clone(),
+                    Some(resolved.target_path.clone()),
+                    Some(message),
+                ),
+            ));
+        }
+    }
 
     if let Err(error) = validate_publish_target(&resolved) {
         let message = error.to_string();
@@ -225,55 +270,173 @@ fn run_dump_with_context(
             ),
         ));
     }
+    if resolved.platform_target_path != resolved.target_path {
+        if let Err(error) = validate_platform_target(&resolved) {
+            let message = error.to_string();
+            return Err(DumpExecutionFailure::with_payload(
+                error,
+                empty_result(
+                    mode,
+                    started,
+                    Some(resolved.source_set_name.clone()),
+                    resolved.extension.clone(),
+                    Some(resolved.target_path.clone()),
+                    Some(message),
+                ),
+            ));
+        }
+    }
 
     let partial_objects = partial_objects.as_deref();
-    let result = match (&mode, &config.builder, partial_objects) {
-        (DumpMode::Incremental, BuilderBackend::Designer, _) => run_incremental_dump_designer(
+    let edt_binary = edt_binary.as_deref();
+    let result = match (
+        config.format,
+        &mode,
+        &config.builder,
+        partial_objects,
+        edt_binary,
+    ) {
+        (SourceFormat::Designer, DumpMode::Incremental, BuilderBackend::Designer, _, _) => {
+            run_incremental_dump_designer(
+                context,
+                config,
+                &resolved,
+                location.path.as_path(),
+                utilities.runner_for(UtilityType::V8),
+            )
+        }
+        (SourceFormat::Designer, DumpMode::Incremental, BuilderBackend::Ibcmd, _, _) => {
+            run_incremental_dump_ibcmd(
+                context,
+                config,
+                &resolved,
+                location.path.as_path(),
+                utilities.runner_for(UtilityType::Ibcmd),
+            )
+        }
+        (SourceFormat::Designer, DumpMode::Full, BuilderBackend::Designer, _, _) => {
+            run_full_dump_designer(
+                context,
+                config,
+                &resolved,
+                location.path.as_path(),
+                utilities.runner_for(UtilityType::V8),
+            )
+        }
+        (SourceFormat::Designer, DumpMode::Full, BuilderBackend::Ibcmd, _, _) => {
+            run_full_dump_ibcmd(
+                context,
+                config,
+                &resolved,
+                location.path.as_path(),
+                utilities.runner_for(UtilityType::Ibcmd),
+            )
+        }
+        (SourceFormat::Designer, DumpMode::Partial, BuilderBackend::Designer, Some(objects), _) => {
+            run_partial_dump_designer(
+                context,
+                config,
+                &resolved,
+                location.path.as_path(),
+                utilities.runner_for(UtilityType::V8),
+                objects,
+            )
+        }
+        (SourceFormat::Designer, DumpMode::Partial, BuilderBackend::Ibcmd, Some(objects), _) => {
+            run_partial_dump_ibcmd(
+                context,
+                config,
+                &resolved,
+                location.path.as_path(),
+                utilities.runner_for(UtilityType::Ibcmd),
+                objects,
+            )
+        }
+        (
+            SourceFormat::Edt,
+            DumpMode::Incremental,
+            BuilderBackend::Designer,
+            _,
+            Some(edt_binary),
+        ) => run_incremental_dump_edt_designer(
             context,
             config,
             &resolved,
             location.path.as_path(),
+            edt_binary,
             utilities.runner_for(UtilityType::V8),
+            utilities.runner_for(UtilityType::EdtCli),
         ),
-        (DumpMode::Incremental, BuilderBackend::Ibcmd, _) => run_incremental_dump_ibcmd(
+        (SourceFormat::Edt, DumpMode::Incremental, BuilderBackend::Ibcmd, _, Some(edt_binary)) => {
+            run_incremental_dump_edt_ibcmd(
+                context,
+                config,
+                &resolved,
+                location.path.as_path(),
+                edt_binary,
+                utilities.runner_for(UtilityType::Ibcmd),
+                utilities.runner_for(UtilityType::EdtCli),
+            )
+        }
+        (SourceFormat::Edt, DumpMode::Full, BuilderBackend::Designer, _, Some(edt_binary)) => {
+            run_full_dump_edt_designer(
+                context,
+                config,
+                &resolved,
+                location.path.as_path(),
+                edt_binary,
+                utilities.runner_for(UtilityType::V8),
+                utilities.runner_for(UtilityType::EdtCli),
+            )
+        }
+        (SourceFormat::Edt, DumpMode::Full, BuilderBackend::Ibcmd, _, Some(edt_binary)) => {
+            run_full_dump_edt_ibcmd(
+                context,
+                config,
+                &resolved,
+                location.path.as_path(),
+                edt_binary,
+                utilities.runner_for(UtilityType::Ibcmd),
+                utilities.runner_for(UtilityType::EdtCli),
+            )
+        }
+        (
+            SourceFormat::Edt,
+            DumpMode::Partial,
+            BuilderBackend::Designer,
+            Some(objects),
+            Some(edt_binary),
+        ) => run_partial_dump_edt_designer(
             context,
             config,
             &resolved,
             location.path.as_path(),
-            utilities.runner_for(UtilityType::Ibcmd),
-        ),
-        (DumpMode::Full, BuilderBackend::Designer, _) => run_full_dump_designer(
-            context,
-            config,
-            &resolved,
-            location.path.as_path(),
+            edt_binary,
             utilities.runner_for(UtilityType::V8),
-        ),
-        (DumpMode::Full, BuilderBackend::Ibcmd, _) => run_full_dump_ibcmd(
-            context,
-            config,
-            &resolved,
-            location.path.as_path(),
-            utilities.runner_for(UtilityType::Ibcmd),
-        ),
-        (DumpMode::Partial, BuilderBackend::Designer, Some(objects)) => run_partial_dump_designer(
-            context,
-            config,
-            &resolved,
-            location.path.as_path(),
-            utilities.runner_for(UtilityType::V8),
+            utilities.runner_for(UtilityType::EdtCli),
             objects,
         ),
-        (DumpMode::Partial, BuilderBackend::Ibcmd, Some(objects)) => run_partial_dump_ibcmd(
+        (
+            SourceFormat::Edt,
+            DumpMode::Partial,
+            BuilderBackend::Ibcmd,
+            Some(objects),
+            Some(edt_binary),
+        ) => run_partial_dump_edt_ibcmd(
             context,
             config,
             &resolved,
             location.path.as_path(),
+            edt_binary,
             utilities.runner_for(UtilityType::Ibcmd),
+            utilities.runner_for(UtilityType::EdtCli),
             objects,
         ),
-        (DumpMode::Partial, _, None) => Err(AppError::Runtime(
+        (_, DumpMode::Partial, _, None, _) => Err(AppError::Runtime(
             "partial dump objects were not validated before execution".to_owned(),
+        )),
+        (SourceFormat::Edt, _, _, _, None) => Err(AppError::Runtime(
+            "EDT binary must be resolved before executing format=EDT dump".to_owned(),
         )),
     };
     drop(lock_guard);
@@ -317,10 +480,10 @@ fn run_incremental_dump_designer(
 ) -> Result<(PlatformCommandResult, Option<String>), AppError> {
     debug!(
         source_set = resolved.source_set_name.as_str(),
-        target = %resolved.target_path.display(),
+        target = %resolved.platform_target_path.display(),
         "running incremental dump"
     );
-    ensure_dir(&resolved.target_path)
+    ensure_dir(&resolved.platform_target_path)
         .map_err(|error| AppError::Runtime(format!("failed to create target dir: {error}")))?;
 
     let dump_result = build_designer_dsl(
@@ -331,7 +494,10 @@ fn run_incremental_dump_designer(
         &resolved.source_set_name,
         "incremental",
     )?
-    .dump_config_to_files(&resolved.target_path, resolved.extension.as_deref())
+    .dump_config_to_files(
+        &resolved.platform_target_path,
+        resolved.extension.as_deref(),
+    )
     .map_err(|error| AppError::Platform(error.to_string()))?;
     ensure_platform_success("dump", resolved, &dump_result)?;
     Ok((dump_result, None))
@@ -346,13 +512,13 @@ fn run_full_dump_designer(
 ) -> Result<(PlatformCommandResult, Option<String>), AppError> {
     debug!(
         source_set = resolved.source_set_name.as_str(),
-        target = %resolved.target_path.display(),
+        target = %resolved.platform_target_path.display(),
         "running full dump via staging directory"
     );
-    let target_parent = resolved.target_path.parent().ok_or_else(|| {
+    let target_parent = resolved.platform_target_path.parent().ok_or_else(|| {
         AppError::Runtime(format!(
             "target path has no parent: {}",
-            resolved.target_path.display()
+            resolved.platform_target_path.display()
         ))
     })?;
     ensure_dir(target_parent).map_err(|error| {
@@ -374,8 +540,8 @@ fn run_full_dump_designer(
         &staging_dir,
         TempDirKind::Stage,
         &run_id,
-        &resolved.target_path,
-        &resolved.target_identity,
+        &resolved.platform_target_path,
+        &resolved.platform_target_identity,
     )
     .map_err(|error| AppError::Runtime(format!("failed to write stage metadata: {error}")))?;
 
@@ -396,7 +562,7 @@ fn run_full_dump_designer(
     ensure_platform_success("dump", resolved, &dump_result)
         .map_err(|error| cleanup_staging_on_platform_failure(&staging_dir, error))?;
 
-    validate_publish_target(resolved)?;
+    validate_platform_target(resolved)?;
     if let Some(interruption) = context.interruption() {
         return Err(cleanup_staging_on_interruption(
             &staging_dir,
@@ -411,14 +577,14 @@ fn run_full_dump_designer(
     let publish_phase = context.run_no_process_critical_phase(|| {
         replace_dir_atomically(
             &staging_dir,
-            &resolved.target_path,
+            &resolved.platform_target_path,
             &run_id,
-            &resolved.target_identity,
+            &resolved.platform_target_identity,
             DUMP_BACKUP_PREFIX,
         )
         .map_err(|error| AppError::Runtime(format!("failed to publish staged dump: {error}")))
     })?;
-    debug!(target = %resolved.target_path.display(), "published staged dump");
+    debug!(target = %resolved.platform_target_path.display(), "published staged dump");
 
     Ok((
         dump_result,
@@ -438,14 +604,17 @@ fn run_incremental_dump_ibcmd(
 ) -> Result<(PlatformCommandResult, Option<String>), AppError> {
     debug!(
         source_set = resolved.source_set_name.as_str(),
-        target = %resolved.target_path.display(),
+        target = %resolved.platform_target_path.display(),
         "running incremental ibcmd dump"
     );
-    ensure_dir(&resolved.target_path)
+    ensure_dir(&resolved.platform_target_path)
         .map_err(|error| AppError::Runtime(format!("failed to create target dir: {error}")))?;
 
     let dump_result = build_ibcmd_dsl(context, config, binary, runner)?
-        .config_export_incremental(&resolved.target_path, resolved.extension.as_deref())
+        .config_export_incremental(
+            &resolved.platform_target_path,
+            resolved.extension.as_deref(),
+        )
         .map_err(map_ibcmd_error)?;
     ensure_platform_success("dump", resolved, &dump_result)?;
     Ok((dump_result, None))
@@ -460,13 +629,13 @@ fn run_full_dump_ibcmd(
 ) -> Result<(PlatformCommandResult, Option<String>), AppError> {
     debug!(
         source_set = resolved.source_set_name.as_str(),
-        target = %resolved.target_path.display(),
+        target = %resolved.platform_target_path.display(),
         "running full ibcmd dump via staging directory"
     );
-    let target_parent = resolved.target_path.parent().ok_or_else(|| {
+    let target_parent = resolved.platform_target_path.parent().ok_or_else(|| {
         AppError::Runtime(format!(
             "target path has no parent: {}",
-            resolved.target_path.display()
+            resolved.platform_target_path.display()
         ))
     })?;
     ensure_dir(target_parent).map_err(|error| {
@@ -488,8 +657,8 @@ fn run_full_dump_ibcmd(
         &staging_dir,
         TempDirKind::Stage,
         &run_id,
-        &resolved.target_path,
-        &resolved.target_identity,
+        &resolved.platform_target_path,
+        &resolved.platform_target_identity,
     )
     .map_err(|error| AppError::Runtime(format!("failed to write stage metadata: {error}")))?;
 
@@ -503,7 +672,7 @@ fn run_full_dump_ibcmd(
     ensure_platform_success("dump", resolved, &dump_result)
         .map_err(|error| cleanup_staging_on_platform_failure(&staging_dir, error))?;
 
-    validate_publish_target(resolved)?;
+    validate_platform_target(resolved)?;
     if let Some(interruption) = context.interruption() {
         return Err(cleanup_staging_on_interruption(
             &staging_dir,
@@ -518,14 +687,14 @@ fn run_full_dump_ibcmd(
     let publish_phase = context.run_no_process_critical_phase(|| {
         replace_dir_atomically(
             &staging_dir,
-            &resolved.target_path,
+            &resolved.platform_target_path,
             &run_id,
-            &resolved.target_identity,
+            &resolved.platform_target_identity,
             DUMP_BACKUP_PREFIX,
         )
         .map_err(|error| AppError::Runtime(format!("failed to publish staged dump: {error}")))
     })?;
-    debug!(target = %resolved.target_path.display(), "published staged dump");
+    debug!(target = %resolved.platform_target_path.display(), "published staged dump");
 
     Ok((
         dump_result,
@@ -546,11 +715,11 @@ fn run_partial_dump_designer(
 ) -> Result<(PlatformCommandResult, Option<String>), AppError> {
     debug!(
         source_set = resolved.source_set_name.as_str(),
-        target = %resolved.target_path.display(),
+        target = %resolved.platform_target_path.display(),
         object_count = objects.len(),
         "running partial designer dump"
     );
-    ensure_dir(&resolved.target_path)
+    ensure_dir(&resolved.platform_target_path)
         .map_err(|error| AppError::Runtime(format!("failed to create target dir: {error}")))?;
 
     let list_file = create_dump_object_list_file(&config.work_path, objects)?;
@@ -563,7 +732,7 @@ fn run_partial_dump_designer(
         "partial",
     )?
     .dump_config_to_files_partial(
-        &resolved.target_path,
+        &resolved.platform_target_path,
         list_file.path(),
         resolved.extension.as_deref(),
     )
@@ -585,6 +754,411 @@ fn run_partial_dump_ibcmd(
         Ok((dump_result, _)) => Ok((dump_result, Some(warning))),
         Err(error) => Err(decorate_ibcmd_partial_error(error, &warning)),
     }
+}
+
+fn ensure_interruption_clear(context: &ExecutionContext, phase: &str) -> Result<(), AppError> {
+    if let Some(interruption) = context.interruption() {
+        return Err(AppError::Runtime(format!(
+            "{} for command '{}' {phase}",
+            interruption.message(context.command()),
+            context.command().as_str()
+        )));
+    }
+    Ok(())
+}
+
+fn run_incremental_dump_edt_designer(
+    context: &ExecutionContext,
+    config: &AppConfig,
+    resolved: &ResolvedDumpTarget,
+    binary: &Path,
+    edt_binary: &Path,
+    runner: &dyn ProcessRunner,
+    edt_runner: &dyn ProcessRunner,
+) -> Result<(PlatformCommandResult, Option<String>), AppError> {
+    let bootstrap_message = ensure_edt_platform_target_seeded(
+        context,
+        config,
+        resolved,
+        binary,
+        runner,
+        run_full_dump_designer,
+    )?;
+    ensure_interruption_clear(
+        context,
+        "before starting EDT follow-up dump after bootstrap publication",
+    )?;
+    let (dump_result, dump_message) =
+        run_incremental_dump_designer(context, config, resolved, binary, runner)?;
+    finalize_edt_dump(
+        context,
+        config,
+        resolved,
+        edt_binary,
+        edt_runner,
+        dump_result,
+        merge_optional_messages(bootstrap_message, dump_message),
+    )
+}
+
+fn run_full_dump_edt_designer(
+    context: &ExecutionContext,
+    config: &AppConfig,
+    resolved: &ResolvedDumpTarget,
+    binary: &Path,
+    edt_binary: &Path,
+    runner: &dyn ProcessRunner,
+    edt_runner: &dyn ProcessRunner,
+) -> Result<(PlatformCommandResult, Option<String>), AppError> {
+    let (dump_result, dump_message) =
+        run_full_dump_designer(context, config, resolved, binary, runner)?;
+    finalize_edt_dump(
+        context,
+        config,
+        resolved,
+        edt_binary,
+        edt_runner,
+        dump_result,
+        dump_message,
+    )
+}
+
+fn run_partial_dump_edt_designer(
+    context: &ExecutionContext,
+    config: &AppConfig,
+    resolved: &ResolvedDumpTarget,
+    binary: &Path,
+    edt_binary: &Path,
+    runner: &dyn ProcessRunner,
+    edt_runner: &dyn ProcessRunner,
+    objects: &[String],
+) -> Result<(PlatformCommandResult, Option<String>), AppError> {
+    let bootstrap_message = ensure_edt_platform_target_seeded(
+        context,
+        config,
+        resolved,
+        binary,
+        runner,
+        run_full_dump_designer,
+    )?;
+    ensure_interruption_clear(
+        context,
+        "before starting EDT follow-up dump after bootstrap publication",
+    )?;
+    let (dump_result, dump_message) =
+        run_partial_dump_designer(context, config, resolved, binary, runner, objects)?;
+    finalize_edt_dump(
+        context,
+        config,
+        resolved,
+        edt_binary,
+        edt_runner,
+        dump_result,
+        merge_optional_messages(bootstrap_message, dump_message),
+    )
+}
+
+fn run_incremental_dump_edt_ibcmd(
+    context: &ExecutionContext,
+    config: &AppConfig,
+    resolved: &ResolvedDumpTarget,
+    binary: &Path,
+    edt_binary: &Path,
+    runner: &dyn ProcessRunner,
+    edt_runner: &dyn ProcessRunner,
+) -> Result<(PlatformCommandResult, Option<String>), AppError> {
+    let bootstrap_message = ensure_edt_platform_target_seeded(
+        context,
+        config,
+        resolved,
+        binary,
+        runner,
+        run_full_dump_ibcmd,
+    )?;
+    ensure_interruption_clear(
+        context,
+        "before starting EDT follow-up dump after bootstrap publication",
+    )?;
+    let (dump_result, dump_message) =
+        run_incremental_dump_ibcmd(context, config, resolved, binary, runner)?;
+    finalize_edt_dump(
+        context,
+        config,
+        resolved,
+        edt_binary,
+        edt_runner,
+        dump_result,
+        merge_optional_messages(bootstrap_message, dump_message),
+    )
+}
+
+fn run_full_dump_edt_ibcmd(
+    context: &ExecutionContext,
+    config: &AppConfig,
+    resolved: &ResolvedDumpTarget,
+    binary: &Path,
+    edt_binary: &Path,
+    runner: &dyn ProcessRunner,
+    edt_runner: &dyn ProcessRunner,
+) -> Result<(PlatformCommandResult, Option<String>), AppError> {
+    let (dump_result, dump_message) =
+        run_full_dump_ibcmd(context, config, resolved, binary, runner)?;
+    finalize_edt_dump(
+        context,
+        config,
+        resolved,
+        edt_binary,
+        edt_runner,
+        dump_result,
+        dump_message,
+    )
+}
+
+fn run_partial_dump_edt_ibcmd(
+    context: &ExecutionContext,
+    config: &AppConfig,
+    resolved: &ResolvedDumpTarget,
+    binary: &Path,
+    edt_binary: &Path,
+    runner: &dyn ProcessRunner,
+    edt_runner: &dyn ProcessRunner,
+    objects: &[String],
+) -> Result<(PlatformCommandResult, Option<String>), AppError> {
+    let bootstrap_message = ensure_edt_platform_target_seeded(
+        context,
+        config,
+        resolved,
+        binary,
+        runner,
+        run_full_dump_ibcmd,
+    )?;
+    ensure_interruption_clear(
+        context,
+        "before starting EDT follow-up dump after bootstrap publication",
+    )?;
+    let (dump_result, dump_message) =
+        run_partial_dump_ibcmd(context, config, resolved, binary, runner, objects)?;
+    finalize_edt_dump(
+        context,
+        config,
+        resolved,
+        edt_binary,
+        edt_runner,
+        dump_result,
+        merge_optional_messages(bootstrap_message, dump_message),
+    )
+}
+
+fn ensure_edt_platform_target_seeded(
+    context: &ExecutionContext,
+    config: &AppConfig,
+    resolved: &ResolvedDumpTarget,
+    binary: &Path,
+    runner: &dyn ProcessRunner,
+    full_dump_runner: fn(
+        &ExecutionContext,
+        &AppConfig,
+        &ResolvedDumpTarget,
+        &Path,
+        &dyn ProcessRunner,
+    ) -> Result<(PlatformCommandResult, Option<String>), AppError>,
+) -> Result<Option<String>, AppError> {
+    if designer_snapshot_is_ready(&resolved.platform_target_path)? {
+        return Ok(None);
+    }
+
+    debug!(
+        source_set = resolved.source_set_name.as_str(),
+        target = %resolved.platform_target_path.display(),
+        "bootstrapping missing designer dump snapshot for EDT reverse sync"
+    );
+    let (_, message) = full_dump_runner(context, config, resolved, binary, runner)?;
+    Ok(message)
+}
+
+fn designer_snapshot_is_ready(path: &Path) -> Result<bool, AppError> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    if !path.is_dir() {
+        return Ok(false);
+    }
+    Ok(path.join("Configuration.xml").is_file())
+}
+
+fn finalize_edt_dump(
+    context: &ExecutionContext,
+    config: &AppConfig,
+    resolved: &ResolvedDumpTarget,
+    edt_binary: &Path,
+    edt_runner: &dyn ProcessRunner,
+    platform_result: PlatformCommandResult,
+    inherited_message: Option<String>,
+) -> Result<(PlatformCommandResult, Option<String>), AppError> {
+    ensure_interruption_clear(
+        context,
+        "before starting EDT reverse-sync import after designer snapshot publication",
+    )?;
+    let target_parent = resolved.target_path.parent().ok_or_else(|| {
+        AppError::Runtime(format!(
+            "target path has no parent: {}",
+            resolved.target_path.display()
+        ))
+    })?;
+    ensure_dir(target_parent).map_err(|error| {
+        AppError::Runtime(format!("failed to create target parent dir: {error}"))
+    })?;
+
+    let run_id = make_run_id();
+    let staging_dir = target_parent.join(format!(".dump-stage-{run_id}"));
+    if staging_dir.exists() {
+        return Err(AppError::Runtime(format!(
+            "staging dir already exists unexpectedly: {}",
+            staging_dir.display()
+        )));
+    }
+    std::fs::create_dir(&staging_dir)
+        .map_err(|error| AppError::Runtime(format!("failed to create staging dir: {error}")))?;
+    write_temp_dir_metadata(
+        &staging_dir,
+        TempDirKind::Stage,
+        &run_id,
+        &resolved.target_path,
+        &resolved.target_identity,
+    )
+    .map_err(|error| AppError::Runtime(format!("failed to write stage metadata: {error}")))?;
+
+    let edt_dsl = build_edt_dsl(context, config, edt_binary, edt_runner)
+        .map_err(|error| cleanup_staging_on_platform_failure(&staging_dir, error))?;
+    let import_result = match edt_dsl
+        .import_configuration_files(
+            &staging_dir,
+            &resolved.platform_target_path,
+            normalize_config_hint(config.tools.platform.version.as_deref()),
+            resolved.edt_base_project_name.as_deref(),
+            false,
+        )
+        .map_err(|error| AppError::Platform(error.to_string()))
+    {
+        Ok(result) => result,
+        Err(error) => return Err(cleanup_staging_on_platform_failure(&staging_dir, error)),
+    };
+    ensure_import_success(resolved, &import_result)
+        .map_err(|error| cleanup_staging_on_platform_failure(&staging_dir, error))?;
+    validate_edt_dump_staging_output(&staging_dir)
+        .map_err(|error| cleanup_staging_on_platform_failure(&staging_dir, error))?;
+    validate_publish_target(resolved)
+        .map_err(|error| cleanup_staging_on_platform_failure(&staging_dir, error))?;
+
+    if let Some(interruption) = context.interruption() {
+        return Err(cleanup_staging_on_interruption(
+            &staging_dir,
+            AppError::Runtime(format!(
+                "{} for command '{}' before entering dump publication safe point",
+                interruption.message(context.command()),
+                context.command().as_str()
+            )),
+        ));
+    }
+
+    let publish_phase = context.run_no_process_critical_phase(|| {
+        replace_dir_atomically(
+            &staging_dir,
+            &resolved.target_path,
+            &run_id,
+            &resolved.target_identity,
+            DUMP_BACKUP_PREFIX,
+        )
+        .map_err(|error| AppError::Runtime(format!("failed to publish staged dump: {error}")))
+    })?;
+
+    Ok((
+        platform_result,
+        merge_optional_messages(
+            inherited_message,
+            merge_optional_messages(
+                publish_phase.value.cleanup_warning,
+                dump_publication_warning(context.command(), publish_phase.deferred_interruption),
+            ),
+        ),
+    ))
+}
+
+fn validate_edt_dump_staging_output(staging_dir: &Path) -> Result<(), AppError> {
+    if staging_dir.join(".project").is_file() {
+        Ok(())
+    } else {
+        Err(AppError::Validation(format!(
+            "EDT dump output must contain '.project': {}",
+            staging_dir.display()
+        )))
+    }
+}
+
+fn ensure_import_success(
+    resolved: &ResolvedDumpTarget,
+    result: &PlatformCommandResult,
+) -> Result<(), AppError> {
+    if result.process.exit_code == 0 {
+        return Ok(());
+    }
+
+    let mut details = vec![format!(
+        "dump EDT import failed for source-set '{}' with exit code {}",
+        resolved.source_set_name, result.process.exit_code
+    )];
+    if !result.process.stdout.trim().is_empty() {
+        details.push(format!("stdout: {}", result.process.stdout.trim()));
+    }
+    if !result.process.stderr.trim().is_empty() {
+        details.push(format!("stderr: {}", result.process.stderr.trim()));
+    }
+    if let Some(log) = result
+        .platform_log
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        details.push(format!("platform log: {}", log.trim()));
+    }
+    if let Some(path) = result.platform_log_path.as_ref() {
+        details.push(format!("platform log path: {}", path.display()));
+    }
+    Err(AppError::Platform(details.join("; ")))
+}
+
+fn build_edt_dsl<'a>(
+    context: &ExecutionContext,
+    config: &AppConfig,
+    binary: &Path,
+    runner: &'a dyn ProcessRunner,
+) -> Result<EdtDsl<'a>, AppError> {
+    let workspace = config.work_path.join("edt-workspace");
+    let policy = context.process_policy(InterruptionSafetyClass::GracefulThenKill, None);
+    if config.tools.edt_cli.interactive_mode {
+        let manager =
+            EdtSessionManager::for_config(config, EdtSessionHostOptions::for_cli_command(config))
+                .map_err(|error| AppError::Platform(error.to_string()))?;
+        EdtDsl::new_shared_session(
+            binary.to_path_buf(),
+            workspace,
+            Arc::new(manager),
+            Duration::from_millis(config.tools.edt_cli.startup_timeout_ms),
+            Duration::from_millis(config.tools.edt_cli.command_timeout_ms),
+        )
+        .map_err(|error| AppError::Platform(error.to_string()))
+        .map(|dsl| {
+            dsl.with_timeout(context.edt_timeout())
+                .with_execution_policy(policy)
+        })
+    } else {
+        Ok(EdtDsl::new(binary.to_path_buf(), workspace, runner)
+            .with_timeout(context.edt_timeout())
+            .with_execution_policy(policy))
+    }
+}
+
+fn normalize_config_hint(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
 }
 
 pub(crate) fn run_external_dump_designer(
@@ -768,7 +1342,7 @@ fn cleanup_staging_on_interruption(staging_dir: &Path, error: AppError) -> AppEr
 
 fn resolve_target(config: &AppConfig, args: &DumpArgs) -> Result<ResolvedDumpTarget, AppError> {
     let service = SourceSetsService::new(config);
-    let contexts_by_name: HashMap<String, SourceSetContext> = service
+    let designer_contexts_by_name: HashMap<String, SourceSetContext> = service
         .designer_contexts()
         .into_iter()
         .map(|context| (context.name().to_owned(), context))
@@ -844,30 +1418,50 @@ fn resolve_target(config: &AppConfig, args: &DumpArgs) -> Result<ResolvedDumpTar
         }
     };
 
-    let context = contexts_by_name
-        .get(&source_set.name)
-        .cloned()
-        .ok_or_else(|| {
-            AppError::Runtime(format!(
-                "missing runtime context for source-set '{}'",
-                source_set.name
-            ))
-        })?;
-    let target_path = context.path().to_path_buf();
+    let target_path = resolve_source_set_path(config, source_set);
+    let platform_target_path = if config.format == SourceFormat::Edt {
+        designer_contexts_by_name
+            .get(&source_set.name)
+            .cloned()
+            .ok_or_else(|| {
+                AppError::Runtime(format!(
+                    "missing designer runtime context for source-set '{}'",
+                    source_set.name
+                ))
+            })?
+            .path()
+            .to_path_buf()
+    } else {
+        target_path.clone()
+    };
     let canonical_target_path = nearest_existing_canonical_path(&target_path).map_err(|error| {
         AppError::Runtime(format!("failed to canonicalize target path: {error}"))
     })?;
+    let canonical_platform_target_path = nearest_existing_canonical_path(&platform_target_path)
+        .map_err(|error| {
+            AppError::Runtime(format!(
+                "failed to canonicalize platform target path: {error}"
+            ))
+        })?;
     let canonical_base_path = nearest_existing_canonical_path(&config.base_path)
         .map_err(|error| AppError::Runtime(format!("failed to canonicalize basePath: {error}")))?;
     let canonical_work_path = nearest_existing_canonical_path(&config.work_path)
         .map_err(|error| AppError::Runtime(format!("failed to canonicalize workPath: {error}")))?;
     let target_identity = stable_path_identity(&canonical_target_path);
+    let platform_target_identity = stable_path_identity(&canonical_platform_target_path);
     if target_path.parent().is_none() {
         return Err(AppError::Runtime(format!(
             "target path has no parent: {}",
             target_path.display()
         )));
     }
+    let edt_base_project_name = if config.format == SourceFormat::Edt
+        && source_set.purpose == SourceSetPurpose::Extension
+    {
+        Some(resolve_dump_edt_base_project_name(config)?)
+    } else {
+        None
+    };
     let lock_path = hashed_lock_path(&canonical_target_path, "dump")
         .map_err(|error| AppError::Runtime(format!("failed to resolve dump lock path: {error}")))?;
 
@@ -876,20 +1470,22 @@ fn resolve_target(config: &AppConfig, args: &DumpArgs) -> Result<ResolvedDumpTar
         extension,
         target_path,
         canonical_target_path,
+        platform_target_path,
+        canonical_platform_target_path,
         canonical_base_path,
         canonical_work_path,
         target_identity,
+        platform_target_identity,
         lock_path,
+        edt_base_project_name,
     })
 }
 
 fn validate_supported_matrix(config: &AppConfig) -> Option<AppError> {
-    if config.format == SourceFormat::Designer
-        && matches!(
-            config.builder,
-            BuilderBackend::Designer | BuilderBackend::Ibcmd
-        )
-    {
+    if matches!(
+        config.builder,
+        BuilderBackend::Designer | BuilderBackend::Ibcmd
+    ) {
         None
     } else {
         Some(AppError::Validation(SUPPORTED_DUMP_ERROR.to_owned()))
@@ -897,28 +1493,55 @@ fn validate_supported_matrix(config: &AppConfig) -> Option<AppError> {
 }
 
 fn validate_publish_target(resolved: &ResolvedDumpTarget) -> Result<(), AppError> {
-    if resolved.canonical_target_path
-        != nearest_existing_canonical_path(&resolved.target_path).map_err(|error| {
+    validate_publish_target_path(
+        &resolved.target_path,
+        &resolved.canonical_target_path,
+        &resolved.canonical_base_path,
+        &resolved.canonical_work_path,
+    )
+}
+
+fn cleanup_orphan_dirs(resolved: &ResolvedDumpTarget) -> Result<(), AppError> {
+    cleanup_orphan_dirs_for(&resolved.target_path, &resolved.target_identity)
+}
+
+fn validate_platform_target(resolved: &ResolvedDumpTarget) -> Result<(), AppError> {
+    validate_publish_target_path(
+        &resolved.platform_target_path,
+        &resolved.canonical_platform_target_path,
+        &resolved.canonical_base_path,
+        &resolved.canonical_work_path,
+    )
+}
+
+fn validate_publish_target_path(
+    target_path: &Path,
+    canonical_target_path: &Path,
+    canonical_base_path: &Path,
+    canonical_work_path: &Path,
+) -> Result<(), AppError> {
+    if canonical_target_path
+        != nearest_existing_canonical_path(target_path).map_err(|error| {
             AppError::Runtime(format!("failed to re-canonicalize target path: {error}"))
         })?
     {
         return Err(AppError::Validation(format!(
             "target path changed during dump resolution: {}",
-            resolved.target_path.display()
+            target_path.display()
         )));
     }
 
-    if resolved.canonical_target_path == resolved.canonical_base_path {
+    if canonical_target_path == canonical_base_path {
         return Err(AppError::Validation(
             "dump target must not equal basePath".to_owned(),
         ));
     }
-    if resolved.canonical_target_path == resolved.canonical_work_path {
+    if canonical_target_path == canonical_work_path {
         return Err(AppError::Validation(
             "dump target must not equal workPath".to_owned(),
         ));
     }
-    if is_filesystem_root(&resolved.canonical_target_path) {
+    if is_filesystem_root(canonical_target_path) {
         return Err(AppError::Validation(
             "dump target must not equal filesystem root".to_owned(),
         ));
@@ -926,11 +1549,18 @@ fn validate_publish_target(resolved: &ResolvedDumpTarget) -> Result<(), AppError
     Ok(())
 }
 
-fn cleanup_orphan_dirs(resolved: &ResolvedDumpTarget) -> Result<(), AppError> {
-    let target_parent = resolved.target_path.parent().ok_or_else(|| {
+fn cleanup_platform_orphan_dirs(resolved: &ResolvedDumpTarget) -> Result<(), AppError> {
+    cleanup_orphan_dirs_for(
+        &resolved.platform_target_path,
+        &resolved.platform_target_identity,
+    )
+}
+
+fn cleanup_orphan_dirs_for(target_path: &Path, target_identity: &str) -> Result<(), AppError> {
+    let target_parent = target_path.parent().ok_or_else(|| {
         AppError::Runtime(format!(
             "target path has no parent: {}",
-            resolved.target_path.display()
+            target_path.display()
         ))
     })?;
     if !target_parent.exists() {
@@ -960,9 +1590,7 @@ fn cleanup_orphan_dirs(resolved: &ResolvedDumpTarget) -> Result<(), AppError> {
         let Ok(metadata) = read_temp_dir_metadata(&path) else {
             continue;
         };
-        if !is_known_tool_name(&metadata.tool)
-            || metadata.target_identity != resolved.target_identity
-        {
+        if !is_known_tool_name(&metadata.tool) || metadata.target_identity != target_identity {
             continue;
         }
         if (chrono::Utc::now() - metadata.created_at)
@@ -988,6 +1616,67 @@ fn cleanup_orphan_dirs(resolved: &ResolvedDumpTarget) -> Result<(), AppError> {
     }
 
     Ok(())
+}
+
+fn resolve_source_set_path(config: &AppConfig, source_set: &SourceSetConfig) -> PathBuf {
+    if source_set.path.is_absolute() {
+        source_set.path.clone()
+    } else {
+        config.base_path.join(&source_set.path)
+    }
+}
+
+fn resolve_dump_edt_base_project_name(config: &AppConfig) -> Result<String, AppError> {
+    let configuration_source_sets = config
+        .source_sets
+        .iter()
+        .filter(|source_set| source_set.purpose == SourceSetPurpose::Configuration)
+        .collect::<Vec<_>>();
+    if configuration_source_sets.len() != 1 {
+        let candidates = configuration_source_sets
+            .iter()
+            .map(|source_set| source_set.name.as_str())
+            .collect::<Vec<_>>();
+        return Err(AppError::Validation(format!(
+            "dump EDT extension reverse sync requires exactly one configuration source-set to infer EDT base project name; found [{}]",
+            candidates.join(", ")
+        )));
+    }
+
+    read_edt_project_name(
+        &resolve_source_set_path(config, configuration_source_sets[0]),
+        &format!(
+            "configuration source-set '{}'",
+            configuration_source_sets[0].name
+        ),
+    )
+}
+
+fn read_edt_project_name(path: &Path, label: &str) -> Result<String, AppError> {
+    let project_file = path.join(".project");
+    let contents = std::fs::read_to_string(&project_file).map_err(|error| {
+        AppError::Runtime(format!(
+            "failed to read {label} project file '{}': {error}",
+            project_file.display()
+        ))
+    })?;
+    extract_xml_tag_text(&contents, "name")
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            AppError::Validation(format!(
+                "{label} must contain a non-empty EDT project name: {}",
+                project_file.display()
+            ))
+        })
+}
+
+fn extract_xml_tag_text(contents: &str, tag_name: &str) -> Option<String> {
+    let open_tag = format!("<{tag_name}>");
+    let close_tag = format!("</{tag_name}>");
+    let start = contents.find(&open_tag)? + open_tag.len();
+    let rest = &contents[start..];
+    let end = rest.find(&close_tag)?;
+    Some(rest[..end].trim().to_owned())
 }
 
 fn build_designer_dsl<'a>(
@@ -1207,11 +1896,11 @@ fn make_run_id() -> String {
 mod tests {
     use super::{
         build_designer_dsl, cleanup_orphan_dirs, cleanup_staging_on_interruption,
-        create_dump_object_list_file_with, metadata_sidecar_path, parse_external_dump_descriptor,
-        resolve_target, run_dump, run_external_dump_designer, validate_publish_target,
-        validate_supported_matrix, DUMP_COMMAND, NON_PARTIAL_OBJECTS_ERROR, ORPHAN_TTL,
-        PARTIAL_OBJECTS_REQUIRED_ERROR, PARTIAL_OBJECT_BLANK_ERROR, PARTIAL_OBJECT_CONTROL_ERROR,
-        SUPPORTED_DUMP_ERROR,
+        create_dump_object_list_file_with, finalize_edt_dump, metadata_sidecar_path,
+        parse_external_dump_descriptor, resolve_target, run_dump, run_external_dump_designer,
+        validate_publish_target, validate_supported_matrix, DUMP_COMMAND,
+        NON_PARTIAL_OBJECTS_ERROR, ORPHAN_TTL, PARTIAL_OBJECTS_REQUIRED_ERROR,
+        PARTIAL_OBJECT_BLANK_ERROR, PARTIAL_OBJECT_CONTROL_ERROR,
     };
     use crate::config::model::{
         AppConfig, BuildConfig, BuilderBackend, PlatformToolConfig, SourceFormat, SourceSetConfig,
@@ -1219,20 +1908,27 @@ mod tests {
     };
     use crate::domain::dump::DumpMode;
     use crate::output::json::Envelope;
+    use crate::platform::process::{
+        ProcessError, ProcessExecutionPolicy, ProcessRequest, ProcessResult, ProcessRunner,
+        SpawnResult,
+    };
+    use crate::platform::result::PlatformCommandResult;
     use crate::support::error::AppError;
     use crate::support::fs::{
         acquire_advisory_lock, read_temp_dir_metadata, write_temp_dir_metadata, TempDirKind,
     };
     use crate::support::path::{nearest_existing_canonical_path, stable_path_identity};
+    use crate::use_cases::context::ExecutionContext;
     use crate::use_cases::external_artifacts::ExternalArtifactKind;
     use crate::use_cases::request::{DumpModeRequest, DumpRequest as DumpArgs};
     use crate::use_cases::result::UseCaseErrorKind;
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::sync::mpsc;
+    use std::sync::{mpsc, Arc, Mutex};
     use std::thread;
     use std::time::Duration;
     use tempfile::tempdir;
+    use tokio_util::sync::CancellationToken;
 
     #[cfg(unix)]
     use std::os::unix::fs::{symlink, PermissionsExt};
@@ -1306,6 +2002,127 @@ mod tests {
         write_script(path, &body);
     }
 
+    fn write_designer_dump_script_for_edt(
+        path: &Path,
+        calls_log: &Path,
+        fail_pattern: Option<&str>,
+    ) {
+        let pattern_branch = fail_pattern
+            .map(|pattern| {
+                format!(
+                    "if printf '%s' \"$args\" | grep -F -q -- '{}'; then exit 17; fi",
+                    pattern
+                )
+            })
+            .unwrap_or_default();
+        let body = format!(
+            "args=\"$*\"\nout=\"\"\ntarget=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"/Out\" ]; then out=\"$arg\"; fi\n  if [ \"$prev\" = \"/DumpConfigToFiles\" ]; then target=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$out\" ]; then printf 'designer log for %s\\n' \"$args\" > \"$out\"; fi\nprintf '%s\\n' \"$args\" >> \"{}\"\n{}\nmkdir -p \"$target\"\nif printf '%s' \"$args\" | grep -F -q -- '-partial'; then\n  printf '<Partial />\\n' > \"$target/PartialOnly.xml\"\nelse\n  printf '<Configuration />\\n' > \"$target/Configuration.xml\"\nfi\nexit 0",
+            calls_log.display(),
+            pattern_branch
+        );
+        write_script(path, &body);
+    }
+
+    fn write_ibcmd_dump_script_for_edt(path: &Path, calls_log: &Path, fail_pattern: Option<&str>) {
+        let pattern_branch = fail_pattern
+            .map(|pattern| {
+                format!(
+                    "if printf '%s' \"$args\" | grep -F -q -- '{}'; then exit 17; fi",
+                    pattern
+                )
+            })
+            .unwrap_or_default();
+        let body = format!(
+            "args=\"$*\"\ntarget=\"$(printf '%s' \"$args\" | awk '{{print $NF}}')\"\nprintf '%s\\n' \"$args\" >> \"{}\"\n{}\nmkdir -p \"$target\"\nprintf '<Configuration />\\n' > \"$target/Configuration.xml\"\nexit 0",
+            calls_log.display(),
+            pattern_branch
+        );
+        write_script(path, &body);
+    }
+
+    fn write_edt_import_script(path: &Path, calls_log: &Path) {
+        let body = format!(
+            "args=\"$*\"\nprintf '%s\\n' \"$args\" >> \"{}\"\nproject=\"\"\nconfig_files=\"\"\nbase_project_name=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"--project\" ]; then project=\"$arg\"; fi\n  if [ \"$prev\" = \"--configuration-files\" ]; then config_files=\"$arg\"; fi\n  if [ \"$prev\" = \"--base-project-name\" ]; then base_project_name=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nsource_name=$(basename \"$config_files\")\nmkdir -p \"$project\"\ncase \"$source_name\" in\n  main)\n    imported_name=\"BaseProject\"\n    ;;\n  ext)\n    if [ \"$base_project_name\" != \"BaseProject\" ]; then\n      printf 'unexpected base project: %s\\n' \"$base_project_name\" >&2\n      exit 23\n    fi\n    imported_name=\"ExtensionProject\"\n    ;;\n  *)\n    imported_name=\"ImportedProject\"\n    ;;\nesac\nprintf '<projectDescription><name>%s</name></projectDescription>\\n' \"$imported_name\" > \"$project/.project\"\nexit 0",
+            calls_log.display()
+        );
+        write_script(path, &body);
+    }
+
+    #[derive(Clone, Default)]
+    struct TestProcessRunner {
+        calls: Arc<Mutex<Vec<Vec<String>>>>,
+        cancel_after_call: Option<(usize, CancellationToken)>,
+        on_run: Option<Arc<dyn Fn(&ProcessRequest) + Send + Sync>>,
+    }
+
+    impl TestProcessRunner {
+        fn with_cancellation_on_call(call_index: usize, cancellation: CancellationToken) -> Self {
+            Self {
+                cancel_after_call: Some((call_index, cancellation)),
+                ..Self::default()
+            }
+        }
+
+        fn with_on_run(on_run: impl Fn(&ProcessRequest) + Send + Sync + 'static) -> Self {
+            Self {
+                on_run: Some(Arc::new(on_run)),
+                ..Self::default()
+            }
+        }
+
+        fn call_count(&self) -> usize {
+            self.calls.lock().expect("calls").len()
+        }
+
+        fn run_request(&self, request: &ProcessRequest) -> Result<ProcessResult, ProcessError> {
+            let call_index = {
+                let mut calls = self.calls.lock().expect("calls");
+                calls.push(request.args.clone());
+                calls.len()
+            };
+            if let Some(on_run) = &self.on_run {
+                on_run(request);
+            }
+            if let Some((cancel_on_call, cancellation)) = &self.cancel_after_call {
+                if call_index == *cancel_on_call {
+                    cancellation.cancel();
+                }
+            }
+            Ok(ProcessResult {
+                exit_code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+                interruption: None,
+            })
+        }
+    }
+
+    impl ProcessRunner for TestProcessRunner {
+        fn run(&self, request: &ProcessRequest) -> Result<ProcessResult, ProcessError> {
+            self.run_request(request)
+        }
+
+        fn run_with_timeout(
+            &self,
+            request: &ProcessRequest,
+            _timeout: Duration,
+        ) -> Result<ProcessResult, ProcessError> {
+            self.run_request(request)
+        }
+
+        fn run_with_policy(
+            &self,
+            request: &ProcessRequest,
+            _policy: &ProcessExecutionPolicy,
+        ) -> Result<ProcessResult, ProcessError> {
+            self.run_request(request)
+        }
+
+        fn spawn(&self, _request: &ProcessRequest) -> Result<SpawnResult, ProcessError> {
+            panic!("spawn must not be used in dump_config tests")
+        }
+    }
+
     fn build_config(base_path: &Path, work_path: &Path, platform_path: &Path) -> AppConfig {
         build_config_with_builder(
             base_path,
@@ -1353,6 +2170,19 @@ mod tests {
         }
     }
 
+    fn build_edt_config(
+        base_path: &Path,
+        work_path: &Path,
+        platform_path: &Path,
+        edt_path: &Path,
+        builder: BuilderBackend,
+    ) -> AppConfig {
+        let mut config = build_config_with_builder(base_path, work_path, platform_path, builder);
+        config.format = SourceFormat::Edt;
+        config.tools.edt_cli.path = Some(edt_path.to_path_buf());
+        config
+    }
+
     fn create_source_tree(base_path: &Path) {
         fs::create_dir_all(base_path.join("main").join("Catalogs.Items")).expect("main");
         fs::create_dir_all(base_path.join("ext").join("CommonModules")).expect("ext");
@@ -1374,6 +2204,21 @@ mod tests {
         .expect("ext bsl");
     }
 
+    fn create_edt_source_tree(base_path: &Path) {
+        fs::create_dir_all(base_path.join("main")).expect("main");
+        fs::create_dir_all(base_path.join("ext")).expect("ext");
+        fs::write(
+            base_path.join("main").join(".project"),
+            "<projectDescription><name>BaseProject</name></projectDescription>\n",
+        )
+        .expect("main project");
+        fs::write(
+            base_path.join("ext").join(".project"),
+            "<projectDescription><name>ExtensionProject</name></projectDescription>\n",
+        )
+        .expect("ext project");
+    }
+
     fn partial_list_paths(work_path: &Path) -> Vec<PathBuf> {
         let partial_dir = work_path.join("temp").join("partial-lists");
         if !partial_dir.is_dir() {
@@ -1389,7 +2234,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unsupported_matrix() {
+    fn edt_dump_support_matrix_accepts_designer_backend() {
         let dir = tempdir().expect("tempdir");
         let config = AppConfig {
             format: SourceFormat::Edt,
@@ -1397,19 +2242,9 @@ mod tests {
             ..build_config(dir.path(), dir.path(), dir.path())
         };
 
-        let failure = run_dump(
-            &config,
-            &DumpArgs {
-                mode: DumpModeRequest::Full,
-                source_set: None,
-                extension: None,
-                objects: vec![],
-            },
-        )
-        .expect_err("failure");
+        let error = validate_supported_matrix(&config);
 
-        assert_eq!(failure.error.kind(), UseCaseErrorKind::Validation);
-        assert_eq!(failure.error.message(), SUPPORTED_DUMP_ERROR);
+        assert!(error.is_none());
     }
 
     #[test]
@@ -1649,11 +2484,15 @@ mod tests {
             extension: None,
             target_path: dir.path().to_path_buf(),
             canonical_target_path: std::fs::canonicalize(dir.path()).expect("canonical"),
+            platform_target_path: dir.path().to_path_buf(),
+            canonical_platform_target_path: std::fs::canonicalize(dir.path()).expect("canonical"),
             canonical_base_path: std::fs::canonicalize(dir.path()).expect("canonical"),
             canonical_work_path: std::fs::canonicalize(dir.path().join("work").as_path())
                 .unwrap_or_else(|_| dir.path().join("work")),
             target_identity: "id".to_owned(),
+            platform_target_identity: "id".to_owned(),
             lock_path: dir.path().join(".lock"),
+            edt_base_project_name: None,
         };
 
         let error = validate_publish_target(&resolved).expect_err("expected invalid");
@@ -1696,10 +2535,14 @@ mod tests {
             extension: None,
             target_path: target.clone(),
             canonical_target_path: canonical.clone(),
+            platform_target_path: target.clone(),
+            canonical_platform_target_path: canonical.clone(),
             canonical_base_path: std::fs::canonicalize(dir.path()).expect("canonical base"),
             canonical_work_path: std::fs::canonicalize(dir.path()).expect("canonical work"),
-            target_identity: identity,
+            target_identity: identity.clone(),
+            platform_target_identity: identity.clone(),
             lock_path: target.parent().expect("parent").join(".lock"),
+            edt_base_project_name: None,
         };
 
         cleanup_orphan_dirs(&resolved).expect("cleanup");
@@ -1729,10 +2572,14 @@ mod tests {
             extension: None,
             target_path: target.clone(),
             canonical_target_path: canonical.clone(),
+            platform_target_path: target.clone(),
+            canonical_platform_target_path: canonical.clone(),
             canonical_base_path: std::fs::canonicalize(dir.path()).expect("canonical base"),
             canonical_work_path: std::fs::canonicalize(dir.path()).expect("canonical work"),
-            target_identity: identity,
+            target_identity: identity.clone(),
+            platform_target_identity: identity.clone(),
             lock_path: target.parent().expect("parent").join(".lock"),
+            edt_base_project_name: None,
         };
 
         cleanup_orphan_dirs(&resolved).expect("cleanup");
@@ -1757,10 +2604,14 @@ mod tests {
             extension: None,
             target_path: target.clone(),
             canonical_target_path: canonical.clone(),
+            platform_target_path: target.clone(),
+            canonical_platform_target_path: canonical.clone(),
             canonical_base_path: std::fs::canonicalize(dir.path()).expect("canonical base"),
             canonical_work_path: std::fs::canonicalize(dir.path()).expect("canonical work"),
-            target_identity: identity,
+            target_identity: identity.clone(),
+            platform_target_identity: identity.clone(),
             lock_path: target.parent().expect("parent").join(".lock"),
+            edt_base_project_name: None,
         };
 
         cleanup_orphan_dirs(&resolved).expect("cleanup");
@@ -1793,10 +2644,14 @@ mod tests {
             extension: None,
             target_path: target.clone(),
             canonical_target_path: canonical.clone(),
+            platform_target_path: target.clone(),
+            canonical_platform_target_path: canonical.clone(),
             canonical_base_path: std::fs::canonicalize(dir.path()).expect("canonical base"),
             canonical_work_path: std::fs::canonicalize(dir.path()).expect("canonical work"),
-            target_identity: identity,
+            target_identity: identity.clone(),
+            platform_target_identity: identity.clone(),
             lock_path: target.parent().expect("parent").join(".lock"),
+            edt_base_project_name: None,
         };
 
         cleanup_orphan_dirs(&resolved).expect("cleanup");
@@ -2310,6 +3165,545 @@ mod tests {
         let calls = fs::read_to_string(calls).expect("calls");
         assert!(calls.contains("--sync"));
         assert!(calls.contains(base.join("main").display().to_string().as_str()));
+    }
+
+    #[test]
+    fn dump_full_edt_designer_updates_designer_mirror_and_publishes_edt_target() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let designer = dir.path().join("1cv8");
+        let edt = dir.path().join("edt").join("1cedtcli");
+        let designer_calls = dir.path().join("designer-calls.log");
+        let edt_calls = dir.path().join("edt-calls.log");
+        create_edt_source_tree(&base);
+        write_designer_dump_script_for_edt(&designer, &designer_calls, None);
+        write_edt_import_script(&edt, &edt_calls);
+        let config = build_edt_config(&base, &work, &designer, &edt, BuilderBackend::Designer);
+        fs::write(base.join("main").join("stale.txt"), "stale").expect("stale");
+
+        let result = run_dump(
+            &config,
+            &DumpArgs {
+                mode: DumpModeRequest::Full,
+                source_set: Some("main".to_owned()),
+                extension: None,
+                objects: vec![],
+            },
+        )
+        .expect("dump");
+
+        assert!(result.ok);
+        assert_eq!(result.target_path, base.join("main"));
+        assert!(base.join("main").join(".project").exists());
+        assert!(!base.join("main").join("stale.txt").exists());
+        assert!(work
+            .join("designer")
+            .join("main")
+            .join("Configuration.xml")
+            .exists());
+
+        let designer_calls = fs::read_to_string(designer_calls).expect("designer calls");
+        let edt_calls = fs::read_to_string(edt_calls).expect("edt calls");
+        assert!(designer_calls.contains(work.join("designer").display().to_string().as_str()));
+        assert!(edt_calls.contains(work.join("designer/main").display().to_string().as_str()));
+        assert!(edt_calls.contains(work.join("edt-workspace").display().to_string().as_str()));
+    }
+
+    #[test]
+    fn dump_partial_edt_designer_bootstraps_missing_or_invalid_designer_snapshot() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let designer = dir.path().join("1cv8");
+        let edt = dir.path().join("edt").join("1cedtcli");
+        let designer_calls = dir.path().join("designer-calls.log");
+        let edt_calls = dir.path().join("edt-calls.log");
+        create_edt_source_tree(&base);
+        write_designer_dump_script_for_edt(&designer, &designer_calls, None);
+        write_edt_import_script(&edt, &edt_calls);
+        let config = build_edt_config(&base, &work, &designer, &edt, BuilderBackend::Designer);
+        fs::create_dir_all(work.join("designer").join("main")).expect("empty designer snapshot");
+        fs::write(
+            work.join("designer").join("main").join("BrokenMirror.xml"),
+            "<Broken />\n",
+        )
+        .expect("broken snapshot marker");
+
+        let result = run_dump(
+            &config,
+            &DumpArgs {
+                mode: DumpModeRequest::Partial,
+                source_set: Some("main".to_owned()),
+                extension: None,
+                objects: vec!["Catalog.Items".to_owned()],
+            },
+        )
+        .expect("dump");
+
+        assert!(result.ok);
+        assert!(base.join("main").join(".project").exists());
+        assert!(work
+            .join("designer")
+            .join("main")
+            .join("Configuration.xml")
+            .exists());
+        assert!(work
+            .join("designer")
+            .join("main")
+            .join("PartialOnly.xml")
+            .exists());
+
+        let designer_calls = fs::read_to_string(designer_calls).expect("designer calls");
+        let edt_calls = fs::read_to_string(edt_calls).expect("edt calls");
+        assert_eq!(designer_calls.matches("/DumpConfigToFiles").count(), 2);
+        assert!(designer_calls.contains("-partial"));
+        assert_eq!(edt_calls.matches("-command import").count(), 1);
+    }
+
+    #[test]
+    fn dump_full_edt_extension_infers_base_project_name_from_configuration_source_set() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let designer = dir.path().join("1cv8");
+        let edt = dir.path().join("edt").join("1cedtcli");
+        let designer_calls = dir.path().join("designer-calls.log");
+        let edt_calls = dir.path().join("edt-calls.log");
+        create_edt_source_tree(&base);
+        write_designer_dump_script_for_edt(&designer, &designer_calls, None);
+        write_edt_import_script(&edt, &edt_calls);
+        let config = build_edt_config(&base, &work, &designer, &edt, BuilderBackend::Designer);
+
+        let result = run_dump(
+            &config,
+            &DumpArgs {
+                mode: DumpModeRequest::Full,
+                source_set: Some("ext".to_owned()),
+                extension: Some("ext".to_owned()),
+                objects: vec![],
+            },
+        )
+        .expect("dump");
+
+        assert!(result.ok);
+        assert!(base.join("ext").join(".project").exists());
+        let designer_calls = fs::read_to_string(designer_calls).expect("designer calls");
+        let edt_calls = fs::read_to_string(edt_calls).expect("edt calls");
+        assert!(designer_calls.contains("-Extension"));
+        assert!(designer_calls.contains("ext"));
+        assert!(edt_calls.contains("--base-project-name BaseProject"));
+    }
+
+    #[test]
+    fn dump_full_edt_ibcmd_exports_to_designer_mirror_before_edt_import() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let ibcmd = dir.path().join("ibcmd");
+        let edt = dir.path().join("edt").join("1cedtcli");
+        let ibcmd_calls = dir.path().join("ibcmd-calls.log");
+        let edt_calls = dir.path().join("edt-calls.log");
+        create_edt_source_tree(&base);
+        write_ibcmd_dump_script_for_edt(&ibcmd, &ibcmd_calls, None);
+        write_edt_import_script(&edt, &edt_calls);
+        let config = build_edt_config(&base, &work, &ibcmd, &edt, BuilderBackend::Ibcmd);
+
+        let result = run_dump(
+            &config,
+            &DumpArgs {
+                mode: DumpModeRequest::Full,
+                source_set: Some("main".to_owned()),
+                extension: None,
+                objects: vec![],
+            },
+        )
+        .expect("dump");
+
+        assert!(result.ok);
+        assert!(base.join("main").join(".project").exists());
+        assert!(work
+            .join("designer")
+            .join("main")
+            .join("Configuration.xml")
+            .exists());
+
+        let ibcmd_calls = fs::read_to_string(ibcmd_calls).expect("ibcmd calls");
+        let edt_calls = fs::read_to_string(edt_calls).expect("edt calls");
+        assert!(ibcmd_calls.contains("--force"));
+        assert!(ibcmd_calls.contains(work.join("designer").display().to_string().as_str()));
+        assert!(edt_calls.contains(work.join("designer/main").display().to_string().as_str()));
+    }
+
+    #[test]
+    fn dump_incremental_edt_designer_stops_after_bootstrap_when_interruption_becomes_pending() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let designer = dir.path().join("1cv8");
+        let edt = dir.path().join("1cedtcli");
+        create_edt_source_tree(&base);
+        let config = build_edt_config(&base, &work, &designer, &edt, BuilderBackend::Designer);
+        let resolved = resolve_target(
+            &config,
+            &DumpArgs {
+                mode: DumpModeRequest::Incremental,
+                source_set: Some("main".to_owned()),
+                extension: None,
+                objects: vec![],
+            },
+        )
+        .expect("resolved");
+        let cancellation = CancellationToken::new();
+        let dump_runner = TestProcessRunner::with_cancellation_on_call(1, cancellation.clone());
+        let edt_runner = TestProcessRunner::default();
+        let context = ExecutionContext::cli(crate::use_cases::context::CommandName::Dump)
+            .with_cancellation(cancellation);
+
+        let error = super::run_incremental_dump_edt_designer(
+            &context,
+            &config,
+            &resolved,
+            &designer,
+            &edt,
+            &dump_runner,
+            &edt_runner,
+        )
+        .expect_err("interrupted after bootstrap");
+
+        assert!(matches!(error, AppError::Runtime(_)));
+        assert_eq!(dump_runner.call_count(), 1);
+        assert_eq!(edt_runner.call_count(), 0);
+    }
+
+    #[test]
+    fn dump_partial_edt_designer_stops_after_bootstrap_when_interruption_becomes_pending() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let designer = dir.path().join("1cv8");
+        let edt = dir.path().join("1cedtcli");
+        create_edt_source_tree(&base);
+        let config = build_edt_config(&base, &work, &designer, &edt, BuilderBackend::Designer);
+        let resolved = resolve_target(
+            &config,
+            &DumpArgs {
+                mode: DumpModeRequest::Partial,
+                source_set: Some("main".to_owned()),
+                extension: None,
+                objects: vec!["Catalogs.Items".to_owned()],
+            },
+        )
+        .expect("resolved");
+        let cancellation = CancellationToken::new();
+        let dump_runner = TestProcessRunner::with_cancellation_on_call(1, cancellation.clone());
+        let edt_runner = TestProcessRunner::default();
+        let context = ExecutionContext::cli(crate::use_cases::context::CommandName::Dump)
+            .with_cancellation(cancellation);
+
+        let error = super::run_partial_dump_edt_designer(
+            &context,
+            &config,
+            &resolved,
+            &designer,
+            &edt,
+            &dump_runner,
+            &edt_runner,
+            &["Catalogs.Items".to_owned()],
+        )
+        .expect_err("interrupted after bootstrap");
+
+        assert!(matches!(error, AppError::Runtime(_)));
+        assert_eq!(dump_runner.call_count(), 1);
+        assert_eq!(edt_runner.call_count(), 0);
+    }
+
+    #[test]
+    fn dump_incremental_edt_ibcmd_stops_after_bootstrap_when_interruption_becomes_pending() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let ibcmd = dir.path().join("ibcmd");
+        let edt = dir.path().join("1cedtcli");
+        create_edt_source_tree(&base);
+        let config = build_edt_config(&base, &work, &ibcmd, &edt, BuilderBackend::Ibcmd);
+        let resolved = resolve_target(
+            &config,
+            &DumpArgs {
+                mode: DumpModeRequest::Incremental,
+                source_set: Some("main".to_owned()),
+                extension: None,
+                objects: vec![],
+            },
+        )
+        .expect("resolved");
+        let cancellation = CancellationToken::new();
+        let dump_runner = TestProcessRunner::with_cancellation_on_call(1, cancellation.clone());
+        let edt_runner = TestProcessRunner::default();
+        let context = ExecutionContext::cli(crate::use_cases::context::CommandName::Dump)
+            .with_cancellation(cancellation);
+
+        let error = super::run_incremental_dump_edt_ibcmd(
+            &context,
+            &config,
+            &resolved,
+            &ibcmd,
+            &edt,
+            &dump_runner,
+            &edt_runner,
+        )
+        .expect_err("interrupted after bootstrap");
+
+        assert!(matches!(error, AppError::Runtime(_)));
+        assert_eq!(dump_runner.call_count(), 1);
+        assert_eq!(edt_runner.call_count(), 0);
+    }
+
+    #[test]
+    fn dump_partial_edt_ibcmd_stops_after_bootstrap_when_interruption_becomes_pending() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let ibcmd = dir.path().join("ibcmd");
+        let edt = dir.path().join("1cedtcli");
+        create_edt_source_tree(&base);
+        let config = build_edt_config(&base, &work, &ibcmd, &edt, BuilderBackend::Ibcmd);
+        let resolved = resolve_target(
+            &config,
+            &DumpArgs {
+                mode: DumpModeRequest::Partial,
+                source_set: Some("main".to_owned()),
+                extension: None,
+                objects: vec!["Catalogs.Items".to_owned()],
+            },
+        )
+        .expect("resolved");
+        let cancellation = CancellationToken::new();
+        let dump_runner = TestProcessRunner::with_cancellation_on_call(1, cancellation.clone());
+        let edt_runner = TestProcessRunner::default();
+        let context = ExecutionContext::cli(crate::use_cases::context::CommandName::Dump)
+            .with_cancellation(cancellation);
+
+        let error = super::run_partial_dump_edt_ibcmd(
+            &context,
+            &config,
+            &resolved,
+            &ibcmd,
+            &edt,
+            &dump_runner,
+            &edt_runner,
+            &["Catalogs.Items".to_owned()],
+        )
+        .expect_err("interrupted after bootstrap");
+
+        assert!(matches!(error, AppError::Runtime(_)));
+        assert_eq!(dump_runner.call_count(), 1);
+        assert_eq!(edt_runner.call_count(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn finalize_edt_dump_revalidates_publish_target_after_import() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let designer = dir.path().join("1cv8");
+        let edt = dir.path().join("1cedtcli");
+        let drift = dir.path().join("drift-target");
+        create_edt_source_tree(&base);
+        fs::create_dir_all(&drift).expect("drift target");
+        let config = build_edt_config(&base, &work, &designer, &edt, BuilderBackend::Designer);
+        let resolved = resolve_target(
+            &config,
+            &DumpArgs {
+                mode: DumpModeRequest::Full,
+                source_set: Some("main".to_owned()),
+                extension: None,
+                objects: vec![],
+            },
+        )
+        .expect("resolved");
+        let target_path = resolved.target_path.clone();
+        let drift_path = drift.clone();
+        let edt_runner = TestProcessRunner::with_on_run(move |request| {
+            let project = request
+                .args
+                .windows(2)
+                .find_map(|window| (window[0] == "--project").then(|| PathBuf::from(&window[1])))
+                .expect("project arg");
+            fs::create_dir_all(&project).expect("project dir");
+            fs::write(
+                project.join(".project"),
+                "<projectDescription><name>ImportedProject</name></projectDescription>\n",
+            )
+            .expect("project file");
+            fs::remove_dir_all(&target_path).expect("remove target");
+            symlink(&drift_path, &target_path).expect("retarget");
+        });
+        let context = ExecutionContext::cli(crate::use_cases::context::CommandName::Dump);
+
+        let error = finalize_edt_dump(
+            &context,
+            &config,
+            &resolved,
+            &edt,
+            &edt_runner,
+            PlatformCommandResult {
+                process: ProcessResult {
+                    exit_code: 0,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    interruption: None,
+                },
+                platform_log_path: None,
+                platform_log: None,
+                platform_log_read_error: None,
+            },
+            None,
+        )
+        .expect_err("expected publish target re-validation failure");
+
+        match error {
+            AppError::Validation(message) => {
+                assert!(message.contains("target path changed during dump resolution"));
+            }
+            other => panic!("expected validation error, got {other:?}"),
+        }
+        assert_eq!(edt_runner.call_count(), 1);
+        assert!(fs::symlink_metadata(resolved.target_path.as_path())
+            .expect("target metadata")
+            .file_type()
+            .is_symlink());
+        assert!(!drift.join(".project").exists());
+        let leftover_stage_dirs = fs::read_dir(&base)
+            .expect("base dir")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(".dump-stage-"))
+            .count();
+        assert_eq!(leftover_stage_dirs, 0);
+    }
+
+    #[test]
+    fn finalize_edt_dump_cleans_staging_dir_when_edt_dsl_initialization_fails() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let designer = dir.path().join("1cv8");
+        let edt = dir.path().join("edt").join("1cedtcli");
+        create_edt_source_tree(&base);
+        fs::create_dir_all(&work).expect("work");
+        fs::write(work.join("edt-workspace"), "not a directory").expect("workspace file");
+        let mut config = build_edt_config(&base, &work, &designer, &edt, BuilderBackend::Designer);
+        config.tools.edt_cli.interactive_mode = true;
+        let resolved = resolve_target(
+            &config,
+            &DumpArgs {
+                mode: DumpModeRequest::Full,
+                source_set: Some("main".to_owned()),
+                extension: None,
+                objects: vec![],
+            },
+        )
+        .expect("resolved");
+        let context = ExecutionContext::cli(crate::use_cases::context::CommandName::Dump);
+
+        let error = finalize_edt_dump(
+            &context,
+            &config,
+            &resolved,
+            &edt,
+            &TestProcessRunner::default(),
+            PlatformCommandResult {
+                process: ProcessResult {
+                    exit_code: 0,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    interruption: None,
+                },
+                platform_log_path: None,
+                platform_log: None,
+                platform_log_read_error: None,
+            },
+            None,
+        )
+        .expect_err("expected EDT DSL initialization failure");
+
+        assert!(matches!(error, AppError::Platform(_)));
+        let leftover_stage_dirs = fs::read_dir(&base)
+            .expect("base dir")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(".dump-stage-"))
+            .count();
+        assert_eq!(leftover_stage_dirs, 0);
+    }
+
+    #[test]
+    fn finalize_edt_dump_stops_before_import_when_interruption_is_already_pending() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let designer = dir.path().join("1cv8");
+        let edt = dir.path().join("edt").join("1cedtcli");
+        let edt_calls = dir.path().join("edt-calls.log");
+        create_edt_source_tree(&base);
+        write_edt_import_script(&edt, &edt_calls);
+        write_script(&designer, "exit 0");
+        let config = build_edt_config(&base, &work, &designer, &edt, BuilderBackend::Designer);
+        fs::create_dir_all(work.join("designer").join("main")).expect("designer snapshot");
+        fs::write(
+            work.join("designer").join("main").join("Configuration.xml"),
+            "<Configuration />\n",
+        )
+        .expect("configuration xml");
+        let resolved = resolve_target(
+            &config,
+            &DumpArgs {
+                mode: DumpModeRequest::Full,
+                source_set: Some("main".to_owned()),
+                extension: None,
+                objects: vec![],
+            },
+        )
+        .expect("resolved");
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let context = ExecutionContext::cli(crate::use_cases::context::CommandName::Dump)
+            .with_cancellation(cancellation);
+
+        let error = finalize_edt_dump(
+            &context,
+            &config,
+            &resolved,
+            &edt,
+            &crate::platform::process::ProcessExecutor,
+            PlatformCommandResult {
+                process: ProcessResult {
+                    exit_code: 0,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    interruption: None,
+                },
+                platform_log_path: None,
+                platform_log: None,
+                platform_log_read_error: None,
+            },
+            None,
+        )
+        .expect_err("interrupted");
+
+        assert!(matches!(error, AppError::Runtime(_)));
+        assert!(
+            !edt_calls.exists()
+                || fs::read_to_string(edt_calls)
+                    .expect("edt calls")
+                    .trim()
+                    .is_empty()
+        );
+        assert!(!base.join("main").join("stale.txt").exists());
     }
 
     #[test]

@@ -3,7 +3,7 @@
 - Журнал ADR уже введён, но его нужно поддерживать синхронно с кодом и публичной документацией.
 - Публичная и внутренняя документация могут расходиться, если их не обновлять вместе с кодом.
 - Общий shared interactive EDT-path теперь вынесен в `platform`, но остаётся риск регрессии к третьему публичному execution path, если новые EDT-сценарии начнут обходить общий actor/manager или документация/tests перестанут держать инварианты ADR-0007.
-- Обратная синхронизация `dump` для `format=EDT` ещё не реализована; repo-aware `convert` не должен подменять эту отдельную семантику reverse sync из ИБ.
+- `dump format=EDT` теперь зависит от внутреннего Designer snapshot под `workPath/designer/<source-set>`; новые изменения не должны подменять этот reverse-sync path командой `convert` или обходить staged publication target-каталога.
 - Поддержка `IBCMD` остаётся уже, чем поддержка Designer.
 - Provisioning contract из ADR-0019 реализован только для `builder=IBCMD`; `builder=DESIGNER` по-прежнему пропускает server infobase create step и это остаётся документированным ограничением.
 - Общая timeout/cancellation policy из ADR-0014 является целевой архитектурой и ещё не полностью реализована во всех public commands.

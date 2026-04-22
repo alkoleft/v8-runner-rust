@@ -22,7 +22,7 @@
 - `ADR-0018`: `docs/architecture/invariants.md` уже описывает `infobase.*` как supported contract, но `AppConfig`, `config init`, примеры и тестовые YAML продолжают использовать top-level `connection`/`credentials`; `IbcmdConnection` по-прежнему отклоняет server connection.
 - `ADR-0017`: `config init` определяет source-set кандидаты частично по structure/path heuristics, а не только по marker filenames и содержимому; autodiscovery external aggregate source-set для `EXTERNAL_DATA_PROCESSORS` и `EXTERNAL_REPORTS` как часть supported config contract явно не реализован.
 - `ADR-0016`: `ExecutionOutcome<T>` есть, но `ExecutionStatus::Cancelled` отсутствует, `StepResult` остается минимальным, а MCP/CLI mapping всё еще опирается на command-specific top-level поля.
-- `ADR-0020`: repo-aware `convert [--source-set <name>]` уже реализован как CLI-only сценарий поверх `v8project.yaml`: direction выводится из `config.format`, output публикуется только под `workPath/convert/out`, public surface не принимает path-based direction/target flags. Отдельным gap остаётся только `dump format=EDT`, который не должен подменяться `convert`.
+- `ADR-0020`: repo-aware `convert [--source-set <name>]` уже реализован как CLI-only сценарий поверх `v8project.yaml`, а `dump format=EDT` реализован отдельным reverse-sync flow; `convert` не подменяет `dump`, а public surface не принимает path-based direction/target flags.
 - Guardrails частичные: есть `tests/use_case_boundaries.rs`, но он проверяет только небольшой список use-case файлов и не ловит, например, production-зависимость `src/use_cases/result.rs` от `crate::output::exit_codes`.
 
 ## Сводный список задач
@@ -123,11 +123,11 @@
 
    Источники: `ADR-0020`.
 
-   Объем: реализовать отдельный `ИБ -> EDT sources` flow для `dump`, не подменяя его semantics командой `convert`. Новый repo-aware `convert` остаётся файловой конвертацией текущих исходников проекта между форматами, а `dump format=EDT` остаётся orchestration-сценарием reverse sync из ИБ в EDT-format files.
+   Выполнено `2026-04-22`: `dump format=EDT` реализован как отдельный orchestration flow reverse sync из ИБ в EDT sources без подмены через `convert`: команда сначала обновляет internal Designer snapshot под `workPath/designer/<sourceSetName>`, затем импортирует его в EDT target через `1cedtcli` и публикует результат атомарной заменой каталога `source-set`. `partial`/`incremental` bootstrap-ят missing Designer snapshot, extension reverse sync выводит base project name из реального EDT configuration `.project`, а regression coverage закрывает Designer/IBCMD EDT flow и CLI path.
 
    Затронутые области: `src/use_cases/dump_config.rs`, domain/request model для `dump`, docs, `README.md`, `docs/CAPABILITIES.md`, `docs/DEEP_DIVE.md`, arc42 risks/decisions после фактической реализации.
 
-   Готово, когда: `dump` для `format=EDT` поддерживается как отдельный сценарий, CLI/docs явно различают `dump` и `convert`, а реализация не использует `convert` как thin alias или hidden sub-step user-facing semantics.
+   Финальная проверка полноты субагентом вернула `APPROVED`: `dump` для `format=EDT` поддерживается как отдельный сценарий, CLI/docs явно различают `dump` и `convert`, а реализация не использует `convert` как thin alias или hidden sub-step user-facing semantics.
 
 9. `ADR-TASK-005`: Закрыть follow-up gaps атомарной публикации.
 
@@ -258,12 +258,11 @@
 | `ADR-0016` | `ExecutionOutcome<T>` есть частично; миграция к canonical outcome остается открытой. | `ADR-TASK-003`, `ADR-TASK-006` |
 | `ADR-0017` | Config contract реализован частично; структура подключения ИБ уточнена отдельным ADR-0018, а content-based autodiscovery `config init` и external aggregate detection остаются отдельным gap. | `ADR-TASK-008`, `ADR-TASK-010`, `ADR-TASK-012` |
 | `ADR-0018` | `infobase` становится единственным контрактом подключения, credentials и DBMS-level настроек. | `ADR-TASK-008` |
-| `ADR-0020` | Repo-aware `convert [--source-set <name>]` реализован; отдельным gap остаётся только `dump format=EDT`, который не должен подменяться `convert`. | `ADR-TASK-014` |
+| `ADR-0020` | Repo-aware `convert [--source-set <name>]` и отдельный `dump format=EDT` reverse-sync flow реализованы как разные сценарии; `convert` не подменяет `dump`. | `ADR-TASK-014` |
 
 ## Следующий рекомендуемый порядок
 
-1. Следующим брать `ADR-TASK-014`: после фиксации repo-aware `convert` отдельно довести `dump format=EDT`, не смешивая файловую конвертацию и reverse sync из ИБ.
-2. Затем `ADR-TASK-015`: перенести оставшиеся `source-set` layout-checks на config validation boundary по ADR-0017.
-3. Дальше `ADR-TASK-006`, чтобы довести `ExecutionOutcome<T>` и step contract до целевого canonical state.
-4. После этого возвращаться к новым follow-up задачам вокруг dump/output contract по мере появления.
-5. Затем `ADR-TASK-007`, `ADR-TASK-009` и `ADR-TASK-010` как следующий слой rendering, regression и guardrail работ.
+1. Следующим брать `ADR-TASK-015`: перенести оставшиеся `source-set` layout-checks на config validation boundary по ADR-0017.
+2. Затем `ADR-TASK-016`, чтобы довести CLI JSON error contract для ранних failures по ADR-0010.
+3. Дальше возвращаться к новым follow-up задачам вокруг outcome/output contract по мере появления.
+4. Затем `ADR-TASK-007`, `ADR-TASK-009` и `ADR-TASK-010` как следующий слой rendering, regression и guardrail работ.

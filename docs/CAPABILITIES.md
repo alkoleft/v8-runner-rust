@@ -179,7 +179,9 @@ v8-runner dump --mode <full|incremental|partial> [--source-set <NAME>] [--extens
 
 - `builder=DESIGNER`: `partial` выполняет точечную выгрузку объектов через частичную выгрузку Designer.
 - `builder=IBCMD`: прямая точечная частичная выгрузка по объектам недоступна. Запрос `partial` деградирует в инкрементальную выгрузку для разрешённой цели и возвращает предупреждение, сохраняя запрошенный режим как `PARTIAL` в результирующем ответе.
-- `format=EDT`: обратная синхронизация через `dump` пока не реализована. Для явной файловой конвертации между EDT и Designer используйте `convert`.
+- `format=EDT`: `dump` сначала синхронизирует internal Designer snapshot под `workPath/designer/<sourceSetName>`, затем импортирует его в EDT target и публикует результат атомарной заменой каталога `source-set`.
+- Если `partial` или `incremental` запускается без существующего Designer snapshot для `format=EDT`, команда сначала bootstrap-ит полный internal snapshot, а затем выполняет запрошенный режим.
+- Для явной файловой конвертации между EDT и Designer без обращения к ИБ используйте `convert`.
 
 ## Команда `convert`
 
@@ -346,5 +348,4 @@ v8-runner mcp serve http
 - Нет публичного MCP-инструмента для `get_configuration`.
 - Нет публичного MCP-инструмента для `check_platform`.
 - `IBCMD` не предоставляет нативную точечную частичную выгрузку по объектам.
-- `dump` пока не поддерживает обратную синхронизацию из ИБ сразу в EDT-формат.
 - Нет отдельной пользовательской настройки `working-directory` для `1cedtcli`; внутренние EDT workspace paths выводятся из `workPath` (`workPath/edt-workspace`, `workPath/convert/edt-workspace`).

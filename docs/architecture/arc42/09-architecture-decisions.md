@@ -35,7 +35,7 @@
 - `source-set.name` и canonical `workPath` являются runtime identity. Изменения naming/path rules затрагивают config validation, change detection, generated directories и workspace lock.
 - `infobase` является единственным config contract для строки подключения, пользователя ИБ и DBMS-level доступа; top-level `connection`/`credentials` не поддерживаются.
 - Полный `infobase.dbms` contract при `builder=IBCMD` достаточно явно разрешает server infobase provisioning в `init`; отдельный top-level provisioning flag для этого не требуется.
-- Repo-aware `convert` и reverse sync из ИБ в файлы — разные сценарии; даже после появления `convert` задача `dump format=EDT` остаётся отдельной архитектурной работой.
+- Repo-aware `convert` и reverse sync из ИБ в файлы — разные сценарии; `dump format=EDT` реализован как отдельный flow поверх internal Designer snapshot и EDT import, а не как alias или скрытый sub-step `convert`.
 - MCP concurrency имеет два независимых контура: execution admission для tool calls и HTTP session capacity для stateful transport lifecycle.
 - Target publication safety не обеспечивается workspace lock: full replacement outputs требуют staging/backup contract рядом с target.
 - ADR-0014 и ADR-0016 описывают целевую архитектуру с известными migration gaps. Новые команды должны следовать этим контрактам, даже если часть старых сценариев ещё находится в переходном состоянии.
