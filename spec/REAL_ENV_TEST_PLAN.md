@@ -78,7 +78,7 @@ V8_RUNNER_CI_SCOPE=happy-path bash scripts/test/ci-rust.sh
 
 Эти сценарии сохраняются отдельно и не являются частью mandatory matrix happy-path:
 
-- `bash scripts/test/live-cli.sh`
+- `bash scripts/test/live-cli-designer.sh`
 - `python3 scripts/test/live-mcp-http.py`
 - `bash scripts/test/live-cli-ibcmd.sh`
 
@@ -151,6 +151,7 @@ Cross-platform hardening:
 ```bash
 bash scripts/test/ci-rust.sh
 V8_RUNNER_CI_SCOPE=happy-path bash scripts/test/ci-rust.sh
+bash scripts/test/live-cli-designer.sh
 python3 scripts/test/live-mcp-http.py
 bash scripts/test/live-cli-ibcmd.sh
 ```
@@ -179,7 +180,7 @@ Windows runner contract for this helper layer is explicit:
 | `ci-rust happy-path` | yes | yes | yes on trusted | Rust + real 1C | real | Rust by default; real 1C opt-in | real | real |
 | `live-mcp-http` | optional | optional | no | real via MCP | real via MCP | real via MCP | n/a | n/a |
 | `live-cli-ibcmd` | optional | optional | no | real (`IBCMD`) | n/a | n/a | diagnostic dump/export only | n/a |
-| `live-cli` | optional | optional | no | real | real | real | n/a | n/a |
+| `live-cli-designer` | optional | optional | no | real (`DESIGNER`) | real | real opt-in | real | real |
 
 ## Ограничения и TODO hooks
 
