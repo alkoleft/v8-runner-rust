@@ -16,7 +16,7 @@ use crate::use_cases::request::{
 };
 use crate::use_cases::result::{UseCaseFailure, UseCaseResult};
 use crate::use_cases::run_tests;
-use crate::use_cases::workspace_lock::acquire_workspace_lock;
+use crate::use_cases::transport::dispatch_with_workspace_lock;
 
 /// Thin indirection layer used by the MCP service to call use cases.
 pub trait McpUseCasePort {
@@ -122,9 +122,10 @@ fn with_workspace_lock<T>(
     config: &AppConfig,
     run: impl FnOnce() -> UseCaseResult<T>,
 ) -> UseCaseResult<T> {
-    let _workspace_lock = acquire_workspace_lock(config, context.command().as_str())
-        .map_err(UseCaseFailure::without_payload)?;
-    run()
+    match dispatch_with_workspace_lock(config, context.command(), || Ok(()), run) {
+        Ok(result) => result,
+        Err(error) => Err(UseCaseFailure::without_payload(error)),
+    }
 }
 
 impl<T> McpUseCasePort for Arc<T>

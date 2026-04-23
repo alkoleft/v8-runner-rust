@@ -12,7 +12,8 @@ use crate::domain::syntax::{SyntaxCheckResult, SyntaxCheckStatus};
 use crate::domain::test::{TestCase, TestRunResult, TestStatus, TestSuite};
 use crate::mcp::context::McpCallContext;
 use crate::mcp::error::{
-    McpBusinessError, McpBusinessFailure, McpInternalError, McpServiceError, McpServiceResult,
+    McpBusinessError, McpBusinessErrorKind, McpBusinessFailure, McpInternalError, McpServiceError,
+    McpServiceResult,
 };
 use crate::mcp::port::{DefaultMcpUseCasePort, McpUseCasePort};
 use crate::mcp::request::{
@@ -26,13 +27,19 @@ use crate::mcp::response::{
     McpStepResult, McpStepStatus, McpSyntaxCheckResponse, McpTestCase, McpTestResponse,
     McpTestStatus, McpTestSuite,
 };
+use crate::support::adapter_input::{
+    normalize_edt_projects, normalize_extension_scope, normalize_optional_string,
+    normalize_required_string, parse_launch_mode, parse_optional_dump_mode,
+    validate_extended_modules_dependencies, LaunchModeAliases,
+};
 use crate::use_cases::context::{CommandName, ExecutionContext, ExecutionTransport};
 use crate::use_cases::request::{
-    BuildRequest, DesignerConfigSyntaxRequest, DesignerModulesSyntaxRequest, DumpModeRequest,
-    DumpRequest, LaunchModeRequest, LaunchRequest, SyntaxRequest, SyntaxTargetRequest, TestRequest,
-    TestScopeRequest,
+    BuildRequest, DesignerConfigSyntaxRequest, DesignerConfigSyntaxSelection,
+    DesignerModulesSyntaxRequest, DesignerModulesSyntaxSelection, DumpModeRequest, DumpRequest,
+    LaunchRequest, SyntaxRequest, SyntaxTargetRequest, TestRequest, TestScopeRequest,
 };
 use crate::use_cases::result::{UseCaseError, UseCaseFailure, UseCaseResult};
+use crate::use_cases::transport::map_failure_response;
 
 /// MCP-facing service layer over transport-neutral use cases.
 #[derive(Debug)]
@@ -125,11 +132,12 @@ where
             .map_err(McpServiceError::Internal)?;
         let module_name =
             normalize_required_string(&request.module_name, "module_name").map_err(|error| {
+                let message = error.message().to_owned();
                 McpServiceError::Business(McpBusinessFailure::new(
-                    error,
+                    McpBusinessError::from_use_case(&error),
                     McpTestResponse {
                         success: false,
-                        message: "module_name must not be blank".to_owned(),
+                        message: message.clone(),
                         total_tests: None,
                         passed_tests: None,
                         failed_tests: None,
@@ -138,7 +146,7 @@ where
                         log_file: None,
                         test_detail: None,
                         steps: None,
-                        errors: Some(vec!["module_name must not be blank".to_owned()]),
+                        errors: Some(vec![message]),
                     },
                 ))
             })?;
@@ -180,10 +188,11 @@ where
         let context = execution_context(call_context, CommandName::Dump)
             .map_err(McpServiceError::Internal)?;
         let use_case_request = DumpRequest {
-            mode: dump_mode_from_raw(request.mode.as_deref()).map_err(|error| {
-                let message = error.message.clone();
+            mode: parse_optional_dump_mode(request.mode.as_deref(), DumpModeRequest::Incremental)
+                .map_err(|error| {
+                let message = error.message().to_owned();
                 McpServiceError::Business(McpBusinessFailure::new(
-                    error,
+                    raw_value_business_error(&error, "dump mode"),
                     McpDumpResponse {
                         success: false,
                         message: request.mode.as_deref().map_or_else(
@@ -237,10 +246,15 @@ where
         let context = execution_context(call_context, CommandName::Launch)
             .map_err(McpServiceError::Internal)?;
         let use_case_request = LaunchRequest {
-            mode: launch_mode_from_raw(&request.utility_type).map_err(|error| {
-                let message = error.message.clone();
+            mode: parse_launch_mode(
+                &request.utility_type,
+                "utility_type",
+                LaunchModeAliases::Mcp,
+            )
+            .map_err(|error| {
+                let message = error.message().to_owned();
                 McpServiceError::Business(McpBusinessFailure::new(
-                    error,
+                    raw_value_business_error(&error, "utility_type"),
                     McpLaunchResponse {
                         success: false,
                         message,
@@ -267,7 +281,6 @@ where
     }
 
     /// Executes the `check_syntax_edt` MCP tool.
-    #[cfg(test)]
     pub fn check_syntax_edt(
         &self,
         call_context: McpCallContext,
@@ -381,114 +394,17 @@ where
     FPayload: FnOnce(TPayload) -> TResponse,
     FFallback: FnOnce(&UseCaseError) -> TResponse,
 {
-    let error = McpBusinessError::from_use_case(&failure.error);
-    let response = failure
-        .payload
-        .map(payload_mapper)
-        .unwrap_or_else(|| fallback_response(&failure.error));
-
-    McpServiceError::Business(McpBusinessFailure::new(error, response))
-}
-
-fn normalize_required_string(
-    value: &str,
-    field_name: &'static str,
-) -> Result<String, McpBusinessError> {
-    normalize_optional_string(Some(value)).ok_or_else(|| {
-        McpBusinessError::invalid_argument(format!("{field_name} must not be blank"))
-    })
-}
-
-fn normalize_optional_string(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct NormalizedExtensionScope {
-    extension: Option<String>,
-    all_extensions: bool,
-}
-
-fn dump_mode_from_raw(raw: Option<&str>) -> Result<DumpModeRequest, McpBusinessError> {
-    match normalize_optional_string(raw) {
-        None => Ok(DumpModeRequest::Incremental),
-        Some(mode) => match mode.to_ascii_uppercase().as_str() {
-            "FULL" => Ok(DumpModeRequest::Full),
-            "INCREMENTAL" => Ok(DumpModeRequest::Incremental),
-            "PARTIAL" => Ok(DumpModeRequest::Partial),
-            _ => Err(McpBusinessError::unsupported_value(format!(
-                "unsupported dump mode: {mode}"
-            ))),
-        },
-    }
-}
-
-fn normalize_extension_scope(
-    extension: Option<&str>,
-    all_extensions: Option<bool>,
-) -> NormalizedExtensionScope {
-    let extension = normalize_optional_string(extension);
-    let all_extensions = all_extensions.unwrap_or(extension.is_none());
-
-    NormalizedExtensionScope {
-        extension,
-        all_extensions,
-    }
-}
-
-fn launch_mode_from_raw(raw: &str) -> Result<LaunchModeRequest, McpBusinessError> {
-    let normalized = normalize_required_string(raw, "utility_type")?.to_lowercase();
-    match normalized.as_str() {
-        "designer" | "configurator" | "1cv8" | "конфигуратор" => {
-            Ok(LaunchModeRequest::Designer)
-        }
-        "thin"
-        | "thin-client"
-        | "thin client"
-        | "thin_client"
-        | "tc"
-        | "1cv8c"
-        | "тонкий клиент"
-        | "тонкий" => Ok(LaunchModeRequest::Thin),
-        "thick"
-        | "thick-client"
-        | "thick client"
-        | "thick_client"
-        | "толстый клиент"
-        | "толстый" => Ok(LaunchModeRequest::Thick),
-        _ => Err(McpBusinessError::unsupported_value(format!(
-            "unsupported launch utility_type: {raw}"
-        ))),
-    }
-}
-
-fn validate_extended_modules_dependencies(
-    extended_modules_check: Option<bool>,
-    check_use_synchronous_calls: Option<bool>,
-    check_use_modality: Option<bool>,
-) -> Result<(), McpBusinessError> {
-    if extended_modules_check == Some(false) && check_use_synchronous_calls == Some(true) {
-        return Err(McpBusinessError::invalid_argument(
-            "checkUseSynchronousCalls requires extendedModulesCheck=true".to_owned(),
-        ));
-    }
-
-    if extended_modules_check == Some(false) && check_use_modality == Some(true) {
-        return Err(McpBusinessError::invalid_argument(
-            "checkUseModality requires extendedModulesCheck=true".to_owned(),
-        ));
-    }
-
-    Ok(())
-}
-
-fn invalid_syntax_request(error: McpBusinessError) -> McpServiceError<McpSyntaxCheckResponse> {
-    let message = error.message.clone();
+    let (error, response) = map_failure_response(failure, payload_mapper, fallback_response);
     McpServiceError::Business(McpBusinessFailure::new(
-        error,
+        McpBusinessError::from_use_case(&error),
+        response,
+    ))
+}
+
+fn invalid_syntax_request(error: UseCaseError) -> McpServiceError<McpSyntaxCheckResponse> {
+    let message = error.message().to_owned();
+    McpServiceError::Business(McpBusinessFailure::new(
+        McpBusinessError::from_use_case(&error),
         McpSyntaxCheckResponse {
             success: false,
             message: message.clone(),
@@ -500,58 +416,82 @@ fn invalid_syntax_request(error: McpBusinessError) -> McpServiceError<McpSyntaxC
     ))
 }
 
+fn raw_value_business_error(error: &UseCaseError, field_name: &'static str) -> McpBusinessError {
+    let blank_message = format!("{field_name} must not be blank");
+    let code = if error.message() == blank_message {
+        crate::mcp::error::McpErrorCode::InvalidArgument
+    } else {
+        crate::mcp::error::McpErrorCode::UnsupportedValue
+    };
+
+    McpBusinessError {
+        code,
+        kind: McpBusinessErrorKind::Validation,
+        message: error.message().to_owned(),
+    }
+}
+
 fn map_designer_config_request(
     request: &McpCheckSyntaxDesignerConfigRequest,
 ) -> DesignerConfigSyntaxRequest {
     let scope = normalize_extension_scope(request.extension.as_deref(), request.all_extensions);
-    DesignerConfigSyntaxRequest {
-        config_log_integrity: request.config_log_integrity == Some(true),
-        incorrect_references: request.incorrect_references == Some(true),
-        thin_client: request.thin_client != Some(false),
-        web_client: request.web_client == Some(true),
-        mobile_client: request.mobile_client == Some(true),
-        server: request.server != Some(false),
-        external_connection: request.external_connection == Some(true),
-        external_connection_server: request.external_connection_server == Some(true),
-        mobile_app_client: request.mobile_app_client == Some(true),
-        mobile_app_server: request.mobile_app_server == Some(true),
-        thick_client_managed_application: request.thick_client_managed_application == Some(true),
-        thick_client_server_managed_application: request.thick_client_server_managed_application
-            == Some(true),
-        thick_client_ordinary_application: request.thick_client_ordinary_application == Some(true),
-        thick_client_server_ordinary_application: request.thick_client_server_ordinary_application
-            == Some(true),
-        mobile_client_digi_sign: request.mobile_client_digi_sign == Some(true),
-        distributive_modules: request.distributive_modules == Some(true),
-        unreference_procedures: request.unreference_procedures != Some(false),
-        handlers_existence: request.handlers_existence != Some(false),
-        empty_handlers: request.empty_handlers != Some(false),
-        extended_modules_check: request.extended_modules_check != Some(false),
-        check_use_synchronous_calls: request.check_use_synchronous_calls == Some(true),
-        check_use_modality: request.check_use_modality == Some(true),
-        unsupported_functional: request.unsupported_functional == Some(true),
-        extension: scope.extension,
-        all_extensions: scope.all_extensions,
-    }
+    DesignerConfigSyntaxRequest::from_selection(
+        DesignerConfigSyntaxSelection {
+            config_log_integrity: request.config_log_integrity == Some(true),
+            incorrect_references: request.incorrect_references == Some(true),
+            thin_client: request.thin_client != Some(false),
+            web_client: request.web_client == Some(true),
+            mobile_client: request.mobile_client == Some(true),
+            server: request.server != Some(false),
+            external_connection: request.external_connection == Some(true),
+            external_connection_server: request.external_connection_server == Some(true),
+            mobile_app_client: request.mobile_app_client == Some(true),
+            mobile_app_server: request.mobile_app_server == Some(true),
+            thick_client_managed_application: request.thick_client_managed_application
+                == Some(true),
+            thick_client_server_managed_application: request
+                .thick_client_server_managed_application
+                == Some(true),
+            thick_client_ordinary_application: request.thick_client_ordinary_application
+                == Some(true),
+            thick_client_server_ordinary_application: request
+                .thick_client_server_ordinary_application
+                == Some(true),
+            mobile_client_digi_sign: request.mobile_client_digi_sign == Some(true),
+            distributive_modules: request.distributive_modules == Some(true),
+            unreference_procedures: request.unreference_procedures != Some(false),
+            handlers_existence: request.handlers_existence != Some(false),
+            empty_handlers: request.empty_handlers != Some(false),
+            extended_modules_check: request.extended_modules_check != Some(false),
+            check_use_synchronous_calls: request.check_use_synchronous_calls == Some(true),
+            check_use_modality: request.check_use_modality == Some(true),
+            unsupported_functional: request.unsupported_functional == Some(true),
+        },
+        scope.extension,
+        scope.all_extensions,
+    )
 }
 
 fn map_designer_modules_request(
     request: &McpCheckSyntaxDesignerModulesRequest,
 ) -> DesignerModulesSyntaxRequest {
     let scope = normalize_extension_scope(request.extension.as_deref(), request.all_extensions);
-    DesignerModulesSyntaxRequest {
-        thin_client: request.thin_client != Some(false),
-        web_client: request.web_client == Some(true),
-        server: request.server != Some(false),
-        external_connection: request.external_connection == Some(true),
-        thick_client_ordinary_application: request.thick_client_ordinary_application == Some(true),
-        mobile_app_client: request.mobile_app_client == Some(true),
-        mobile_app_server: request.mobile_app_server == Some(true),
-        mobile_client: request.mobile_client == Some(true),
-        extended_modules_check: request.extended_modules_check != Some(false),
-        extension: scope.extension,
-        all_extensions: scope.all_extensions,
-    }
+    DesignerModulesSyntaxRequest::from_selection(
+        DesignerModulesSyntaxSelection {
+            thin_client: request.thin_client != Some(false),
+            web_client: request.web_client == Some(true),
+            server: request.server != Some(false),
+            external_connection: request.external_connection == Some(true),
+            thick_client_ordinary_application: request.thick_client_ordinary_application
+                == Some(true),
+            mobile_app_client: request.mobile_app_client == Some(true),
+            mobile_app_server: request.mobile_app_server == Some(true),
+            mobile_client: request.mobile_client == Some(true),
+            extended_modules_check: request.extended_modules_check != Some(false),
+        },
+        scope.extension,
+        scope.all_extensions,
+    )
 }
 
 fn map_build_response(result: BuildResult) -> McpBuildResponse {
@@ -726,10 +666,10 @@ pub(crate) fn map_syntax_response(result: SyntaxCheckResult) -> McpSyntaxCheckRe
 pub(crate) fn normalize_check_syntax_edt_request(
     request: &McpCheckSyntaxEdtRequest,
 ) -> SyntaxRequest {
-    let projects = normalize_optional_string(request.project_name.as_deref())
-        .map_or_else(Vec::new, |project| vec![project]);
     SyntaxRequest {
-        target: SyntaxTargetRequest::Edt { projects },
+        target: SyntaxTargetRequest::Edt {
+            projects: normalize_edt_projects(request.project_name.as_deref()),
+        },
     }
 }
 
@@ -916,9 +856,7 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{
-        map_test_response, normalize_extension_scope, McpService, NormalizedExtensionScope,
-    };
+    use super::{map_test_response, McpService};
     use crate::config::model::{
         AppConfig, BuildConfig, BuilderBackend, PlatformToolConfig, SourceFormat, SourceSetConfig,
         SourceSetPurpose, TestsConfig, ToolsConfig,
@@ -945,6 +883,7 @@ mod tests {
         McpBuildMode, McpBuildResponse, McpBuildStep, McpIssue, McpIssueSeverity, McpObjectIssue,
         McpStepKind, McpStepResult, McpStepStatus, McpSyntaxCheckResponse, McpTestResponse,
     };
+    use crate::support::adapter_input::{normalize_extension_scope, NormalizedExtensionScope};
     use crate::use_cases::context::{CommandName, ExecutionContext, ExecutionTransport};
     use crate::use_cases::request::{
         BuildRequest, DumpModeRequest, DumpRequest, LaunchModeRequest, LaunchRequest,

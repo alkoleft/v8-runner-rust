@@ -468,19 +468,8 @@ impl McpToolServer {
                     request,
                     cancellation,
                     |config, port, call_context, request| {
-                        let context = crate::use_cases::context::ExecutionContext::new(
-                            crate::use_cases::context::CommandName::Syntax,
-                            call_context.transport(),
-                        )
-                        .with_edt_timeout(call_context.edt_timeout())
-                        .with_deadline(call_context.deadline())
-                        .with_cancellation(call_context.cancellation());
-                        let use_case_request = normalize_check_syntax_edt_request(&request);
-                        map_syntax_use_case_result(port.check_syntax(
-                            &context,
-                            config.as_ref(),
-                            &use_case_request,
-                        ))
+                        let service = McpService::with_port(config.as_ref(), port);
+                        service.check_syntax_edt(call_context, &request)
                     },
                 )
                 .await;

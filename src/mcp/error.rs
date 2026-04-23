@@ -56,24 +56,6 @@ impl McpBusinessError {
             message: error.message().to_owned(),
         }
     }
-
-    /// Creates a validation error for invalid raw arguments.
-    pub fn invalid_argument(message: impl Into<String>) -> Self {
-        Self {
-            code: McpErrorCode::InvalidArgument,
-            kind: McpBusinessErrorKind::Validation,
-            message: message.into(),
-        }
-    }
-
-    /// Creates a validation error for unsupported raw input values.
-    pub fn unsupported_value(message: impl Into<String>) -> Self {
-        Self {
-            code: McpErrorCode::UnsupportedValue,
-            kind: McpBusinessErrorKind::Validation,
-            message: message.into(),
-        }
-    }
 }
 
 /// Structured business failure with a failure-shaped MCP response payload.

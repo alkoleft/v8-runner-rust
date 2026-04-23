@@ -178,6 +178,34 @@ pub enum SyntaxTargetRequest {
     },
 }
 
+/// Final normalized flag set for Designer configuration checks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DesignerConfigSyntaxSelection {
+    pub config_log_integrity: bool,
+    pub incorrect_references: bool,
+    pub thin_client: bool,
+    pub web_client: bool,
+    pub mobile_client: bool,
+    pub server: bool,
+    pub external_connection: bool,
+    pub external_connection_server: bool,
+    pub mobile_app_client: bool,
+    pub mobile_app_server: bool,
+    pub thick_client_managed_application: bool,
+    pub thick_client_server_managed_application: bool,
+    pub thick_client_ordinary_application: bool,
+    pub thick_client_server_ordinary_application: bool,
+    pub mobile_client_digi_sign: bool,
+    pub distributive_modules: bool,
+    pub unreference_procedures: bool,
+    pub handlers_existence: bool,
+    pub empty_handlers: bool,
+    pub extended_modules_check: bool,
+    pub check_use_synchronous_calls: bool,
+    pub check_use_modality: bool,
+    pub unsupported_functional: bool,
+}
+
 /// Transport-neutral request for Designer configuration checks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DesignerConfigSyntaxRequest {
@@ -209,6 +237,59 @@ pub struct DesignerConfigSyntaxRequest {
     pub all_extensions: bool,
 }
 
+impl DesignerConfigSyntaxRequest {
+    /// Builds a transport-neutral syntax request from a finalized flag selection.
+    pub fn from_selection(
+        selection: DesignerConfigSyntaxSelection,
+        extension: Option<String>,
+        all_extensions: bool,
+    ) -> Self {
+        Self {
+            config_log_integrity: selection.config_log_integrity,
+            incorrect_references: selection.incorrect_references,
+            thin_client: selection.thin_client,
+            web_client: selection.web_client,
+            mobile_client: selection.mobile_client,
+            server: selection.server,
+            external_connection: selection.external_connection,
+            external_connection_server: selection.external_connection_server,
+            mobile_app_client: selection.mobile_app_client,
+            mobile_app_server: selection.mobile_app_server,
+            thick_client_managed_application: selection.thick_client_managed_application,
+            thick_client_server_managed_application: selection
+                .thick_client_server_managed_application,
+            thick_client_ordinary_application: selection.thick_client_ordinary_application,
+            thick_client_server_ordinary_application: selection
+                .thick_client_server_ordinary_application,
+            mobile_client_digi_sign: selection.mobile_client_digi_sign,
+            distributive_modules: selection.distributive_modules,
+            unreference_procedures: selection.unreference_procedures,
+            handlers_existence: selection.handlers_existence,
+            empty_handlers: selection.empty_handlers,
+            extended_modules_check: selection.extended_modules_check,
+            check_use_synchronous_calls: selection.check_use_synchronous_calls,
+            check_use_modality: selection.check_use_modality,
+            unsupported_functional: selection.unsupported_functional,
+            extension,
+            all_extensions,
+        }
+    }
+}
+
+/// Final normalized flag set for Designer module checks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DesignerModulesSyntaxSelection {
+    pub thin_client: bool,
+    pub web_client: bool,
+    pub server: bool,
+    pub external_connection: bool,
+    pub thick_client_ordinary_application: bool,
+    pub mobile_app_client: bool,
+    pub mobile_app_server: bool,
+    pub mobile_client: bool,
+    pub extended_modules_check: bool,
+}
+
 /// Transport-neutral request for Designer module checks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DesignerModulesSyntaxRequest {
@@ -223,6 +304,29 @@ pub struct DesignerModulesSyntaxRequest {
     pub extended_modules_check: bool,
     pub extension: Option<String>,
     pub all_extensions: bool,
+}
+
+impl DesignerModulesSyntaxRequest {
+    /// Builds a transport-neutral module-check request from a finalized flag selection.
+    pub fn from_selection(
+        selection: DesignerModulesSyntaxSelection,
+        extension: Option<String>,
+        all_extensions: bool,
+    ) -> Self {
+        Self {
+            thin_client: selection.thin_client,
+            web_client: selection.web_client,
+            server: selection.server,
+            external_connection: selection.external_connection,
+            thick_client_ordinary_application: selection.thick_client_ordinary_application,
+            mobile_app_client: selection.mobile_app_client,
+            mobile_app_server: selection.mobile_app_server,
+            mobile_client: selection.mobile_client,
+            extended_modules_check: selection.extended_modules_check,
+            extension,
+            all_extensions,
+        }
+    }
 }
 
 /// Transport-neutral launch mode.

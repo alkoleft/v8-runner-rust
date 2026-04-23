@@ -54,10 +54,18 @@ Detailed ADR task decomposition remains in [ADR_DERIVED_BACKLOG.md](ADR_DERIVED_
   Local duplicate XML/layout scanners were removed from `config` and `use_cases`; targeted
   tester-subagent verification, structural grep, and full `cargo test` all passed.
 
-- [ ] `ADR-TASK-022`: Narrow the CLI and MCP transport adapters and remove duplicated
-  normalization and mapping logic. Shared request normalization, common validation, lock-boundary
-  policy, and failure shaping should live in one adapter-neutral layer instead of parallel mapper
-  stacks.
+- [x] `ADR-TASK-022`: Narrow the CLI and MCP transport adapters and remove duplicated
+  normalization and mapping logic. Completed `2026-04-23`: adapter-shared raw normalization now
+  lives in `src/support/adapter_input.rs` for string trimming, required-value checks, dump/launch
+  mode parsing, syntax extension scope/defaults, dependency pre-validation, and EDT project
+  normalization; final transport-neutral syntax request assembly is centralized in
+  `src/use_cases/request.rs` via shared `Designer*SyntaxSelection` constructors reused by both
+  CLI and MCP; shared lock/failure boundary helpers live in `src/use_cases/transport.rs`, and
+  non-interactive MCP EDT syntax now routes through `McpService` instead of duplicating context
+  and result mapping in `src/mcp/server.rs`. Targeted CLI/MCP mapper tests, `cargo test --locked
+  --no-run`, stdio/http launch and dump transport checks, reviewer and separate Rust expert
+  subagent passes, and the final completeness subagent gate all returned `APPROVED`/`no
+  findings`.
 
 - [ ] `ADR-TASK-023`: Replace boolean-heavy syntax and launch DTOs with typed policy objects.
   Client scopes, extension scope, extended module checks, modality and sync-call checks, and

@@ -35,6 +35,9 @@ use crate::domain::test::{TestRunResult, TestStatus, TestTarget};
 use crate::output::json::Envelope;
 use crate::output::presenter::Presenter;
 use crate::output::text::{TimelineItem, TimelineStatus};
+use crate::support::adapter_input::{
+    parse_launch_mode, parse_required_dump_mode, LaunchModeAliases,
+};
 use crate::support::error::AppError;
 use crate::support::fs::clean_dir;
 use crate::support::path::is_safe_path_segment;
@@ -51,13 +54,14 @@ use crate::use_cases::launch_app;
 use crate::use_cases::load_artifact;
 use crate::use_cases::request::{
     ArtifactsModeRequest, ArtifactsRequest, BuildRequest, ConfigureExtensionsRequest,
-    ConvertRequest, ConvertScopeRequest, DesignerConfigSyntaxRequest, DesignerModulesSyntaxRequest,
-    DumpModeRequest, DumpRequest, InitRequest, LaunchModeRequest, LaunchRequest, LoadRequest,
-    SyntaxRequest, SyntaxTargetRequest, TestRequest, TestScopeRequest,
+    ConvertRequest, ConvertScopeRequest, DesignerConfigSyntaxRequest,
+    DesignerConfigSyntaxSelection, DesignerModulesSyntaxRequest, DesignerModulesSyntaxSelection,
+    DumpRequest, InitRequest, LaunchRequest, LoadRequest, SyntaxRequest, SyntaxTargetRequest,
+    TestRequest, TestScopeRequest,
 };
 use crate::use_cases::result::{UseCaseError, UseCaseErrorKind};
 use crate::use_cases::run_tests;
-use crate::use_cases::workspace_lock::acquire_workspace_lock;
+use crate::use_cases::transport::dispatch_with_workspace_lock;
 
 /// Executes a parsed CLI command by mapping it into transport-neutral requests and
 /// rendering the resulting command output.
@@ -637,27 +641,28 @@ fn with_cli_workspace_lock<T>(
     clean_before_execution: bool,
     run: impl FnOnce() -> Result<T, UseCaseError>,
 ) -> Result<T, UseCaseError> {
-    let _workspace_lock = acquire_workspace_lock(config, command.as_str())
-        .map_err(|error| render_pre_dispatch_error(presenter, command, error))?;
-    if clean_before_execution {
-        clean_platform_logs_under_lock(config, presenter, command)?;
-    }
-    run()
+    dispatch_with_workspace_lock(
+        config,
+        command,
+        || {
+            if clean_before_execution {
+                clean_platform_logs_under_lock(config)
+            } else {
+                Ok(())
+            }
+        },
+        run,
+    )
+    .map_err(|error| render_pre_dispatch_error(presenter, command, error))?
 }
 
-fn clean_platform_logs_under_lock(
-    config: &AppConfig,
-    presenter: &Presenter,
-    command: CommandName,
-) -> Result<(), UseCaseError> {
+fn clean_platform_logs_under_lock(config: &AppConfig) -> Result<(), UseCaseError> {
     platform_logs_dir(&config.work_path)
         .and_then(|dir| clean_dir(&dir))
         .map_err(|error| {
-            render_pre_dispatch_error(
-                presenter,
-                command,
-                AppError::Runtime(format!("failed to clean platform logs: {error}")),
-            )
+            UseCaseError::from(AppError::Runtime(format!(
+                "failed to clean platform logs: {error}"
+            )))
         })
 }
 
@@ -909,17 +914,7 @@ fn map_load_request(args: &LoadArgs) -> Result<LoadRequest, UseCaseError> {
 
 fn map_dump_request(args: &DumpArgs) -> Result<DumpRequest, UseCaseError> {
     Ok(DumpRequest {
-        mode: match args.mode.as_str() {
-            "full" => DumpModeRequest::Full,
-            "incremental" => DumpModeRequest::Incremental,
-            "partial" => DumpModeRequest::Partial,
-            other => {
-                return Err(UseCaseError::new(
-                    UseCaseErrorKind::Validation,
-                    format!("unsupported dump mode: {other}"),
-                ));
-            }
-        },
+        mode: parse_required_dump_mode(&args.mode)?,
         source_set: args.source_set.clone(),
         extension: args.extension.clone(),
         objects: args.objects.clone(),
@@ -992,49 +987,53 @@ fn map_syntax_request(args: &SyntaxArgs) -> SyntaxRequest {
 }
 
 fn map_designer_config_request(args: &DesignerConfigSyntaxArgs) -> DesignerConfigSyntaxRequest {
-    DesignerConfigSyntaxRequest {
-        config_log_integrity: args.config_log_integrity,
-        incorrect_references: args.incorrect_references,
-        thin_client: args.thin_client,
-        web_client: args.web_client,
-        mobile_client: args.mobile_client,
-        server: args.server,
-        external_connection: args.external_connection,
-        external_connection_server: args.external_connection_server,
-        mobile_app_client: args.mobile_app_client,
-        mobile_app_server: args.mobile_app_server,
-        thick_client_managed_application: args.thick_client_managed_application,
-        thick_client_server_managed_application: args.thick_client_server_managed_application,
-        thick_client_ordinary_application: args.thick_client_ordinary_application,
-        thick_client_server_ordinary_application: args.thick_client_server_ordinary_application,
-        mobile_client_digi_sign: args.mobile_client_digi_sign,
-        distributive_modules: args.distributive_modules,
-        unreference_procedures: args.unreference_procedures,
-        handlers_existence: args.handlers_existence,
-        empty_handlers: args.empty_handlers,
-        extended_modules_check: args.extended_modules_check,
-        check_use_synchronous_calls: args.check_use_synchronous_calls,
-        check_use_modality: args.check_use_modality,
-        unsupported_functional: args.unsupported_functional,
-        extension: args.extension.clone(),
-        all_extensions: args.all_extensions,
-    }
+    DesignerConfigSyntaxRequest::from_selection(
+        DesignerConfigSyntaxSelection {
+            config_log_integrity: args.config_log_integrity,
+            incorrect_references: args.incorrect_references,
+            thin_client: args.thin_client,
+            web_client: args.web_client,
+            mobile_client: args.mobile_client,
+            server: args.server,
+            external_connection: args.external_connection,
+            external_connection_server: args.external_connection_server,
+            mobile_app_client: args.mobile_app_client,
+            mobile_app_server: args.mobile_app_server,
+            thick_client_managed_application: args.thick_client_managed_application,
+            thick_client_server_managed_application: args.thick_client_server_managed_application,
+            thick_client_ordinary_application: args.thick_client_ordinary_application,
+            thick_client_server_ordinary_application: args.thick_client_server_ordinary_application,
+            mobile_client_digi_sign: args.mobile_client_digi_sign,
+            distributive_modules: args.distributive_modules,
+            unreference_procedures: args.unreference_procedures,
+            handlers_existence: args.handlers_existence,
+            empty_handlers: args.empty_handlers,
+            extended_modules_check: args.extended_modules_check,
+            check_use_synchronous_calls: args.check_use_synchronous_calls,
+            check_use_modality: args.check_use_modality,
+            unsupported_functional: args.unsupported_functional,
+        },
+        args.extension.clone(),
+        args.all_extensions,
+    )
 }
 
 fn map_designer_modules_request(args: &DesignerModulesSyntaxArgs) -> DesignerModulesSyntaxRequest {
-    DesignerModulesSyntaxRequest {
-        thin_client: args.thin_client,
-        web_client: args.web_client,
-        server: args.server,
-        external_connection: args.external_connection,
-        thick_client_ordinary_application: args.thick_client_ordinary_application,
-        mobile_app_client: args.mobile_app_client,
-        mobile_app_server: args.mobile_app_server,
-        mobile_client: args.mobile_client,
-        extended_modules_check: args.extended_modules_check,
-        extension: args.extension.clone(),
-        all_extensions: args.all_extensions,
-    }
+    DesignerModulesSyntaxRequest::from_selection(
+        DesignerModulesSyntaxSelection {
+            thin_client: args.thin_client,
+            web_client: args.web_client,
+            server: args.server,
+            external_connection: args.external_connection,
+            thick_client_ordinary_application: args.thick_client_ordinary_application,
+            mobile_app_client: args.mobile_app_client,
+            mobile_app_server: args.mobile_app_server,
+            mobile_client: args.mobile_client,
+            extended_modules_check: args.extended_modules_check,
+        },
+        args.extension.clone(),
+        args.all_extensions,
+    )
 }
 
 fn map_launch_request(args: &LaunchArgs) -> Result<LaunchRequest, UseCaseError> {
@@ -1046,18 +1045,7 @@ fn map_launch_request(args: &LaunchArgs) -> Result<LaunchRequest, UseCaseError> 
     };
 
     Ok(LaunchRequest {
-        mode: match mode {
-            "designer" => LaunchModeRequest::Designer,
-            "thin" => LaunchModeRequest::Thin,
-            "thick" => LaunchModeRequest::Thick,
-            "ordinary" => LaunchModeRequest::Ordinary,
-            other => {
-                return Err(UseCaseError::new(
-                    UseCaseErrorKind::Validation,
-                    format!("unsupported launch mode: {other}"),
-                ));
-            }
-        },
+        mode: parse_launch_mode(mode, "mode", LaunchModeAliases::Cli)?,
         launch: map_direct_launch_options(&args.launch),
     })
 }
