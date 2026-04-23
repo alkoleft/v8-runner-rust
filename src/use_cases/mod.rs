@@ -34,6 +34,8 @@ pub mod request;
 pub mod result;
 /// Test orchestration use case.
 pub mod run_tests;
+/// Shared staged publication mechanics for full-replacement use-case outputs.
+mod staged_publication;
 /// Shared transport-neutral adapter helpers used by CLI and MCP boundaries.
 pub mod transport;
 /// Shared locking for commands that mutate the same workspace.

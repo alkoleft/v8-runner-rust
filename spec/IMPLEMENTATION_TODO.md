@@ -190,12 +190,20 @@ Detailed ADR task decomposition remains in [ADR_DERIVED_BACKLOG.md](ADR_DERIVED_
   separate Rust expert, and final completeness subagent gates passed; completeness returned
   `APPROVED`.
 
-- [ ] `ADR-TASK-027`: Extract a shared staged-publication mechanism for full-replacement outputs.
+- [x] `ADR-TASK-027`: Extract a shared staged-publication mechanism for full-replacement outputs.
   `dump` and `artifacts` still duplicate the ADR-0015 flow: create target-local staging, write
   metadata, execute the platform action, check interruption before the publish safe point, publish
   through `run_no_process_critical_phase`, and merge cleanup/deferred-interruption warnings. Introduce
   a small helper for file/directory staged publication without adding a generic pipeline engine or
   changing public result contracts.
+  Completed `2026-04-23`: shared full-replacement publication mechanics now live in
+  `src/use_cases/staged_publication.rs` and cover target-local staging file/dir preparation,
+  metadata sidecars, explicit caller-owned cleanup policy, pre-publish interruption checks, and
+  `run_no_process_critical_phase` publish for file and directory targets. `dump` uses the helper
+  while preserving pre-publish cleanup; `artifacts` uses the same helper while preserving diagnostic
+  stage-file retention and public result payloads. Regression coverage now proves file prepare does
+  not materialize a synthetic artifact, produced stage files stay visible on pre-publish
+  interruption, and dump/artifacts publication contracts still pass.
 
 - [ ] `ADR-TASK-028`: Centralize command interruption and deferred-interruption vocabulary across
   use cases. Remaining duplicate helpers include `command_interruption_status`,

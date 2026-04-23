@@ -79,12 +79,16 @@ Timeout/cancellation policy из ADR-0014 задаёт terminal-state semantics,
 6. `src/use_cases/artifacts.rs` выполняет EPF/ERF publication через staging directory и `replace_dir_atomically`.
 7. `src/use_cases/dump_config.rs` и `src/use_cases/artifacts.rs` используют target-specific advisory locks and target identity for stale cleanup.
 
-Known gaps / follow-up:
+Resolved follow-up к `2026-04-23`:
 
-1. `replace_dir_atomically` использует `.dump-backup-*` prefix даже для artifacts directory publication; prefix нужно сделать neutral или caller-specific, либо оставить явно internal.
-2. External artifacts staging directory должен иметь metadata sidecar на cleanup unit, а не только на staged files, чтобы orphan cleanup мог удалить stale staging directory.
-3. Publication phase should be marked as `CriticalNonAbortable` после реализации общей execution policy из ADR-0014.
-4. Result payloads должны сохранить cleanup warning/degraded message в едином CLI output contract и structured result.
+1. `replace_dir_atomically` принимает caller-specific backup prefix; `dump` и `artifacts`
+   используют разные internal prefixes.
+2. External artifacts staging directory получает metadata sidecar на cleanup unit, а staged files
+   сохраняют собственные metadata для diagnostic/cleanup сценариев.
+3. Full-replacement publication теперь проходит через общий `use_cases::staged_publication`
+   helper, который запускает file/directory publish внутри `run_no_process_critical_phase`.
+4. Cleanup warning/deferred interruption остаются в `DumpResult`/`ArtifactsResult` без изменения
+   публичных result contracts.
 
 При дальнейших изменениях:
 

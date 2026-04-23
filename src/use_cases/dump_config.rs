@@ -18,10 +18,7 @@ use crate::platform::result::PlatformCommandResult;
 use crate::platform::utilities::PlatformUtilities;
 use crate::support::edt_project::{self, EdtProjectKind};
 use crate::support::error::AppError;
-use crate::support::fs::{
-    acquire_advisory_lock, ensure_dir, metadata_sidecar_path, remove_path_if_exists,
-    replace_dir_atomically, write_temp_dir_metadata, TempDirKind,
-};
+use crate::support::fs::{acquire_advisory_lock, ensure_dir, remove_path_if_exists};
 use crate::support::path::{
     hashed_lock_path, nearest_existing_canonical_path, stable_path_identity,
 };
@@ -41,11 +38,16 @@ use self::helpers::create_dump_object_list_file_with;
 use self::helpers::{
     build_designer_dsl, build_ibcmd_dsl, cleanup_orphan_dirs, cleanup_platform_orphan_dirs,
     create_dump_object_list_file, decorate_ibcmd_partial_error, dump_publication_warning,
-    empty_result, ensure_platform_success, ibcmd_partial_warning, make_run_id, map_ibcmd_error,
+    empty_result, ensure_platform_success, ibcmd_partial_warning, map_ibcmd_error,
     merge_optional_messages, resolve_dump_edt_base_project_name, resolve_source_set_path,
     validate_dump_objects, validate_platform_target, validate_publish_target,
     validate_supported_matrix,
 };
+#[cfg(test)]
+use super::staged_publication::cleanup_staging_path;
+use super::staged_publication::{interruption_before_publish, StagedPublication};
+#[cfg(test)]
+use crate::support::fs::metadata_sidecar_path;
 
 #[cfg(test)]
 const DUMP_COMMAND: &str = crate::use_cases::context::CommandName::Dump.as_str();
@@ -152,35 +154,13 @@ fn run_full_dump_designer(
         target = %resolved.platform_target_path.display(),
         "running full dump via staging directory"
     );
-    let target_parent = resolved.platform_target_path.parent().ok_or_else(|| {
-        AppError::Runtime(format!(
-            "target path has no parent: {}",
-            resolved.platform_target_path.display()
-        ))
-    })?;
-    ensure_dir(target_parent).map_err(|error| {
-        AppError::Runtime(format!("failed to create target parent dir: {error}"))
-    })?;
-
-    let run_id = make_run_id();
-    let staging_dir = target_parent.join(format!(".dump-stage-{run_id}"));
-    if staging_dir.exists() {
-        return Err(AppError::Runtime(format!(
-            "staging dir already exists unexpectedly: {}",
-            staging_dir.display()
-        )));
-    }
-    std::fs::create_dir(&staging_dir)
-        .map_err(|error| AppError::Runtime(format!("failed to create staging dir: {error}")))?;
-    debug!(path = %staging_dir.display(), "created dump staging directory");
-    write_temp_dir_metadata(
-        &staging_dir,
-        TempDirKind::Stage,
-        &run_id,
+    let publication = StagedPublication::prepare_dir(
         &resolved.platform_target_path,
         &resolved.platform_target_identity,
-    )
-    .map_err(|error| AppError::Runtime(format!("failed to write stage metadata: {error}")))?;
+        ".dump-stage",
+    )?;
+    let staging_dir = publication.staging_path().to_path_buf();
+    debug!(path = %staging_dir.display(), "created dump staging directory");
 
     log_live_stage("dump: full", "[Конфигуратор] exporting configuration files");
     let dump_result = match build_designer_dsl(
@@ -195,39 +175,24 @@ fn run_full_dump_designer(
     .map_err(AppError::from)
     {
         Ok(result) => result,
-        Err(error) => return Err(cleanup_staging_on_platform_failure(&staging_dir, error)),
+        Err(error) => return Err(publication.cleanup_failure(error)),
     };
     ensure_platform_success("dump", resolved, &dump_result)
-        .map_err(|error| cleanup_staging_on_platform_failure(&staging_dir, error))?;
+        .map_err(|error| publication.cleanup_failure(error))?;
 
-    validate_platform_target(resolved)?;
-    if let Some(interruption) = context.interruption() {
-        return Err(cleanup_staging_on_interruption(
-            &staging_dir,
-            AppError::Runtime(format!(
-                "{} for command '{}' before entering dump publication safe point",
-                interruption.message(context.command()),
-                context.command().as_str()
-            )),
-        ));
+    validate_platform_target(resolved).map_err(|error| publication.cleanup_failure(error))?;
+    if let Some(error) = interruption_before_publish(context, "dump publication") {
+        return Err(publication.cleanup_failure(error));
     }
 
-    let publish_phase = context.run_no_process_critical_phase(|| {
-        replace_dir_atomically(
-            &staging_dir,
-            &resolved.platform_target_path,
-            &run_id,
-            &resolved.platform_target_identity,
-            DUMP_BACKUP_PREFIX,
-        )
-        .map_err(|error| AppError::Runtime(format!("failed to publish staged dump: {error}")))
-    })?;
+    let publish_phase =
+        publication.publish_dir(context, DUMP_BACKUP_PREFIX, "failed to publish staged dump")?;
     debug!(target = %resolved.platform_target_path.display(), "published staged dump");
 
     Ok((
         dump_result,
         merge_optional_messages(
-            publish_phase.value.cleanup_warning,
+            publish_phase.cleanup_warning,
             dump_publication_warning(context.command(), publish_phase.deferred_interruption),
         ),
     ))
@@ -271,35 +236,13 @@ fn run_full_dump_ibcmd(
         target = %resolved.platform_target_path.display(),
         "running full ibcmd dump via staging directory"
     );
-    let target_parent = resolved.platform_target_path.parent().ok_or_else(|| {
-        AppError::Runtime(format!(
-            "target path has no parent: {}",
-            resolved.platform_target_path.display()
-        ))
-    })?;
-    ensure_dir(target_parent).map_err(|error| {
-        AppError::Runtime(format!("failed to create target parent dir: {error}"))
-    })?;
-
-    let run_id = make_run_id();
-    let staging_dir = target_parent.join(format!(".dump-stage-{run_id}"));
-    if staging_dir.exists() {
-        return Err(AppError::Runtime(format!(
-            "staging dir already exists unexpectedly: {}",
-            staging_dir.display()
-        )));
-    }
-    std::fs::create_dir(&staging_dir)
-        .map_err(|error| AppError::Runtime(format!("failed to create staging dir: {error}")))?;
-    debug!(path = %staging_dir.display(), "created dump staging directory");
-    write_temp_dir_metadata(
-        &staging_dir,
-        TempDirKind::Stage,
-        &run_id,
+    let publication = StagedPublication::prepare_dir(
         &resolved.platform_target_path,
         &resolved.platform_target_identity,
-    )
-    .map_err(|error| AppError::Runtime(format!("failed to write stage metadata: {error}")))?;
+        ".dump-stage",
+    )?;
+    let staging_dir = publication.staging_path().to_path_buf();
+    debug!(path = %staging_dir.display(), "created dump staging directory");
 
     log_live_stage("dump: full", "[ibcmd] exporting configuration files");
     let dump_result = match build_ibcmd_dsl(context, config, binary, runner)?
@@ -307,39 +250,24 @@ fn run_full_dump_ibcmd(
         .map_err(map_ibcmd_error)
     {
         Ok(result) => result,
-        Err(error) => return Err(cleanup_staging_on_platform_failure(&staging_dir, error)),
+        Err(error) => return Err(publication.cleanup_failure(error)),
     };
     ensure_platform_success("dump", resolved, &dump_result)
-        .map_err(|error| cleanup_staging_on_platform_failure(&staging_dir, error))?;
+        .map_err(|error| publication.cleanup_failure(error))?;
 
-    validate_platform_target(resolved)?;
-    if let Some(interruption) = context.interruption() {
-        return Err(cleanup_staging_on_interruption(
-            &staging_dir,
-            AppError::Runtime(format!(
-                "{} for command '{}' before entering dump publication safe point",
-                interruption.message(context.command()),
-                context.command().as_str()
-            )),
-        ));
+    validate_platform_target(resolved).map_err(|error| publication.cleanup_failure(error))?;
+    if let Some(error) = interruption_before_publish(context, "dump publication") {
+        return Err(publication.cleanup_failure(error));
     }
 
-    let publish_phase = context.run_no_process_critical_phase(|| {
-        replace_dir_atomically(
-            &staging_dir,
-            &resolved.platform_target_path,
-            &run_id,
-            &resolved.platform_target_identity,
-            DUMP_BACKUP_PREFIX,
-        )
-        .map_err(|error| AppError::Runtime(format!("failed to publish staged dump: {error}")))
-    })?;
+    let publish_phase =
+        publication.publish_dir(context, DUMP_BACKUP_PREFIX, "failed to publish staged dump")?;
     debug!(target = %resolved.platform_target_path.display(), "published staged dump");
 
     Ok((
         dump_result,
         merge_optional_messages(
-            publish_phase.value.cleanup_warning,
+            publish_phase.cleanup_warning,
             dump_publication_warning(context.command(), publish_phase.deferred_interruption),
         ),
     ))
@@ -643,37 +571,15 @@ fn finalize_edt_dump(
         context,
         "before starting EDT reverse-sync import after designer snapshot publication",
     )?;
-    let target_parent = resolved.target_path.parent().ok_or_else(|| {
-        AppError::Runtime(format!(
-            "target path has no parent: {}",
-            resolved.target_path.display()
-        ))
-    })?;
-    ensure_dir(target_parent).map_err(|error| {
-        AppError::Runtime(format!("failed to create target parent dir: {error}"))
-    })?;
-
-    let run_id = make_run_id();
-    let staging_dir = target_parent.join(format!(".dump-stage-{run_id}"));
-    if staging_dir.exists() {
-        return Err(AppError::Runtime(format!(
-            "staging dir already exists unexpectedly: {}",
-            staging_dir.display()
-        )));
-    }
-    std::fs::create_dir(&staging_dir)
-        .map_err(|error| AppError::Runtime(format!("failed to create staging dir: {error}")))?;
-    write_temp_dir_metadata(
-        &staging_dir,
-        TempDirKind::Stage,
-        &run_id,
+    let publication = StagedPublication::prepare_dir(
         &resolved.target_path,
         &resolved.target_identity,
-    )
-    .map_err(|error| AppError::Runtime(format!("failed to write stage metadata: {error}")))?;
+        ".dump-stage",
+    )?;
+    let staging_dir = publication.staging_path().to_path_buf();
 
     let edt_dsl = build_edt_dsl(context, config, edt_binary, edt_runner)
-        .map_err(|error| cleanup_staging_on_platform_failure(&staging_dir, error))?;
+        .map_err(|error| publication.cleanup_failure(error))?;
     log_live_stage("dump: edt import", "[EDT] importing Designer snapshot");
     let import_result = match edt_dsl
         .import_configuration_files(
@@ -686,47 +592,31 @@ fn finalize_edt_dump(
         .map_err(AppError::from)
     {
         Ok(result) => result,
-        Err(error) => return Err(cleanup_staging_on_platform_failure(&staging_dir, error)),
+        Err(error) => return Err(publication.cleanup_failure(error)),
     };
     ensure_import_success(resolved, &import_result)
-        .map_err(|error| cleanup_staging_on_platform_failure(&staging_dir, error))?;
+        .map_err(|error| publication.cleanup_failure(error))?;
     validate_edt_dump_staging_output(
         &staging_dir,
         resolved.source_set_purpose,
         resolved.edt_base_project_name.as_deref(),
     )
-    .map_err(|error| cleanup_staging_on_platform_failure(&staging_dir, error))?;
-    validate_publish_target(resolved)
-        .map_err(|error| cleanup_staging_on_platform_failure(&staging_dir, error))?;
+    .map_err(|error| publication.cleanup_failure(error))?;
+    validate_publish_target(resolved).map_err(|error| publication.cleanup_failure(error))?;
 
-    if let Some(interruption) = context.interruption() {
-        return Err(cleanup_staging_on_interruption(
-            &staging_dir,
-            AppError::Runtime(format!(
-                "{} for command '{}' before entering dump publication safe point",
-                interruption.message(context.command()),
-                context.command().as_str()
-            )),
-        ));
+    if let Some(error) = interruption_before_publish(context, "dump publication") {
+        return Err(publication.cleanup_failure(error));
     }
 
-    let publish_phase = context.run_no_process_critical_phase(|| {
-        replace_dir_atomically(
-            &staging_dir,
-            &resolved.target_path,
-            &run_id,
-            &resolved.target_identity,
-            DUMP_BACKUP_PREFIX,
-        )
-        .map_err(|error| AppError::Runtime(format!("failed to publish staged dump: {error}")))
-    })?;
+    let publish_phase =
+        publication.publish_dir(context, DUMP_BACKUP_PREFIX, "failed to publish staged dump")?;
 
     Ok((
         platform_result,
         merge_optional_messages(
             inherited_message,
             merge_optional_messages(
-                publish_phase.value.cleanup_warning,
+                publish_phase.cleanup_warning,
                 dump_publication_warning(context.command(), publish_phase.deferred_interruption),
             ),
         ),
@@ -936,13 +826,12 @@ fn parse_external_dump_descriptor(
     })
 }
 
+#[cfg(test)]
 fn cleanup_staging_on_platform_failure(staging_dir: &Path, error: AppError) -> AppError {
-    let sidecar = metadata_sidecar_path(staging_dir);
-    let _ = remove_path_if_exists(staging_dir);
-    let _ = remove_path_if_exists(&sidecar);
-    error
+    cleanup_staging_path(staging_dir, error)
 }
 
+#[cfg(test)]
 fn cleanup_staging_on_interruption(staging_dir: &Path, error: AppError) -> AppError {
     cleanup_staging_on_platform_failure(staging_dir, error)
 }

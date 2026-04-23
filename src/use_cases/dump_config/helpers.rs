@@ -408,11 +408,6 @@ pub(super) fn empty_result(
     }
 }
 
-pub(super) fn make_run_id() -> String {
-    let timestamp = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default();
-    format!("{}-{timestamp:x}", std::process::id())
-}
-
 #[cfg(test)]
 mod tests {
     use super::decorate_ibcmd_partial_error;

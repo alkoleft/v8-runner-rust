@@ -139,15 +139,34 @@
 
    Готово, когда: CLI help показывает `--output <DIR>` как target root; full-scope Designer-to-EDT конвертация external source sets публикует корректный mirror layout под explicit root; generated EDT project names стабильны; explicit output не может попасть в `basePath`, `workPath`, source-set path, filesystem root или overlapping target; docs/ADR и active backlog синхронизированы.
 
-10. `ADR-TASK-005`: Закрыть follow-up gaps атомарной публикации.
+10. `ADR-TASK-005` / `ADR-TASK-027`: Закрыть follow-up gaps атомарной публикации.
 
    Источники: `ADR-0015`.
 
-   Объем: сделать backup prefix в `replace_dir_atomically` neutral/caller-specific или явно internal; ставить metadata sidecar на cleanup unit для external artifacts staging directory; после `ADR-TASK-003` пометить publication phase как `CriticalNonAbortable`; сохранить cleanup warning/degraded message в едином CLI output contract.
+   Связь задач: `ADR-TASK-005` — исходный ADR-derived gap из `ADR-0015`;
+   `ADR-TASK-027` — active delivery item из `spec/IMPLEMENTATION_TODO.md`, которым этот gap
+   закрыт.
+
+   Выполнено `2026-04-23`: full-replacement publication flow для `dump` и `artifacts`
+   вынесен в `src/use_cases/staged_publication.rs`. Helper создает target-local staging
+   file/dir и metadata sidecar, публикует через `run_no_process_critical_phase`, возвращает
+   cleanup warning/deferred interruption, а cleanup остается явной политикой caller-а:
+   `dump` чистит staging при pre-publish failure, `artifacts` сохраняет stage artifact как
+   диагностический артефакт. `replace_dir_atomically` использует caller-specific backup prefix,
+   external artifacts staging directory получает собственный metadata sidecar, stale cleanup
+   остается metadata/identity-bound, а публичные `DumpResult`/`ArtifactsResult` контракты не
+   изменены.
+
+   Затронутые области: `src/use_cases/staged_publication.rs`,
+   `src/use_cases/dump_config.rs`, `src/use_cases/artifacts.rs`,
+   `src/support/fs.rs`, `docs/decisions/0015-*`, active TODO.
 
    Готово, когда: orphan cleanup удаляет только stale paths с matching target identity; external artifact staging directory не остается недоступным для безопасной cleanup-логики; tests покрывают stale/foreign/malformed/recent metadata.
 
-   Сверка 2026-04-22: gap подтвержден: `replace_dir_atomically` использует `.dump-backup-*` и для artifacts directory publication; external artifacts пишут metadata на staged files, но не на staging directory cleanup unit.
+   Проверено: helper tests покрывают file/dir prepare+publish, explicit cleanup policy,
+   deferred interruption и отсутствие synthetic staging file; artifacts tests покрывают failure
+   до появления staging file и interruption после появления staging file; dump/artifacts targeted
+   suites проходят.
 
 11. `ADR-TASK-006`: Довести `ExecutionOutcome<T>` и step contract до целевого состояния.
 
@@ -325,8 +344,8 @@
 | `ADR-0011` | Workspace lock реализован; будущим public commands нужен lock guardrail. | `ADR-TASK-010` |
 | `ADR-0012` | EDT generated Designer partial-load decision remains key gap. | `ADR-TASK-002` |
 | `ADR-0013` | MCP admission/session capacity уже есть; cancellation/deadline должны идти через общую policy. | `ADR-TASK-003` |
-| `ADR-0014` | Общая timeout/cancellation policy является целевой архитектурой и реализована не полностью. | `ADR-TASK-003`, `ADR-TASK-005`, `ADR-TASK-006` |
-| `ADR-0015` | Atomic publication в основном есть, но остаются явные cleanup/prefix/critical-phase follow-ups. | `ADR-TASK-005` |
+| `ADR-0014` | Общая timeout/cancellation policy является целевой архитектурой и реализована не полностью. | `ADR-TASK-003`, `ADR-TASK-005` / `ADR-TASK-027`, `ADR-TASK-006` |
+| `ADR-0015` | Atomic publication follow-ups закрыты delivery item `ADR-TASK-027`; новые full-replacement сценарии должны использовать общий staged-publication helper. | `ADR-TASK-005` / `ADR-TASK-027` |
 | `ADR-0016` | `ExecutionOutcome<T>` есть частично; миграция к canonical outcome остается открытой. | `ADR-TASK-003`, `ADR-TASK-006`, `ADR-TASK-020`, `ADR-TASK-024`, `ADR-TASK-025` |
 | `ADR-0017` | Config contract реализован частично; структура подключения ИБ уточнена отдельным ADR-0018, а content-based autodiscovery `config init` и external aggregate detection остаются отдельным gap. | `ADR-TASK-008`, `ADR-TASK-010`, `ADR-TASK-012`, `ADR-TASK-021` |
 | `ADR-0018` | `infobase` становится единственным контрактом подключения, credentials и DBMS-level настроек. | `ADR-TASK-008` |

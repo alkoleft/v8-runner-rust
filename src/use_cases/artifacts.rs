@@ -26,9 +26,8 @@ use crate::platform::result::PlatformCommandResult;
 use crate::platform::utilities::PlatformUtilities;
 use crate::support::error::AppError;
 use crate::support::fs::{
-    acquire_advisory_lock, ensure_dir, is_known_tool_name, metadata_sidecar_path,
-    read_temp_dir_metadata, remove_path_if_exists, replace_dir_atomically, replace_file_atomically,
-    write_temp_dir_metadata, TempDirKind,
+    acquire_advisory_lock, is_known_tool_name, metadata_sidecar_path, read_temp_dir_metadata,
+    remove_path_if_exists, write_temp_dir_metadata, TempDirKind,
 };
 use crate::support::path::{
     hashed_lock_path, is_filesystem_root, nearest_existing_canonical_path, stable_path_identity,
@@ -44,6 +43,8 @@ use crate::use_cases::external_artifacts::{
 use crate::use_cases::progress::log_live_stage;
 use crate::use_cases::request::{ArtifactsModeRequest, ArtifactsRequest};
 use crate::use_cases::result::{UseCaseFailure, UseCaseResult};
+
+use super::staged_publication::{interruption_before_publish, StagedPublication};
 
 const SUPPORTED_ARTIFACTS_ERROR: &str =
     "artifacts currently supports only builder=DESIGNER with designer backend profile";
@@ -354,43 +355,14 @@ fn run_designer_export(
         return Err((error, ArtifactSet::default(), None));
     }
 
-    let target_parent = resolved.output_path.parent().ok_or_else(|| {
-        (
-            AppError::Runtime(format!(
-                "target path has no parent: {}",
-                resolved.output_path.display()
-            )),
-            ArtifactSet::default(),
-            None,
-        )
-    })?;
-    ensure_dir(target_parent).map_err(|error| {
-        (
-            AppError::Runtime(format!("failed to create target parent dir: {error}")),
-            ArtifactSet::default(),
-            None,
-        )
-    })?;
-
-    let run_id = make_run_id();
-    let staging_file = target_parent.join(format!(
-        ".artifacts-stage-{run_id}.{}",
-        resolved.mode.file_extension()
-    ));
-    write_temp_dir_metadata(
-        &staging_file,
-        TempDirKind::Stage,
-        &run_id,
+    let publication = StagedPublication::prepare_file(
         &resolved.output_path,
         &resolved.target_identity,
+        ".artifacts-stage",
+        resolved.mode.file_extension(),
     )
-    .map_err(|error| {
-        (
-            AppError::Runtime(format!("failed to write staging metadata: {error}")),
-            ArtifactSet::default(),
-            None,
-        )
-    })?;
+    .map_err(|error| (error, ArtifactSet::default(), None))?;
+    let staging_file = publication.staging_path().to_path_buf();
 
     let dsl = build_designer_dsl(
         context,
@@ -436,7 +408,7 @@ fn run_designer_export(
         ));
     }
 
-    if let Some(error) = interruption_before_safe_point(
+    if let Some(error) = interruption_before_publish(
         context,
         format!(
             "artifact publication for source-set '{}' and output '{}'",
@@ -447,21 +419,15 @@ fn run_designer_export(
         return Err((error, artifacts, dump_result.platform_log_path.clone()));
     }
 
-    let publish_phase = context.run_no_process_critical_phase(|| {
-        replace_file_atomically(
-            &staging_file,
-            &resolved.output_path,
-            &run_id,
-            &resolved.target_identity,
-        )
+    let publish_phase = publication
+        .publish_file(context, "failed to publish staged artifact")
         .map_err(|error| {
             (
-                AppError::Runtime(format!("failed to publish staged artifact: {error}")),
+                error,
                 artifacts.clone(),
                 dump_result.platform_log_path.clone(),
             )
-        })
-    })?;
+        })?;
 
     let mut published_artifacts = ArtifactSet::default();
     published_artifacts.push(
@@ -474,7 +440,7 @@ fn run_designer_export(
         published_artifacts,
         publication_message(
             context,
-            publish_phase.value.cleanup_warning,
+            publish_phase.cleanup_warning,
             publish_phase.deferred_interruption,
         ),
     ))
@@ -501,48 +467,13 @@ fn run_external_designer_export(
         return Err((error, ArtifactSet::default(), None));
     }
 
-    let target_parent = resolved.output_path.parent().ok_or_else(|| {
-        (
-            AppError::Runtime(format!(
-                "external artifacts target has no parent: {}",
-                resolved.output_path.display()
-            )),
-            ArtifactSet::default(),
-            None,
-        )
-    })?;
-    ensure_dir(target_parent).map_err(|error| {
-        (
-            AppError::Runtime(format!("failed to create external publish parent: {error}")),
-            ArtifactSet::default(),
-            None,
-        )
-    })?;
-    let run_id = make_run_id();
-    let staging_dir = target_parent.join(format!(".artifacts-stage-{run_id}"));
-    ensure_dir(&staging_dir).map_err(|error| {
-        (
-            AppError::Runtime(format!("failed to create external staging dir: {error}")),
-            ArtifactSet::default(),
-            None,
-        )
-    })?;
-    write_temp_dir_metadata(
-        &staging_dir,
-        TempDirKind::Stage,
-        &run_id,
+    let publication = StagedPublication::prepare_dir(
         &resolved.output_path,
         &resolved.target_identity,
+        ".artifacts-stage",
     )
-    .map_err(|error| {
-        (
-            AppError::Runtime(format!(
-                "failed to write external staging directory metadata: {error}"
-            )),
-            ArtifactSet::default(),
-            None,
-        )
-    })?;
+    .map_err(|error| (error, ArtifactSet::default(), None))?;
+    let staging_dir = publication.staging_path().to_path_buf();
 
     let dsl = build_designer_dsl(
         context,
@@ -579,7 +510,7 @@ fn run_external_designer_export(
         write_temp_dir_metadata(
             &staging_file,
             TempDirKind::Stage,
-            &run_id,
+            publication.run_id(),
             &published_file,
             &resolved.target_identity,
         )
@@ -653,7 +584,7 @@ fn run_external_designer_export(
         })?;
     }
 
-    if let Some(error) = interruption_before_safe_point(
+    if let Some(error) = interruption_before_publish(
         context,
         format!(
             "external artifact publication for source-set '{}' and output '{}'",
@@ -664,24 +595,19 @@ fn run_external_designer_export(
         return Err((error, artifacts, last_result.platform_log_path.clone()));
     }
 
-    let publish_phase = context.run_no_process_critical_phase(|| {
-        replace_dir_atomically(
-            &staging_dir,
-            &resolved.output_path,
-            &run_id,
-            &resolved.target_identity,
+    let publish_phase = publication
+        .publish_dir(
+            context,
             ARTIFACTS_BACKUP_PREFIX,
+            "failed to publish staged external directory",
         )
         .map_err(|error| {
             (
-                AppError::Runtime(format!(
-                    "failed to publish staged external directory: {error}"
-                )),
+                error,
                 artifacts.clone(),
                 last_result.platform_log_path.clone(),
             )
-        })
-    })?;
+        })?;
 
     for descriptor in &descriptors {
         let publish_name = format!(
@@ -701,7 +627,7 @@ fn run_external_designer_export(
         artifacts,
         publication_message(
             context,
-            publish_phase.value.cleanup_warning,
+            publish_phase.cleanup_warning,
             publish_phase.deferred_interruption,
         ),
     ))
@@ -1268,16 +1194,11 @@ fn published_file_names(artifacts: &ArtifactSet) -> Vec<String> {
         .collect()
 }
 
-fn make_run_id() -> String {
-    let timestamp = Utc::now().timestamp_nanos_opt().unwrap_or_default();
-    format!("{}-{timestamp:x}", std::process::id())
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         cleanup_orphan_files, publication_message, publication_warning, resolve_target,
-        run_artifacts, validate_supported_matrix, ResolvedArtifactsTarget,
+        run_artifacts, run_designer_export, validate_supported_matrix, ResolvedArtifactsTarget,
     };
     use crate::config::model::{
         AppConfig, BuildConfig, BuilderBackend, PlatformToolConfig, SourceFormat, SourceSetConfig,
@@ -1285,9 +1206,14 @@ mod tests {
     };
     use crate::domain::artifact::{
         ArtifactSet, ARTIFACT_ROLE_PACKAGE_FILE, ARTIFACT_ROLE_PLATFORM_LOG,
+        ARTIFACT_ROLE_STAGE_FILE,
     };
     use crate::domain::artifacts::{ArtifactBuildMetadata, ArtifactBuildMode, ArtifactsResult};
     use crate::domain::execution::ExecutionStatus;
+    use crate::platform::process::{
+        ProcessError, ProcessExecutionPolicy, ProcessRequest, ProcessResult, ProcessRunner,
+        SpawnResult,
+    };
     use crate::support::fs::{
         metadata_sidecar_path, read_temp_dir_metadata, write_temp_dir_metadata, TempDirKind,
     };
@@ -1295,6 +1221,7 @@ mod tests {
     use crate::use_cases::request::{ArtifactsModeRequest, ArtifactsRequest};
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::time::Duration;
     use tempfile::tempdir;
     use tokio_util::sync::CancellationToken;
 
@@ -1333,6 +1260,65 @@ mod tests {
 
     fn artifacts_set(result: &ArtifactsResult) -> &ArtifactSet {
         result.execution.artifacts.as_ref().expect("artifacts")
+    }
+
+    struct CancelAfterDumpRunner;
+
+    impl CancelAfterDumpRunner {
+        fn write_success(request: &ProcessRequest) -> Result<ProcessResult, ProcessError> {
+            let mut previous = "";
+            for arg in &request.args {
+                if previous == "/DumpCfg" {
+                    fs::write(arg, "cf").map_err(|error| ProcessError::StdoutLogIo {
+                        path: PathBuf::from(arg),
+                        source: error,
+                    })?;
+                }
+                if previous == "/Out" {
+                    fs::write(arg, "designer log").map_err(|error| ProcessError::StdoutLogIo {
+                        path: PathBuf::from(arg),
+                        source: error,
+                    })?;
+                }
+                previous = arg;
+            }
+            Ok(ProcessResult {
+                exit_code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+                interruption: None,
+            })
+        }
+    }
+
+    impl ProcessRunner for CancelAfterDumpRunner {
+        fn run(&self, request: &ProcessRequest) -> Result<ProcessResult, ProcessError> {
+            Self::write_success(request)
+        }
+
+        fn run_with_timeout(
+            &self,
+            request: &ProcessRequest,
+            _timeout: Duration,
+        ) -> Result<ProcessResult, ProcessError> {
+            Self::write_success(request)
+        }
+
+        fn run_with_policy(
+            &self,
+            request: &ProcessRequest,
+            policy: &ProcessExecutionPolicy,
+        ) -> Result<ProcessResult, ProcessError> {
+            let result = Self::write_success(request)?;
+            policy.cancellation.cancel();
+            Ok(result)
+        }
+
+        fn spawn(&self, _request: &ProcessRequest) -> Result<SpawnResult, ProcessError> {
+            Err(ProcessError::Cancelled {
+                cmd: "unused".to_owned(),
+            })
+        }
     }
 
     fn sample_config(
@@ -1534,6 +1520,75 @@ mod tests {
         assert!(error_text.contains("before entering artifact export"));
         assert_eq!(payload.execution.status, ExecutionStatus::Cancelled);
         assert_eq!(payload.execution.interruptions.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_artifacts_platform_failure_without_stage_file_reports_no_stage_artifact() {
+        let dir = tempdir().expect("tempdir");
+        fs::create_dir_all(dir.path().join("configuration")).expect("config dir");
+        let script = dir.path().join("1cv8");
+        write_script(
+            &script,
+            "out=''\nprev=''\nfor arg in \"$@\"; do\n  if [ \"$prev\" = '/Out' ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$out\" ]; then printf 'designer log' > \"$out\"; fi\nexit 12",
+        );
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        fs::create_dir_all(base.join("configuration")).expect("base config");
+        fs::create_dir_all(&work).expect("work");
+        let config = sample_config(&base, &work, &script, SourceFormat::Designer);
+        let request = cf_request(&dir.path().join("dist/release.cf").display().to_string());
+
+        let failure = run_artifacts(
+            &ExecutionContext::cli(CommandName::Artifacts),
+            &config,
+            &request,
+        )
+        .expect_err("failure");
+        let payload = failure.payload.expect("payload");
+        let artifacts = artifacts_set(&payload);
+
+        assert!(artifacts.get_by_role(ARTIFACT_ROLE_STAGE_FILE).is_none());
+        assert!(artifacts.get_by_role(ARTIFACT_ROLE_PACKAGE_FILE).is_none());
+        assert!(artifacts.get_by_role(ARTIFACT_ROLE_PLATFORM_LOG).is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn designer_export_interruption_before_publish_retains_stage_artifact() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        fs::create_dir_all(base.join("configuration")).expect("base config");
+        fs::create_dir_all(&work).expect("work");
+        let config = sample_config(
+            &base,
+            &work,
+            Path::new("/tmp/fake-1cv8"),
+            SourceFormat::Designer,
+        );
+        let request = cf_request(&dir.path().join("dist/release.cf").display().to_string());
+        let resolved = resolve_target(&config, &request).expect("resolved");
+        let context = ExecutionContext::cli(CommandName::Artifacts);
+
+        let failure = run_designer_export(
+            &context,
+            &config,
+            &resolved,
+            Path::new("/tmp/fake-1cv8"),
+            &CancelAfterDumpRunner,
+        )
+        .expect_err("interrupted before publish");
+        let (error, artifacts, _platform_log_path) = failure;
+        let stage_path = artifacts
+            .get_by_role(ARTIFACT_ROLE_STAGE_FILE)
+            .expect("stage artifact");
+
+        assert!(error
+            .to_string()
+            .contains("before entering artifact publication"));
+        assert!(stage_path.is_file());
+        assert!(!resolved.output_path.exists());
     }
 
     #[test]
