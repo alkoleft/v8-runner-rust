@@ -1,4 +1,4 @@
-use crate::use_cases::request::{DumpModeRequest, LaunchModeRequest};
+use crate::use_cases::request::{DumpModeRequest, LaunchTargetRequest, SyntaxExtensionScope};
 use crate::use_cases::result::{UseCaseError, UseCaseErrorKind};
 
 /// Accepted launch-mode alias set for a specific transport boundary.
@@ -6,13 +6,6 @@ use crate::use_cases::result::{UseCaseError, UseCaseErrorKind};
 pub enum LaunchModeAliases {
     Cli,
     Mcp,
-}
-
-/// Normalized extension targeting shared by transport adapters.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NormalizedExtensionScope {
-    pub extension: Option<String>,
-    pub all_extensions: bool,
 }
 
 /// Trims a raw optional string and drops blank values.
@@ -66,23 +59,23 @@ fn parse_normalized_dump_mode(mode: &str) -> Result<DumpModeRequest, UseCaseErro
 }
 
 /// Parses a launch mode according to the current transport alias contract.
-pub fn parse_launch_mode(
+pub fn parse_launch_target(
     raw: &str,
     field_name: &'static str,
     aliases: LaunchModeAliases,
-) -> Result<LaunchModeRequest, UseCaseError> {
+) -> Result<LaunchTargetRequest, UseCaseError> {
     let normalized = normalize_required_string(raw, field_name)?.to_lowercase();
     let mode = match aliases {
         LaunchModeAliases::Cli => match normalized.as_str() {
-            "designer" => Some(LaunchModeRequest::Designer),
-            "thin" => Some(LaunchModeRequest::Thin),
-            "thick" => Some(LaunchModeRequest::Thick),
-            "ordinary" => Some(LaunchModeRequest::Ordinary),
+            "designer" => Some(LaunchTargetRequest::designer()),
+            "thin" => Some(LaunchTargetRequest::thin_client()),
+            "thick" => Some(LaunchTargetRequest::thick_client()),
+            "ordinary" => Some(LaunchTargetRequest::ordinary_application()),
             _ => None,
         },
         LaunchModeAliases::Mcp => match normalized.as_str() {
             "designer" | "configurator" | "1cv8" | "конфигуратор" => {
-                Some(LaunchModeRequest::Designer)
+                Some(LaunchTargetRequest::designer())
             }
             "thin"
             | "thin-client"
@@ -91,13 +84,13 @@ pub fn parse_launch_mode(
             | "tc"
             | "1cv8c"
             | "тонкий клиент"
-            | "тонкий" => Some(LaunchModeRequest::Thin),
+            | "тонкий" => Some(LaunchTargetRequest::thin_client()),
             "thick"
             | "thick-client"
             | "thick client"
             | "thick_client"
             | "толстый клиент"
-            | "толстый" => Some(LaunchModeRequest::Thick),
+            | "толстый" => Some(LaunchTargetRequest::thick_client()),
             _ => None,
         },
     };
@@ -114,37 +107,10 @@ pub fn parse_launch_mode(
 pub fn normalize_extension_scope(
     extension: Option<&str>,
     all_extensions: Option<bool>,
-) -> NormalizedExtensionScope {
+) -> SyntaxExtensionScope {
     let extension = normalize_optional_string(extension);
     let all_extensions = all_extensions.unwrap_or(extension.is_none());
-
-    NormalizedExtensionScope {
-        extension,
-        all_extensions,
-    }
-}
-
-/// Validates MCP-specific syntax flag dependencies before use-case dispatch.
-pub fn validate_extended_modules_dependencies(
-    extended_modules_check: Option<bool>,
-    check_use_synchronous_calls: Option<bool>,
-    check_use_modality: Option<bool>,
-) -> Result<(), UseCaseError> {
-    if extended_modules_check == Some(false) && check_use_synchronous_calls == Some(true) {
-        return Err(UseCaseError::new(
-            UseCaseErrorKind::Validation,
-            "checkUseSynchronousCalls requires extendedModulesCheck=true",
-        ));
-    }
-
-    if extended_modules_check == Some(false) && check_use_modality == Some(true) {
-        return Err(UseCaseError::new(
-            UseCaseErrorKind::Validation,
-            "checkUseModality requires extendedModulesCheck=true",
-        ));
-    }
-
-    Ok(())
+    SyntaxExtensionScope::new(extension, all_extensions)
 }
 
 /// Normalizes a single optional EDT project name into the use-case request list.
@@ -155,11 +121,10 @@ pub fn normalize_edt_projects(project_name: Option<&str>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_edt_projects, normalize_extension_scope, parse_launch_mode,
+        normalize_edt_projects, normalize_extension_scope, parse_launch_target,
         parse_optional_dump_mode, parse_required_dump_mode, LaunchModeAliases,
-        NormalizedExtensionScope,
     };
-    use crate::use_cases::request::{DumpModeRequest, LaunchModeRequest};
+    use crate::use_cases::request::{DumpModeRequest, LaunchTargetRequest, SyntaxExtensionScope};
     use crate::use_cases::result::UseCaseErrorKind;
 
     #[test]
@@ -182,15 +147,15 @@ mod tests {
     #[test]
     fn parses_launch_modes_for_cli_and_mcp_alias_sets() {
         assert_eq!(
-            parse_launch_mode("ordinary", "mode", LaunchModeAliases::Cli).expect("cli ordinary"),
-            LaunchModeRequest::Ordinary
+            parse_launch_target("ordinary", "mode", LaunchModeAliases::Cli).expect("cli ordinary"),
+            LaunchTargetRequest::ordinary_application()
         );
         assert_eq!(
-            parse_launch_mode("Тонкий клиент", "utility_type", LaunchModeAliases::Mcp)
+            parse_launch_target("Тонкий клиент", "utility_type", LaunchModeAliases::Mcp)
                 .expect("mcp alias"),
-            LaunchModeRequest::Thin
+            LaunchTargetRequest::thin_client()
         );
-        let error = parse_launch_mode("ordinary", "utility_type", LaunchModeAliases::Mcp)
+        let error = parse_launch_target("ordinary", "utility_type", LaunchModeAliases::Mcp)
             .expect_err("ordinary is not published for MCP");
         assert_eq!(error.kind(), UseCaseErrorKind::Validation);
         assert_eq!(error.message(), "unsupported launch utility_type: ordinary");
@@ -200,17 +165,13 @@ mod tests {
     fn normalizes_extension_scope_and_edt_project_name() {
         assert_eq!(
             normalize_extension_scope(Some(" Ext "), None),
-            NormalizedExtensionScope {
-                extension: Some("Ext".to_owned()),
-                all_extensions: false,
+            SyntaxExtensionScope::SingleExtension {
+                name: "Ext".to_owned(),
             }
         );
         assert_eq!(
             normalize_extension_scope(None, Some(false)),
-            NormalizedExtensionScope {
-                extension: None,
-                all_extensions: false,
-            }
+            SyntaxExtensionScope::MainConfiguration
         );
         assert_eq!(normalize_edt_projects(Some(" Project ")), vec!["Project"]);
         assert!(normalize_edt_projects(Some("   ")).is_empty());

@@ -29,14 +29,14 @@ use crate::mcp::response::{
 };
 use crate::support::adapter_input::{
     normalize_edt_projects, normalize_extension_scope, normalize_optional_string,
-    normalize_required_string, parse_launch_mode, parse_optional_dump_mode,
-    validate_extended_modules_dependencies, LaunchModeAliases,
+    normalize_required_string, parse_launch_target, parse_optional_dump_mode, LaunchModeAliases,
 };
 use crate::use_cases::context::{CommandName, ExecutionContext, ExecutionTransport};
 use crate::use_cases::request::{
-    BuildRequest, DesignerConfigSyntaxRequest, DesignerConfigSyntaxSelection,
-    DesignerModulesSyntaxRequest, DesignerModulesSyntaxSelection, DumpModeRequest, DumpRequest,
-    LaunchRequest, SyntaxRequest, SyntaxTargetRequest, TestRequest, TestScopeRequest,
+    BuildRequest, DesignerClientScope, DesignerClientScopes, DesignerConfigCheck,
+    DesignerConfigChecks, DesignerConfigSyntaxRequest, DesignerModulesSyntaxRequest,
+    DumpModeRequest, DumpRequest, LaunchRequest, SyntaxRequest, SyntaxTargetRequest, TestRequest,
+    TestScopeRequest,
 };
 use crate::use_cases::result::{UseCaseError, UseCaseFailure, UseCaseResult};
 use crate::use_cases::transport::map_failure_response;
@@ -246,7 +246,7 @@ where
         let context = execution_context(call_context, CommandName::Launch)
             .map_err(McpServiceError::Internal)?;
         let use_case_request = LaunchRequest {
-            mode: parse_launch_mode(
+            target: parse_launch_target(
                 &request.utility_type,
                 "utility_type",
                 LaunchModeAliases::Mcp,
@@ -304,14 +304,10 @@ where
     ) -> McpServiceResult<McpSyntaxCheckResponse> {
         let context = execution_context(call_context, CommandName::Syntax)
             .map_err(McpServiceError::Internal)?;
-        validate_extended_modules_dependencies(
-            request.extended_modules_check,
-            request.check_use_synchronous_calls,
-            request.check_use_modality,
-        )
-        .map_err(invalid_syntax_request)?;
         let use_case_request = SyntaxRequest {
-            target: SyntaxTargetRequest::DesignerConfig(map_designer_config_request(request)),
+            target: SyntaxTargetRequest::DesignerConfig(
+                map_designer_config_request(request).map_err(invalid_syntax_request)?,
+            ),
         };
 
         match self
@@ -343,7 +339,9 @@ where
         let context = execution_context(call_context, CommandName::Syntax)
             .map_err(McpServiceError::Internal)?;
         let use_case_request = SyntaxRequest {
-            target: SyntaxTargetRequest::DesignerModules(map_designer_modules_request(request)),
+            target: SyntaxTargetRequest::DesignerModules(
+                map_designer_modules_request(request).map_err(invalid_syntax_request)?,
+            ),
         };
 
         match self
@@ -433,64 +431,93 @@ fn raw_value_business_error(error: &UseCaseError, field_name: &'static str) -> M
 
 fn map_designer_config_request(
     request: &McpCheckSyntaxDesignerConfigRequest,
-) -> DesignerConfigSyntaxRequest {
+) -> Result<DesignerConfigSyntaxRequest, UseCaseError> {
     let scope = normalize_extension_scope(request.extension.as_deref(), request.all_extensions);
-    DesignerConfigSyntaxRequest::from_selection(
-        DesignerConfigSyntaxSelection {
-            config_log_integrity: request.config_log_integrity == Some(true),
-            incorrect_references: request.incorrect_references == Some(true),
-            thin_client: request.thin_client != Some(false),
-            web_client: request.web_client == Some(true),
-            mobile_client: request.mobile_client == Some(true),
-            server: request.server != Some(false),
-            external_connection: request.external_connection == Some(true),
-            external_connection_server: request.external_connection_server == Some(true),
-            mobile_app_client: request.mobile_app_client == Some(true),
-            mobile_app_server: request.mobile_app_server == Some(true),
-            thick_client_managed_application: request.thick_client_managed_application
-                == Some(true),
-            thick_client_server_managed_application: request
-                .thick_client_server_managed_application
-                == Some(true),
-            thick_client_ordinary_application: request.thick_client_ordinary_application
-                == Some(true),
-            thick_client_server_ordinary_application: request
-                .thick_client_server_ordinary_application
-                == Some(true),
-            mobile_client_digi_sign: request.mobile_client_digi_sign == Some(true),
-            distributive_modules: request.distributive_modules == Some(true),
-            unreference_procedures: request.unreference_procedures != Some(false),
-            handlers_existence: request.handlers_existence != Some(false),
-            empty_handlers: request.empty_handlers != Some(false),
-            extended_modules_check: request.extended_modules_check != Some(false),
-            check_use_synchronous_calls: request.check_use_synchronous_calls == Some(true),
-            check_use_modality: request.check_use_modality == Some(true),
-            unsupported_functional: request.unsupported_functional == Some(true),
-        },
-        scope.extension,
-        scope.all_extensions,
-    )
+    Ok(DesignerConfigSyntaxRequest::new(
+        DesignerConfigChecks::new(
+            [
+                (request.config_log_integrity == Some(true))
+                    .then_some(DesignerConfigCheck::ConfigLogIntegrity),
+                (request.incorrect_references == Some(true))
+                    .then_some(DesignerConfigCheck::IncorrectReferences),
+                (request.mobile_client_digi_sign == Some(true))
+                    .then_some(DesignerConfigCheck::MobileClientDigiSign),
+                (request.distributive_modules == Some(true))
+                    .then_some(DesignerConfigCheck::DistributiveModules),
+                (request.unreference_procedures != Some(false))
+                    .then_some(DesignerConfigCheck::UnreferenceProcedures),
+                (request.handlers_existence != Some(false))
+                    .then_some(DesignerConfigCheck::HandlersExistence),
+                (request.empty_handlers != Some(false))
+                    .then_some(DesignerConfigCheck::EmptyHandlers),
+                (request.unsupported_functional == Some(true))
+                    .then_some(DesignerConfigCheck::UnsupportedFunctional),
+            ]
+            .into_iter()
+            .flatten(),
+        ),
+        DesignerClientScopes::new(
+            [
+                (request.thin_client != Some(false)).then_some(DesignerClientScope::ThinClient),
+                (request.web_client == Some(true)).then_some(DesignerClientScope::WebClient),
+                (request.mobile_client == Some(true)).then_some(DesignerClientScope::MobileClient),
+                (request.server != Some(false)).then_some(DesignerClientScope::Server),
+                (request.external_connection == Some(true))
+                    .then_some(DesignerClientScope::ExternalConnection),
+                (request.external_connection_server == Some(true))
+                    .then_some(DesignerClientScope::ExternalConnectionServer),
+                (request.mobile_app_client == Some(true))
+                    .then_some(DesignerClientScope::MobileAppClient),
+                (request.mobile_app_server == Some(true))
+                    .then_some(DesignerClientScope::MobileAppServer),
+                (request.thick_client_managed_application == Some(true))
+                    .then_some(DesignerClientScope::ThickClientManagedApplication),
+                (request.thick_client_server_managed_application == Some(true))
+                    .then_some(DesignerClientScope::ThickClientServerManagedApplication),
+                (request.thick_client_ordinary_application == Some(true))
+                    .then_some(DesignerClientScope::ThickClientOrdinaryApplication),
+                (request.thick_client_server_ordinary_application == Some(true))
+                    .then_some(DesignerClientScope::ThickClientServerOrdinaryApplication),
+            ]
+            .into_iter()
+            .flatten(),
+        ),
+        crate::use_cases::request::ExtendedModulesPolicy::from_mcp_flags(
+            request.extended_modules_check,
+            request.check_use_synchronous_calls,
+            request.check_use_modality,
+        )?,
+        scope,
+    ))
 }
 
 fn map_designer_modules_request(
     request: &McpCheckSyntaxDesignerModulesRequest,
-) -> DesignerModulesSyntaxRequest {
+) -> Result<DesignerModulesSyntaxRequest, UseCaseError> {
     let scope = normalize_extension_scope(request.extension.as_deref(), request.all_extensions);
-    DesignerModulesSyntaxRequest::from_selection(
-        DesignerModulesSyntaxSelection {
-            thin_client: request.thin_client != Some(false),
-            web_client: request.web_client == Some(true),
-            server: request.server != Some(false),
-            external_connection: request.external_connection == Some(true),
-            thick_client_ordinary_application: request.thick_client_ordinary_application
-                == Some(true),
-            mobile_app_client: request.mobile_app_client == Some(true),
-            mobile_app_server: request.mobile_app_server == Some(true),
-            mobile_client: request.mobile_client == Some(true),
-            extended_modules_check: request.extended_modules_check != Some(false),
-        },
-        scope.extension,
-        scope.all_extensions,
+    DesignerModulesSyntaxRequest::new(
+        DesignerClientScopes::new(
+            [
+                (request.thin_client != Some(false)).then_some(DesignerClientScope::ThinClient),
+                (request.web_client == Some(true)).then_some(DesignerClientScope::WebClient),
+                (request.server != Some(false)).then_some(DesignerClientScope::Server),
+                (request.external_connection == Some(true))
+                    .then_some(DesignerClientScope::ExternalConnection),
+                (request.thick_client_ordinary_application == Some(true))
+                    .then_some(DesignerClientScope::ThickClientOrdinaryApplication),
+                (request.mobile_app_client == Some(true))
+                    .then_some(DesignerClientScope::MobileAppClient),
+                (request.mobile_app_server == Some(true))
+                    .then_some(DesignerClientScope::MobileAppServer),
+                (request.mobile_client == Some(true)).then_some(DesignerClientScope::MobileClient),
+            ]
+            .into_iter()
+            .flatten(),
+        ),
+        crate::use_cases::request::ExtendedModulesPolicy::basic(
+            request.extended_modules_check != Some(false),
+        ),
+        scope,
     )
 }
 
@@ -883,11 +910,12 @@ mod tests {
         McpBuildMode, McpBuildResponse, McpBuildStep, McpIssue, McpIssueSeverity, McpObjectIssue,
         McpStepKind, McpStepResult, McpStepStatus, McpSyntaxCheckResponse, McpTestResponse,
     };
-    use crate::support::adapter_input::{normalize_extension_scope, NormalizedExtensionScope};
+    use crate::support::adapter_input::normalize_extension_scope;
     use crate::use_cases::context::{CommandName, ExecutionContext, ExecutionTransport};
     use crate::use_cases::request::{
-        BuildRequest, DumpModeRequest, DumpRequest, LaunchModeRequest, LaunchRequest,
-        SyntaxRequest, SyntaxTargetRequest, TestRequest, TestScopeRequest,
+        BuildRequest, DesignerClientScope, DumpModeRequest, DumpRequest, LaunchRequest,
+        LaunchTargetRequest, SyntaxExtensionScope, SyntaxRequest, SyntaxTargetRequest, TestRequest,
+        TestScopeRequest,
     };
     use crate::use_cases::result::{UseCaseError, UseCaseErrorKind, UseCaseFailure, UseCaseResult};
 
@@ -1486,41 +1514,85 @@ mod tests {
             (
                 "designer",
                 LaunchMode::Designer,
-                LaunchModeRequest::Designer,
+                LaunchTargetRequest::designer(),
             ),
             (
                 "configurator",
                 LaunchMode::Designer,
-                LaunchModeRequest::Designer,
+                LaunchTargetRequest::designer(),
             ),
-            (" 1CV8 ", LaunchMode::Designer, LaunchModeRequest::Designer),
+            (
+                " 1CV8 ",
+                LaunchMode::Designer,
+                LaunchTargetRequest::designer(),
+            ),
             (
                 "конфигуратор",
                 LaunchMode::Designer,
-                LaunchModeRequest::Designer,
+                LaunchTargetRequest::designer(),
             ),
-            ("thin", LaunchMode::Thin, LaunchModeRequest::Thin),
-            ("thin-client", LaunchMode::Thin, LaunchModeRequest::Thin),
-            ("thin client", LaunchMode::Thin, LaunchModeRequest::Thin),
-            ("THIN_CLIENT", LaunchMode::Thin, LaunchModeRequest::Thin),
-            ("tc", LaunchMode::Thin, LaunchModeRequest::Thin),
-            ("1cv8c", LaunchMode::Thin, LaunchModeRequest::Thin),
+            ("thin", LaunchMode::Thin, LaunchTargetRequest::thin_client()),
+            (
+                "thin-client",
+                LaunchMode::Thin,
+                LaunchTargetRequest::thin_client(),
+            ),
+            (
+                "thin client",
+                LaunchMode::Thin,
+                LaunchTargetRequest::thin_client(),
+            ),
+            (
+                "THIN_CLIENT",
+                LaunchMode::Thin,
+                LaunchTargetRequest::thin_client(),
+            ),
+            ("tc", LaunchMode::Thin, LaunchTargetRequest::thin_client()),
+            (
+                "1cv8c",
+                LaunchMode::Thin,
+                LaunchTargetRequest::thin_client(),
+            ),
             (
                 "  тонкий клиент  ",
                 LaunchMode::Thin,
-                LaunchModeRequest::Thin,
+                LaunchTargetRequest::thin_client(),
             ),
-            ("тонкий", LaunchMode::Thin, LaunchModeRequest::Thin),
-            ("thick", LaunchMode::Thick, LaunchModeRequest::Thick),
-            ("thick-client", LaunchMode::Thick, LaunchModeRequest::Thick),
-            ("thick client", LaunchMode::Thick, LaunchModeRequest::Thick),
-            ("THICK_CLIENT", LaunchMode::Thick, LaunchModeRequest::Thick),
+            (
+                "тонкий",
+                LaunchMode::Thin,
+                LaunchTargetRequest::thin_client(),
+            ),
+            (
+                "thick",
+                LaunchMode::Thick,
+                LaunchTargetRequest::thick_client(),
+            ),
+            (
+                "thick-client",
+                LaunchMode::Thick,
+                LaunchTargetRequest::thick_client(),
+            ),
+            (
+                "thick client",
+                LaunchMode::Thick,
+                LaunchTargetRequest::thick_client(),
+            ),
+            (
+                "THICK_CLIENT",
+                LaunchMode::Thick,
+                LaunchTargetRequest::thick_client(),
+            ),
             (
                 " толстый клиент ",
                 LaunchMode::Thick,
-                LaunchModeRequest::Thick,
+                LaunchTargetRequest::thick_client(),
             ),
-            ("толстый", LaunchMode::Thick, LaunchModeRequest::Thick),
+            (
+                "толстый",
+                LaunchMode::Thick,
+                LaunchTargetRequest::thick_client(),
+            ),
         ];
 
         for (alias, result_mode, request_mode) in cases {
@@ -1545,7 +1617,7 @@ mod tests {
 
             assert_eq!(response.success, true, "alias {alias}");
             let requests = service.port.launch_requests.borrow();
-            assert_eq!(requests[0].1.mode, request_mode, "alias {alias}");
+            assert_eq!(requests[0].1.target, request_mode, "alias {alias}");
         }
     }
 
@@ -1671,62 +1743,31 @@ mod tests {
     #[test]
     fn normalize_extension_scope_covers_tri_state_matrix() {
         let cases = [
-            (
-                None,
-                None,
-                NormalizedExtensionScope {
-                    extension: None,
-                    all_extensions: true,
-                },
-            ),
-            (
-                None,
-                Some(false),
-                NormalizedExtensionScope {
-                    extension: None,
-                    all_extensions: false,
-                },
-            ),
-            (
-                None,
-                Some(true),
-                NormalizedExtensionScope {
-                    extension: None,
-                    all_extensions: true,
-                },
-            ),
+            (None, None, SyntaxExtensionScope::AllExtensions),
+            (None, Some(false), SyntaxExtensionScope::MainConfiguration),
+            (None, Some(true), SyntaxExtensionScope::AllExtensions),
             (
                 Some(" Ext "),
                 None,
-                NormalizedExtensionScope {
-                    extension: Some("Ext".to_owned()),
-                    all_extensions: false,
+                SyntaxExtensionScope::SingleExtension {
+                    name: "Ext".to_owned(),
                 },
             ),
             (
                 Some(" Ext "),
                 Some(false),
-                NormalizedExtensionScope {
-                    extension: Some("Ext".to_owned()),
-                    all_extensions: false,
+                SyntaxExtensionScope::SingleExtension {
+                    name: "Ext".to_owned(),
                 },
             ),
             (
                 Some(" Ext "),
                 Some(true),
-                NormalizedExtensionScope {
-                    extension: Some("Ext".to_owned()),
-                    all_extensions: true,
+                SyntaxExtensionScope::SingleExtensionAndAll {
+                    name: "Ext".to_owned(),
                 },
             ),
-            (
-                Some(" "),
-                None,
-                NormalizedExtensionScope {
-                    extension: None,
-                    all_extensions: true,
-                },
-            ),
+            (Some(" "), None, SyntaxExtensionScope::AllExtensions),
         ];
 
         for (extension, all_extensions, expected) in cases {
@@ -1757,10 +1798,10 @@ mod tests {
         let requests = service.port.syntax_requests.borrow();
         match &requests[0].1.target {
             SyntaxTargetRequest::DesignerConfig(request) => {
-                assert_eq!(request.thin_client, true);
-                assert_eq!(request.server, true);
-                assert_eq!(request.extended_modules_check, true);
-                assert_eq!(request.all_extensions, true);
+                assert!(request.has_client_scope(DesignerClientScope::ThinClient));
+                assert!(request.has_client_scope(DesignerClientScope::Server));
+                assert!(request.extended_modules().is_enabled());
+                assert!(request.extension_scope().includes_all_extensions());
             }
             other => panic!("unexpected target: {other:?}"),
         }
@@ -1786,8 +1827,8 @@ mod tests {
         let requests = service.port.syntax_requests.borrow();
         match &requests[0].1.target {
             SyntaxTargetRequest::DesignerConfig(request) => {
-                assert_eq!(request.extension.as_deref(), Some("Ext"));
-                assert_eq!(request.all_extensions, true);
+                assert_eq!(request.extension_scope().extension(), Some("Ext"));
+                assert!(request.extension_scope().includes_all_extensions());
             }
             other => panic!("unexpected target: {other:?}"),
         }
@@ -1922,10 +1963,10 @@ mod tests {
         let requests = service.port.syntax_requests.borrow();
         match &requests[0].1.target {
             SyntaxTargetRequest::DesignerModules(request) => {
-                assert_eq!(request.thin_client, true);
-                assert_eq!(request.server, true);
-                assert_eq!(request.extension.as_deref(), Some("Ext"));
-                assert_eq!(request.all_extensions, false);
+                assert!(request.has_client_scope(DesignerClientScope::ThinClient));
+                assert!(request.has_client_scope(DesignerClientScope::Server));
+                assert_eq!(request.extension_scope().extension(), Some("Ext"));
+                assert!(!request.extension_scope().includes_all_extensions());
             }
             other => panic!("unexpected target: {other:?}"),
         }
@@ -1951,8 +1992,8 @@ mod tests {
         let requests = service.port.syntax_requests.borrow();
         match &requests[0].1.target {
             SyntaxTargetRequest::DesignerModules(request) => {
-                assert_eq!(request.extension, None);
-                assert_eq!(request.all_extensions, true);
+                assert_eq!(request.extension_scope().extension(), None);
+                assert!(request.extension_scope().includes_all_extensions());
             }
             other => panic!("unexpected target: {other:?}"),
         }

@@ -22,9 +22,10 @@ use crate::support::temp::platform_logs_dir;
 use crate::use_cases::context::CommandName;
 use crate::use_cases::context::{ExecutionContext, ExecutionInterruption, InterruptionSafetyClass};
 use crate::use_cases::request::{
+    DesignerClientScope, DesignerConfigCheck,
     DesignerConfigSyntaxRequest as DesignerConfigSyntaxArgs,
-    DesignerModulesSyntaxRequest as DesignerModulesSyntaxArgs, SyntaxRequest as SyntaxArgs,
-    SyntaxTargetRequest as SyntaxTarget,
+    DesignerModulesSyntaxRequest as DesignerModulesSyntaxArgs, ExtendedModulesPolicy,
+    SyntaxExtensionScope, SyntaxRequest as SyntaxArgs, SyntaxTargetRequest as SyntaxTarget,
 };
 use crate::use_cases::result::{UseCaseFailure, UseCaseResult};
 use tracing::debug;
@@ -261,101 +262,67 @@ fn normalize_invocation(
 
 fn normalize_config_flags(args: &DesignerConfigSyntaxArgs) -> Vec<String> {
     let mut flags = Vec::new();
-    push_flag(&mut flags, args.config_log_integrity, "-ConfigLogIntegrity");
-    push_flag(
+    push_config_check(&mut flags, args, DesignerConfigCheck::ConfigLogIntegrity);
+    push_config_check(&mut flags, args, DesignerConfigCheck::IncorrectReferences);
+    push_client_scope(&mut flags, args, DesignerClientScope::ThinClient);
+    push_client_scope(&mut flags, args, DesignerClientScope::WebClient);
+    push_client_scope(&mut flags, args, DesignerClientScope::MobileClient);
+    push_client_scope(&mut flags, args, DesignerClientScope::Server);
+    push_client_scope(&mut flags, args, DesignerClientScope::ExternalConnection);
+    push_client_scope(
         &mut flags,
-        args.incorrect_references,
-        "-IncorrectReferences",
+        args,
+        DesignerClientScope::ExternalConnectionServer,
     );
-    push_flag(&mut flags, args.thin_client, "-ThinClient");
-    push_flag(&mut flags, args.web_client, "-WebClient");
-    push_flag(&mut flags, args.mobile_client, "-MobileClient");
-    push_flag(&mut flags, args.server, "-Server");
-    push_flag(&mut flags, args.external_connection, "-ExternalConnection");
-    push_flag(
+    push_client_scope(&mut flags, args, DesignerClientScope::MobileAppClient);
+    push_client_scope(&mut flags, args, DesignerClientScope::MobileAppServer);
+    push_client_scope(
         &mut flags,
-        args.external_connection_server,
-        "-ExternalConnectionServer",
+        args,
+        DesignerClientScope::ThickClientManagedApplication,
     );
-    push_flag(&mut flags, args.mobile_app_client, "-MobileAppClient");
-    push_flag(&mut flags, args.mobile_app_server, "-MobileAppServer");
-    push_flag(
+    push_client_scope(
         &mut flags,
-        args.thick_client_managed_application,
-        "-ThickClientManagedApplication",
+        args,
+        DesignerClientScope::ThickClientServerManagedApplication,
     );
-    push_flag(
+    push_client_scope(
         &mut flags,
-        args.thick_client_server_managed_application,
-        "-ThickClientServerManagedApplication",
+        args,
+        DesignerClientScope::ThickClientOrdinaryApplication,
     );
-    push_flag(
+    push_client_scope(
         &mut flags,
-        args.thick_client_ordinary_application,
-        "-ThickClientOrdinaryApplication",
+        args,
+        DesignerClientScope::ThickClientServerOrdinaryApplication,
     );
-    push_flag(
-        &mut flags,
-        args.thick_client_server_ordinary_application,
-        "-ThickClientServerOrdinaryApplication",
-    );
-    push_flag(
-        &mut flags,
-        args.mobile_client_digi_sign,
-        "-MobileClientDigiSign",
-    );
-    push_flag(
-        &mut flags,
-        args.distributive_modules,
-        "-DistributiveModules",
-    );
-    push_flag(
-        &mut flags,
-        args.unreference_procedures,
-        "-UnreferenceProcedures",
-    );
-    push_flag(&mut flags, args.handlers_existence, "-HandlersExistence");
-    push_flag(&mut flags, args.empty_handlers, "-EmptyHandlers");
-    push_flag(
-        &mut flags,
-        args.extended_modules_check,
-        "-ExtendedModulesCheck",
-    );
-    push_flag(
-        &mut flags,
-        args.check_use_synchronous_calls,
-        "-CheckUseSynchronousCalls",
-    );
-    push_flag(&mut flags, args.check_use_modality, "-CheckUseModality");
-    push_flag(
-        &mut flags,
-        args.unsupported_functional,
-        "-UnsupportedFunctional",
-    );
-    push_extension_scope(&mut flags, args.extension.as_deref(), args.all_extensions);
+    push_config_check(&mut flags, args, DesignerConfigCheck::MobileClientDigiSign);
+    push_config_check(&mut flags, args, DesignerConfigCheck::DistributiveModules);
+    push_config_check(&mut flags, args, DesignerConfigCheck::UnreferenceProcedures);
+    push_config_check(&mut flags, args, DesignerConfigCheck::HandlersExistence);
+    push_config_check(&mut flags, args, DesignerConfigCheck::EmptyHandlers);
+    push_extended_modules_policy(&mut flags, args.extended_modules());
+    push_config_check(&mut flags, args, DesignerConfigCheck::UnsupportedFunctional);
+    push_extension_scope(&mut flags, args.extension_scope());
     flags
 }
 
 fn normalize_modules_flags(args: &DesignerModulesSyntaxArgs) -> Vec<String> {
     let mut flags = Vec::new();
-    push_flag(&mut flags, args.thin_client, "-ThinClient");
-    push_flag(&mut flags, args.web_client, "-WebClient");
-    push_flag(&mut flags, args.server, "-Server");
-    push_flag(&mut flags, args.external_connection, "-ExternalConnection");
-    push_flag(
+    push_client_scope(&mut flags, args, DesignerClientScope::ThinClient);
+    push_client_scope(&mut flags, args, DesignerClientScope::WebClient);
+    push_client_scope(&mut flags, args, DesignerClientScope::Server);
+    push_client_scope(&mut flags, args, DesignerClientScope::ExternalConnection);
+    push_client_scope(
         &mut flags,
-        args.thick_client_ordinary_application,
-        "-ThickClientOrdinaryApplication",
+        args,
+        DesignerClientScope::ThickClientOrdinaryApplication,
     );
-    push_flag(&mut flags, args.mobile_app_client, "-MobileAppClient");
-    push_flag(&mut flags, args.mobile_app_server, "-MobileAppServer");
-    push_flag(&mut flags, args.mobile_client, "-MobileClient");
-    push_flag(
-        &mut flags,
-        args.extended_modules_check,
-        "-ExtendedModulesCheck",
-    );
-    push_extension_scope(&mut flags, args.extension.as_deref(), args.all_extensions);
+    push_client_scope(&mut flags, args, DesignerClientScope::MobileAppClient);
+    push_client_scope(&mut flags, args, DesignerClientScope::MobileAppServer);
+    push_client_scope(&mut flags, args, DesignerClientScope::MobileClient);
+    push_extended_modules_policy(&mut flags, args.extended_modules());
+    push_extension_scope(&mut flags, args.extension_scope());
     flags
 }
 
@@ -365,26 +332,59 @@ fn push_flag(flags: &mut Vec<String>, enabled: bool, flag: &str) {
     }
 }
 
-fn push_extension_scope(flags: &mut Vec<String>, extension: Option<&str>, all_extensions: bool) {
-    if let Some(extension) = extension {
+fn push_config_check(
+    flags: &mut Vec<String>,
+    args: &DesignerConfigSyntaxArgs,
+    check: DesignerConfigCheck,
+) {
+    push_flag(flags, args.has_check(check), check.flag());
+}
+
+fn push_client_scope<T>(flags: &mut Vec<String>, args: &T, scope: DesignerClientScope)
+where
+    T: HasClientScopes,
+{
+    push_flag(flags, args.has_client_scope(scope), scope.flag());
+}
+
+fn push_extended_modules_policy(flags: &mut Vec<String>, policy: ExtendedModulesPolicy) {
+    push_flag(flags, policy.is_enabled(), "-ExtendedModulesCheck");
+    push_flag(
+        flags,
+        policy.checks_synchronous_calls(),
+        "-CheckUseSynchronousCalls",
+    );
+    push_flag(flags, policy.checks_modality(), "-CheckUseModality");
+}
+
+fn push_extension_scope(flags: &mut Vec<String>, scope: &SyntaxExtensionScope) {
+    if let Some(extension) = scope.extension() {
         flags.push("-Extension".to_owned());
         flags.push(extension.to_owned());
     }
-    if all_extensions {
+    if scope.includes_all_extensions() {
         flags.push("-AllExtensions".to_owned());
     }
 }
 
 fn modules_has_modes(args: &DesignerModulesSyntaxArgs) -> bool {
-    args.thin_client
-        || args.web_client
-        || args.server
-        || args.external_connection
-        || args.thick_client_ordinary_application
-        || args.mobile_app_client
-        || args.mobile_app_server
-        || args.mobile_client
-        || args.extended_modules_check
+    args.has_modes()
+}
+
+trait HasClientScopes {
+    fn has_client_scope(&self, scope: DesignerClientScope) -> bool;
+}
+
+impl HasClientScopes for DesignerConfigSyntaxArgs {
+    fn has_client_scope(&self, scope: DesignerClientScope) -> bool {
+        DesignerConfigSyntaxArgs::has_client_scope(self, scope)
+    }
+}
+
+impl HasClientScopes for DesignerModulesSyntaxArgs {
+    fn has_client_scope(&self, scope: DesignerClientScope) -> bool {
+        DesignerModulesSyntaxArgs::has_client_scope(self, scope)
+    }
 }
 
 fn validate_designer_supported_matrix(config: &AppConfig) -> Option<AppError> {
@@ -976,8 +976,8 @@ fn fallback_edt_issue(
 #[cfg(test)]
 mod tests {
     use super::{
-        modules_has_modes, normalize_config_flags, normalize_modules_flags, run_syntax,
-        run_syntax_with_context, status_from_exit_code,
+        normalize_config_flags, normalize_modules_flags, run_syntax, run_syntax_with_context,
+        status_from_exit_code,
     };
     use crate::config::model::{
         AppConfig, BuildConfig, BuilderBackend, SourceFormat, SourceSetConfig, SourceSetPurpose,
@@ -987,9 +987,10 @@ mod tests {
     use crate::domain::syntax::SyntaxCheckStatus;
     use crate::use_cases::context::{CommandName, ExecutionContext};
     use crate::use_cases::request::{
+        DesignerClientScope, DesignerClientScopes, DesignerConfigChecks,
         DesignerConfigSyntaxRequest as DesignerConfigSyntaxArgs,
-        DesignerModulesSyntaxRequest as DesignerModulesSyntaxArgs, SyntaxRequest as SyntaxArgs,
-        SyntaxTargetRequest as SyntaxTarget,
+        DesignerModulesSyntaxRequest as DesignerModulesSyntaxArgs, ExtendedModulesPolicy,
+        SyntaxExtensionScope, SyntaxRequest as SyntaxArgs, SyntaxTargetRequest as SyntaxTarget,
     };
     use crate::use_cases::result::UseCaseErrorKind;
     use std::fs;
@@ -1177,44 +1178,46 @@ mod tests {
 
     #[test]
     fn normalizes_config_flags() {
-        let flags = normalize_config_flags(&DesignerConfigSyntaxArgs {
-            thin_client: true,
-            server: true,
-            extension: Some("Ext".to_owned()),
-            ..default_config_args()
-        });
+        let args = DesignerConfigSyntaxArgs::new(
+            DesignerConfigChecks::default(),
+            DesignerClientScopes::new([
+                DesignerClientScope::ThinClient,
+                DesignerClientScope::Server,
+            ]),
+            ExtendedModulesPolicy::basic(false),
+            SyntaxExtensionScope::SingleExtension {
+                name: "Ext".to_owned(),
+            },
+        );
+        let flags = normalize_config_flags(&args);
 
         assert_eq!(flags, vec!["-ThinClient", "-Server", "-Extension", "Ext"]);
     }
 
     #[test]
     fn normalizes_modules_flags() {
-        let flags = normalize_modules_flags(&DesignerModulesSyntaxArgs {
-            server: true,
-            all_extensions: true,
-            ..default_modules_args()
-        });
+        let args = DesignerModulesSyntaxArgs::new(
+            DesignerClientScopes::new([DesignerClientScope::Server]),
+            ExtendedModulesPolicy::basic(false),
+            SyntaxExtensionScope::AllExtensions,
+        )
+        .expect("modules args");
+        let flags = normalize_modules_flags(&args);
 
         assert_eq!(flags, vec!["-Server", "-AllExtensions"]);
     }
 
     #[test]
     fn modules_without_modes_are_rejected() {
-        assert!(!modules_has_modes(&default_modules_args()));
-        let args = SyntaxArgs {
-            target: SyntaxTarget::DesignerModules(default_modules_args()),
-        };
-        let dir = tempdir().expect("tempdir");
-        let config = sample_config(dir.path(), dir.path(), dir.path());
+        let error = DesignerModulesSyntaxArgs::new(
+            DesignerClientScopes::default(),
+            ExtendedModulesPolicy::basic(false),
+            SyntaxExtensionScope::MainConfiguration,
+        )
+        .expect_err("expected failure");
 
-        let error = run_syntax(&config, &args).expect_err("expected failure");
-        let message = error.error.to_string();
-        let result = error
-            .payload
-            .expect("syntax validation failures should preserve a structured payload");
-
-        assert!(message.contains("requires at least one mode"));
-        assert!(result.issues.is_empty());
+        assert_eq!(error.kind(), UseCaseErrorKind::Validation);
+        assert!(error.message().contains("requires at least one mode"));
     }
 
     #[test]
@@ -1272,10 +1275,9 @@ mod tests {
         );
         let config = sample_config(&base, &work, &dir.path().join("platform"));
         let args = SyntaxArgs {
-            target: SyntaxTarget::DesignerModules(DesignerModulesSyntaxArgs {
-                server: true,
-                ..default_modules_args()
-            }),
+            target: SyntaxTarget::DesignerModules(modules_args_with_scopes([
+                DesignerClientScope::Server,
+            ])),
         };
 
         let failure = run_syntax(&config, &args).expect_err("expected validation failure");
@@ -1303,10 +1305,9 @@ mod tests {
         write_designer_script(&binary, None, Some("license error"), 1);
         let config = sample_config(&base, &work, &dir.path().join("platform"));
         let args = SyntaxArgs {
-            target: SyntaxTarget::DesignerModules(DesignerModulesSyntaxArgs {
-                server: true,
-                ..default_modules_args()
-            }),
+            target: SyntaxTarget::DesignerModules(modules_args_with_scopes([
+                DesignerClientScope::Server,
+            ])),
         };
 
         let failure = run_syntax(&config, &args).expect_err("expected tool failure");
@@ -1335,10 +1336,9 @@ mod tests {
         write_script(&binary, "exit 101");
         let config = sample_config(&base, &work, &dir.path().join("platform"));
         let args = SyntaxArgs {
-            target: SyntaxTarget::DesignerModules(DesignerModulesSyntaxArgs {
-                server: true,
-                ..default_modules_args()
-            }),
+            target: SyntaxTarget::DesignerModules(modules_args_with_scopes([
+                DesignerClientScope::Server,
+            ])),
         };
 
         let failure = run_syntax(&config, &args).expect_err("expected failure");
@@ -1591,48 +1591,22 @@ mod tests {
     }
 
     fn default_config_args() -> DesignerConfigSyntaxArgs {
-        DesignerConfigSyntaxArgs {
-            config_log_integrity: false,
-            incorrect_references: false,
-            thin_client: false,
-            web_client: false,
-            mobile_client: false,
-            server: false,
-            external_connection: false,
-            external_connection_server: false,
-            mobile_app_client: false,
-            mobile_app_server: false,
-            thick_client_managed_application: false,
-            thick_client_server_managed_application: false,
-            thick_client_ordinary_application: false,
-            thick_client_server_ordinary_application: false,
-            mobile_client_digi_sign: false,
-            distributive_modules: false,
-            unreference_procedures: false,
-            handlers_existence: false,
-            empty_handlers: false,
-            extended_modules_check: false,
-            check_use_synchronous_calls: false,
-            check_use_modality: false,
-            unsupported_functional: false,
-            extension: None,
-            all_extensions: false,
-        }
+        DesignerConfigSyntaxArgs::new(
+            DesignerConfigChecks::default(),
+            DesignerClientScopes::default(),
+            ExtendedModulesPolicy::basic(false),
+            SyntaxExtensionScope::MainConfiguration,
+        )
     }
 
-    fn default_modules_args() -> DesignerModulesSyntaxArgs {
-        DesignerModulesSyntaxArgs {
-            thin_client: false,
-            web_client: false,
-            server: false,
-            external_connection: false,
-            thick_client_ordinary_application: false,
-            mobile_app_client: false,
-            mobile_app_server: false,
-            mobile_client: false,
-            extended_modules_check: false,
-            extension: None,
-            all_extensions: false,
-        }
+    fn modules_args_with_scopes(
+        scopes: impl IntoIterator<Item = DesignerClientScope>,
+    ) -> DesignerModulesSyntaxArgs {
+        DesignerModulesSyntaxArgs::new(
+            DesignerClientScopes::new(scopes),
+            ExtendedModulesPolicy::basic(false),
+            SyntaxExtensionScope::MainConfiguration,
+        )
+        .expect("modules args")
     }
 }

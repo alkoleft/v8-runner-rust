@@ -8,7 +8,9 @@ use crate::platform::process::ProcessRequest;
 use crate::platform::utilities::PlatformUtilities;
 use crate::support::error::AppError;
 use crate::use_cases::context::{ExecutionContext, ExecutionInterruption};
-use crate::use_cases::request::{LaunchModeRequest, LaunchRequest as LaunchArgs};
+use crate::use_cases::request::{
+    EnterpriseLaunchTarget, LaunchRequest as LaunchArgs, LaunchTargetRequest,
+};
 use crate::use_cases::result::{UseCaseFailure, UseCaseResult};
 use tracing::debug;
 
@@ -22,18 +24,22 @@ pub fn execute(
     debug!(
         command = context.command().as_str(),
         transport = ?context.transport(),
-        mode = ?args.mode,
+        target = ?args.target,
         "executing launch use case"
     );
-    let (mode, utility, client_mode) = match args.mode {
-        LaunchModeRequest::Designer => (
+    let (mode, utility, client_mode) = match args.target {
+        LaunchTargetRequest::Designer => (
             LaunchMode::Designer,
             UtilityType::V8,
             LaunchClientMode::Designer,
         ),
-        LaunchModeRequest::Thin => (LaunchMode::Thin, UtilityType::V8C, LaunchClientMode::Thin),
-        LaunchModeRequest::Thick => (LaunchMode::Thick, UtilityType::V8, LaunchClientMode::Thick),
-        LaunchModeRequest::Ordinary => (
+        LaunchTargetRequest::Enterprise(EnterpriseLaunchTarget::ThinClient) => {
+            (LaunchMode::Thin, UtilityType::V8C, LaunchClientMode::Thin)
+        }
+        LaunchTargetRequest::Enterprise(EnterpriseLaunchTarget::ThickClient) => {
+            (LaunchMode::Thick, UtilityType::V8, LaunchClientMode::Thick)
+        }
+        LaunchTargetRequest::Enterprise(EnterpriseLaunchTarget::OrdinaryApplication) => (
             LaunchMode::Ordinary,
             UtilityType::V8,
             LaunchClientMode::Ordinary,
@@ -60,7 +66,7 @@ pub fn execute(
         &args.launch,
     );
 
-    debug!("[Запуск] Приложение: {}", mode_label(args.mode));
+    debug!("[Запуск] Приложение: {}", mode_label(args.target));
     let spawned = utilities
         .runner_for(utility)
         .spawn(&ProcessRequest {
@@ -80,7 +86,7 @@ pub fn execute(
         binary: spawned.binary.clone(),
         message: Some(format!(
             "Launched {} via {} (pid {})",
-            mode_label(args.mode),
+            mode_label(args.target),
             spawned.binary.display(),
             spawned.pid
         )),
@@ -99,12 +105,14 @@ fn interruption_message(interruption: ExecutionInterruption) -> &'static str {
     }
 }
 
-fn mode_label(mode: LaunchModeRequest) -> &'static str {
-    match mode {
-        LaunchModeRequest::Designer => "конфигуратор",
-        LaunchModeRequest::Thin => "тонкий клиент",
-        LaunchModeRequest::Thick => "толстый клиент",
-        LaunchModeRequest::Ordinary => "обычное приложение",
+fn mode_label(target: LaunchTargetRequest) -> &'static str {
+    match target {
+        LaunchTargetRequest::Designer => "конфигуратор",
+        LaunchTargetRequest::Enterprise(EnterpriseLaunchTarget::ThinClient) => "тонкий клиент",
+        LaunchTargetRequest::Enterprise(EnterpriseLaunchTarget::ThickClient) => "толстый клиент",
+        LaunchTargetRequest::Enterprise(EnterpriseLaunchTarget::OrdinaryApplication) => {
+            "обычное приложение"
+        }
     }
 }
 
@@ -116,7 +124,7 @@ mod tests {
         SourceFormat, SourceSetConfig, SourceSetPurpose, TestsConfig, ToolsConfig,
     };
     use crate::use_cases::context::{CommandName, ExecutionContext};
-    use crate::use_cases::request::{LaunchModeRequest, LaunchRequest};
+    use crate::use_cases::request::{LaunchRequest, LaunchTargetRequest};
     use std::fs;
     use std::path::{Path, PathBuf};
     use tempfile::tempdir;
@@ -184,7 +192,7 @@ mod tests {
             &ExecutionContext::cli(CommandName::Launch),
             &config,
             &LaunchRequest {
-                mode: LaunchModeRequest::Thin,
+                target: LaunchTargetRequest::thin_client(),
                 launch: Default::default(),
             },
         )
@@ -214,7 +222,7 @@ mod tests {
             &ExecutionContext::cli(CommandName::Launch),
             &config,
             &LaunchRequest {
-                mode: LaunchModeRequest::Designer,
+                target: LaunchTargetRequest::designer(),
                 launch: Default::default(),
             },
         )
@@ -244,7 +252,7 @@ mod tests {
             &ExecutionContext::cli(CommandName::Launch),
             &config,
             &LaunchRequest {
-                mode: LaunchModeRequest::Ordinary,
+                target: LaunchTargetRequest::ordinary_application(),
                 launch: Default::default(),
             },
         )

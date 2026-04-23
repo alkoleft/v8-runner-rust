@@ -6,6 +6,7 @@ use crate::domain::runner::{
     RunnerProfile, ScenarioExecutionRequest,
 };
 use crate::domain::test::TEST_RUNNER_ID;
+use crate::use_cases::result::{UseCaseError, UseCaseErrorKind};
 
 /// Transport-neutral request for the `build` use case.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -178,171 +179,394 @@ pub enum SyntaxTargetRequest {
     },
 }
 
-/// Final normalized flag set for Designer configuration checks.
+/// Supported Designer client-mode scopes for syntax checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DesignerClientScope {
+    ThinClient,
+    WebClient,
+    MobileClient,
+    Server,
+    ExternalConnection,
+    ExternalConnectionServer,
+    MobileAppClient,
+    MobileAppServer,
+    ThickClientManagedApplication,
+    ThickClientServerManagedApplication,
+    ThickClientOrdinaryApplication,
+    ThickClientServerOrdinaryApplication,
+}
+
+impl DesignerClientScope {
+    pub const fn flag(self) -> &'static str {
+        match self {
+            Self::ThinClient => "-ThinClient",
+            Self::WebClient => "-WebClient",
+            Self::MobileClient => "-MobileClient",
+            Self::Server => "-Server",
+            Self::ExternalConnection => "-ExternalConnection",
+            Self::ExternalConnectionServer => "-ExternalConnectionServer",
+            Self::MobileAppClient => "-MobileAppClient",
+            Self::MobileAppServer => "-MobileAppServer",
+            Self::ThickClientManagedApplication => "-ThickClientManagedApplication",
+            Self::ThickClientServerManagedApplication => "-ThickClientServerManagedApplication",
+            Self::ThickClientOrdinaryApplication => "-ThickClientOrdinaryApplication",
+            Self::ThickClientServerOrdinaryApplication => "-ThickClientServerOrdinaryApplication",
+        }
+    }
+}
+
+/// Deduplicated client-scope set emitted in stable flag order.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DesignerClientScopes {
+    scopes: Vec<DesignerClientScope>,
+}
+
+impl DesignerClientScopes {
+    pub fn new(scopes: impl IntoIterator<Item = DesignerClientScope>) -> Self {
+        let mut unique = Vec::new();
+        for scope in scopes {
+            if !unique.contains(&scope) {
+                unique.push(scope);
+            }
+        }
+        Self { scopes: unique }
+    }
+
+    pub fn contains(&self, scope: DesignerClientScope) -> bool {
+        self.scopes.contains(&scope)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.scopes.is_empty()
+    }
+}
+
+/// Supported non-client Designer configuration checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DesignerConfigCheck {
+    ConfigLogIntegrity,
+    IncorrectReferences,
+    MobileClientDigiSign,
+    DistributiveModules,
+    UnreferenceProcedures,
+    HandlersExistence,
+    EmptyHandlers,
+    UnsupportedFunctional,
+}
+
+impl DesignerConfigCheck {
+    pub const fn flag(self) -> &'static str {
+        match self {
+            Self::ConfigLogIntegrity => "-ConfigLogIntegrity",
+            Self::IncorrectReferences => "-IncorrectReferences",
+            Self::MobileClientDigiSign => "-MobileClientDigiSign",
+            Self::DistributiveModules => "-DistributiveModules",
+            Self::UnreferenceProcedures => "-UnreferenceProcedures",
+            Self::HandlersExistence => "-HandlersExistence",
+            Self::EmptyHandlers => "-EmptyHandlers",
+            Self::UnsupportedFunctional => "-UnsupportedFunctional",
+        }
+    }
+}
+
+/// Deduplicated config-check set emitted in stable flag order.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DesignerConfigChecks {
+    checks: Vec<DesignerConfigCheck>,
+}
+
+impl DesignerConfigChecks {
+    pub fn new(checks: impl IntoIterator<Item = DesignerConfigCheck>) -> Self {
+        let mut unique = Vec::new();
+        for check in checks {
+            if !unique.contains(&check) {
+                unique.push(check);
+            }
+        }
+        Self { checks: unique }
+    }
+
+    pub fn contains(&self, check: DesignerConfigCheck) -> bool {
+        self.checks.contains(&check)
+    }
+}
+
+/// Extension-targeting strategy for Designer syntax commands.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DesignerConfigSyntaxSelection {
-    pub config_log_integrity: bool,
-    pub incorrect_references: bool,
-    pub thin_client: bool,
-    pub web_client: bool,
-    pub mobile_client: bool,
-    pub server: bool,
-    pub external_connection: bool,
-    pub external_connection_server: bool,
-    pub mobile_app_client: bool,
-    pub mobile_app_server: bool,
-    pub thick_client_managed_application: bool,
-    pub thick_client_server_managed_application: bool,
-    pub thick_client_ordinary_application: bool,
-    pub thick_client_server_ordinary_application: bool,
-    pub mobile_client_digi_sign: bool,
-    pub distributive_modules: bool,
-    pub unreference_procedures: bool,
-    pub handlers_existence: bool,
-    pub empty_handlers: bool,
-    pub extended_modules_check: bool,
-    pub check_use_synchronous_calls: bool,
-    pub check_use_modality: bool,
-    pub unsupported_functional: bool,
+pub enum SyntaxExtensionScope {
+    MainConfiguration,
+    AllExtensions,
+    SingleExtension { name: String },
+    SingleExtensionAndAll { name: String },
+}
+
+impl SyntaxExtensionScope {
+    pub fn new(extension: Option<String>, all_extensions: bool) -> Self {
+        match (extension, all_extensions) {
+            (Some(name), true) => Self::SingleExtensionAndAll { name },
+            (Some(name), false) => Self::SingleExtension { name },
+            (None, true) => Self::AllExtensions,
+            (None, false) => Self::MainConfiguration,
+        }
+    }
+
+    pub fn extension(&self) -> Option<&str> {
+        match self {
+            Self::SingleExtension { name } | Self::SingleExtensionAndAll { name } => {
+                Some(name.as_str())
+            }
+            Self::MainConfiguration | Self::AllExtensions => None,
+        }
+    }
+
+    pub const fn includes_all_extensions(&self) -> bool {
+        matches!(
+            self,
+            Self::AllExtensions | Self::SingleExtensionAndAll { .. }
+        )
+    }
+}
+
+/// Fine-grained extra checks that can be enabled for extended modules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtendedModulesDetail {
+    Basic,
+    SynchronousCalls,
+    Modality,
+    SynchronousCallsAndModality,
+}
+
+/// Typed policy for extended-modules validation instead of separate bool flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtendedModulesPolicy {
+    Disabled,
+    Enabled(ExtendedModulesDetail),
+}
+
+impl ExtendedModulesPolicy {
+    pub fn from_cli_flags(
+        enabled: bool,
+        check_use_synchronous_calls: bool,
+        check_use_modality: bool,
+    ) -> Result<Self, UseCaseError> {
+        Self::from_flags(
+            enabled,
+            check_use_synchronous_calls,
+            check_use_modality,
+            "check-use-synchronous-calls",
+            "check-use-modality",
+            "extended-modules-check",
+        )
+    }
+
+    pub fn from_mcp_flags(
+        enabled: Option<bool>,
+        check_use_synchronous_calls: Option<bool>,
+        check_use_modality: Option<bool>,
+    ) -> Result<Self, UseCaseError> {
+        Self::from_flags(
+            enabled != Some(false),
+            check_use_synchronous_calls == Some(true),
+            check_use_modality == Some(true),
+            "checkUseSynchronousCalls",
+            "checkUseModality",
+            "extendedModulesCheck",
+        )
+    }
+
+    pub const fn basic(enabled: bool) -> Self {
+        if enabled {
+            Self::Enabled(ExtendedModulesDetail::Basic)
+        } else {
+            Self::Disabled
+        }
+    }
+
+    fn from_flags(
+        enabled: bool,
+        check_use_synchronous_calls: bool,
+        check_use_modality: bool,
+        sync_calls_field: &'static str,
+        modality_field: &'static str,
+        enabled_field: &'static str,
+    ) -> Result<Self, UseCaseError> {
+        if !enabled && check_use_synchronous_calls {
+            return Err(UseCaseError::new(
+                UseCaseErrorKind::Validation,
+                format!("{sync_calls_field} requires {enabled_field}=true"),
+            ));
+        }
+
+        if !enabled && check_use_modality {
+            return Err(UseCaseError::new(
+                UseCaseErrorKind::Validation,
+                format!("{modality_field} requires {enabled_field}=true"),
+            ));
+        }
+
+        Ok(
+            match (enabled, check_use_synchronous_calls, check_use_modality) {
+                (false, false, false) => Self::Disabled,
+                (true, false, false) => Self::Enabled(ExtendedModulesDetail::Basic),
+                (true, true, false) => Self::Enabled(ExtendedModulesDetail::SynchronousCalls),
+                (true, false, true) => Self::Enabled(ExtendedModulesDetail::Modality),
+                (true, true, true) => {
+                    Self::Enabled(ExtendedModulesDetail::SynchronousCallsAndModality)
+                }
+                (false, _, _) => unreachable!("dependency checks reject disabled extra checks"),
+            },
+        )
+    }
+
+    pub const fn is_enabled(self) -> bool {
+        matches!(self, Self::Enabled(_))
+    }
+
+    pub const fn checks_synchronous_calls(self) -> bool {
+        matches!(
+            self,
+            Self::Enabled(ExtendedModulesDetail::SynchronousCalls)
+                | Self::Enabled(ExtendedModulesDetail::SynchronousCallsAndModality)
+        )
+    }
+
+    pub const fn checks_modality(self) -> bool {
+        matches!(
+            self,
+            Self::Enabled(ExtendedModulesDetail::Modality)
+                | Self::Enabled(ExtendedModulesDetail::SynchronousCallsAndModality)
+        )
+    }
 }
 
 /// Transport-neutral request for Designer configuration checks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DesignerConfigSyntaxRequest {
-    /// Enables Designer config-log integrity checks.
-    pub config_log_integrity: bool,
-    pub incorrect_references: bool,
-    pub thin_client: bool,
-    pub web_client: bool,
-    pub mobile_client: bool,
-    pub server: bool,
-    pub external_connection: bool,
-    pub external_connection_server: bool,
-    pub mobile_app_client: bool,
-    pub mobile_app_server: bool,
-    pub thick_client_managed_application: bool,
-    pub thick_client_server_managed_application: bool,
-    pub thick_client_ordinary_application: bool,
-    pub thick_client_server_ordinary_application: bool,
-    pub mobile_client_digi_sign: bool,
-    pub distributive_modules: bool,
-    pub unreference_procedures: bool,
-    pub handlers_existence: bool,
-    pub empty_handlers: bool,
-    pub extended_modules_check: bool,
-    pub check_use_synchronous_calls: bool,
-    pub check_use_modality: bool,
-    pub unsupported_functional: bool,
-    pub extension: Option<String>,
-    pub all_extensions: bool,
+    /// Non-client config checks selected for this request.
+    checks: DesignerConfigChecks,
+    /// Client scopes selected for Designer syntax analysis.
+    client_scopes: DesignerClientScopes,
+    /// Typed extended-modules policy, including dependent extra checks.
+    extended_modules: ExtendedModulesPolicy,
+    /// Extension-targeting strategy for the syntax run.
+    extension_scope: SyntaxExtensionScope,
 }
 
 impl DesignerConfigSyntaxRequest {
-    /// Builds a transport-neutral syntax request from a finalized flag selection.
-    pub fn from_selection(
-        selection: DesignerConfigSyntaxSelection,
-        extension: Option<String>,
-        all_extensions: bool,
+    pub fn new(
+        checks: DesignerConfigChecks,
+        client_scopes: DesignerClientScopes,
+        extended_modules: ExtendedModulesPolicy,
+        extension_scope: SyntaxExtensionScope,
     ) -> Self {
         Self {
-            config_log_integrity: selection.config_log_integrity,
-            incorrect_references: selection.incorrect_references,
-            thin_client: selection.thin_client,
-            web_client: selection.web_client,
-            mobile_client: selection.mobile_client,
-            server: selection.server,
-            external_connection: selection.external_connection,
-            external_connection_server: selection.external_connection_server,
-            mobile_app_client: selection.mobile_app_client,
-            mobile_app_server: selection.mobile_app_server,
-            thick_client_managed_application: selection.thick_client_managed_application,
-            thick_client_server_managed_application: selection
-                .thick_client_server_managed_application,
-            thick_client_ordinary_application: selection.thick_client_ordinary_application,
-            thick_client_server_ordinary_application: selection
-                .thick_client_server_ordinary_application,
-            mobile_client_digi_sign: selection.mobile_client_digi_sign,
-            distributive_modules: selection.distributive_modules,
-            unreference_procedures: selection.unreference_procedures,
-            handlers_existence: selection.handlers_existence,
-            empty_handlers: selection.empty_handlers,
-            extended_modules_check: selection.extended_modules_check,
-            check_use_synchronous_calls: selection.check_use_synchronous_calls,
-            check_use_modality: selection.check_use_modality,
-            unsupported_functional: selection.unsupported_functional,
-            extension,
-            all_extensions,
+            checks,
+            client_scopes,
+            extended_modules,
+            extension_scope,
         }
     }
-}
 
-/// Final normalized flag set for Designer module checks.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DesignerModulesSyntaxSelection {
-    pub thin_client: bool,
-    pub web_client: bool,
-    pub server: bool,
-    pub external_connection: bool,
-    pub thick_client_ordinary_application: bool,
-    pub mobile_app_client: bool,
-    pub mobile_app_server: bool,
-    pub mobile_client: bool,
-    pub extended_modules_check: bool,
+    pub fn has_check(&self, check: DesignerConfigCheck) -> bool {
+        self.checks.contains(check)
+    }
+
+    pub fn has_client_scope(&self, scope: DesignerClientScope) -> bool {
+        self.client_scopes.contains(scope)
+    }
+
+    pub const fn extended_modules(&self) -> ExtendedModulesPolicy {
+        self.extended_modules
+    }
+
+    pub const fn extension_scope(&self) -> &SyntaxExtensionScope {
+        &self.extension_scope
+    }
 }
 
 /// Transport-neutral request for Designer module checks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DesignerModulesSyntaxRequest {
-    pub thin_client: bool,
-    pub web_client: bool,
-    pub server: bool,
-    pub external_connection: bool,
-    pub thick_client_ordinary_application: bool,
-    pub mobile_app_client: bool,
-    pub mobile_app_server: bool,
-    pub mobile_client: bool,
-    pub extended_modules_check: bool,
-    pub extension: Option<String>,
-    pub all_extensions: bool,
+    client_scopes: DesignerClientScopes,
+    extended_modules: ExtendedModulesPolicy,
+    extension_scope: SyntaxExtensionScope,
 }
 
 impl DesignerModulesSyntaxRequest {
-    /// Builds a transport-neutral module-check request from a finalized flag selection.
-    pub fn from_selection(
-        selection: DesignerModulesSyntaxSelection,
-        extension: Option<String>,
-        all_extensions: bool,
-    ) -> Self {
-        Self {
-            thin_client: selection.thin_client,
-            web_client: selection.web_client,
-            server: selection.server,
-            external_connection: selection.external_connection,
-            thick_client_ordinary_application: selection.thick_client_ordinary_application,
-            mobile_app_client: selection.mobile_app_client,
-            mobile_app_server: selection.mobile_app_server,
-            mobile_client: selection.mobile_client,
-            extended_modules_check: selection.extended_modules_check,
-            extension,
-            all_extensions,
+    pub fn new(
+        client_scopes: DesignerClientScopes,
+        extended_modules: ExtendedModulesPolicy,
+        extension_scope: SyntaxExtensionScope,
+    ) -> Result<Self, UseCaseError> {
+        if client_scopes.is_empty() && !extended_modules.is_enabled() {
+            return Err(UseCaseError::new(
+                UseCaseErrorKind::Validation,
+                "syntax designer-modules requires at least one mode flag",
+            ));
         }
+
+        Ok(Self {
+            client_scopes,
+            extended_modules,
+            extension_scope,
+        })
+    }
+
+    pub fn has_client_scope(&self, scope: DesignerClientScope) -> bool {
+        self.client_scopes.contains(scope)
+    }
+
+    pub fn has_modes(&self) -> bool {
+        !self.client_scopes.is_empty() || self.extended_modules.is_enabled()
+    }
+
+    pub const fn extended_modules(&self) -> ExtendedModulesPolicy {
+        self.extended_modules
+    }
+
+    pub const fn extension_scope(&self) -> &SyntaxExtensionScope {
+        &self.extension_scope
     }
 }
 
-/// Transport-neutral launch mode.
+/// Enterprise-mode launch targets grouped under the shared enterprise launcher.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LaunchModeRequest {
+pub enum EnterpriseLaunchTarget {
+    ThinClient,
+    ThickClient,
+    OrdinaryApplication,
+}
+
+/// Transport-neutral launch target grouped by launcher family.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaunchTargetRequest {
     Designer,
-    Thin,
-    Thick,
-    Ordinary,
+    Enterprise(EnterpriseLaunchTarget),
+}
+
+impl LaunchTargetRequest {
+    pub const fn designer() -> Self {
+        Self::Designer
+    }
+
+    pub const fn thin_client() -> Self {
+        Self::Enterprise(EnterpriseLaunchTarget::ThinClient)
+    }
+
+    pub const fn thick_client() -> Self {
+        Self::Enterprise(EnterpriseLaunchTarget::ThickClient)
+    }
+
+    pub const fn ordinary_application() -> Self {
+        Self::Enterprise(EnterpriseLaunchTarget::OrdinaryApplication)
+    }
 }
 
 /// Transport-neutral request for the `launch` use case.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchRequest {
     /// Requested launch target.
-    pub mode: LaunchModeRequest,
+    pub target: LaunchTargetRequest,
     /// Shared launch options mapped from CLI/test scenarios.
     pub launch: LaunchOptions,
 }
@@ -356,4 +580,71 @@ pub struct InitRequest;
 pub struct ConfigureExtensionsRequest {
     /// Optional source-set names to update. Empty means all extension source-sets.
     pub names: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        DesignerClientScope, DesignerClientScopes, DesignerConfigCheck, DesignerConfigChecks,
+        DesignerConfigSyntaxRequest, DesignerModulesSyntaxRequest, ExtendedModulesDetail,
+        ExtendedModulesPolicy, SyntaxExtensionScope,
+    };
+    use crate::use_cases::result::UseCaseErrorKind;
+
+    #[test]
+    fn config_request_uses_typed_policy_objects() {
+        let request = DesignerConfigSyntaxRequest::new(
+            DesignerConfigChecks::new([
+                DesignerConfigCheck::ConfigLogIntegrity,
+                DesignerConfigCheck::ConfigLogIntegrity,
+                DesignerConfigCheck::UnsupportedFunctional,
+            ]),
+            DesignerClientScopes::new([
+                DesignerClientScope::ThinClient,
+                DesignerClientScope::ThinClient,
+                DesignerClientScope::Server,
+            ]),
+            ExtendedModulesPolicy::from_cli_flags(true, true, false).expect("policy"),
+            SyntaxExtensionScope::new(Some("Ext".to_owned()), true),
+        );
+
+        assert!(request.has_check(DesignerConfigCheck::ConfigLogIntegrity));
+        assert!(request.has_check(DesignerConfigCheck::UnsupportedFunctional));
+        assert!(request.has_client_scope(DesignerClientScope::ThinClient));
+        assert!(request.has_client_scope(DesignerClientScope::Server));
+        assert_eq!(
+            request.extended_modules(),
+            ExtendedModulesPolicy::Enabled(ExtendedModulesDetail::SynchronousCalls)
+        );
+        assert_eq!(request.extension_scope().extension(), Some("Ext"));
+        assert!(request.extension_scope().includes_all_extensions());
+    }
+
+    #[test]
+    fn extended_modules_policy_rejects_invalid_dependency_combinations() {
+        let error =
+            ExtendedModulesPolicy::from_mcp_flags(Some(false), Some(true), None).expect_err("err");
+
+        assert_eq!(error.kind(), UseCaseErrorKind::Validation);
+        assert_eq!(
+            error.message(),
+            "checkUseSynchronousCalls requires extendedModulesCheck=true"
+        );
+    }
+
+    #[test]
+    fn modules_request_requires_at_least_one_mode_or_extended_modules() {
+        let error = DesignerModulesSyntaxRequest::new(
+            DesignerClientScopes::default(),
+            ExtendedModulesPolicy::basic(false),
+            SyntaxExtensionScope::new(None, true),
+        )
+        .expect_err("err");
+
+        assert_eq!(error.kind(), UseCaseErrorKind::Validation);
+        assert_eq!(
+            error.message(),
+            "syntax designer-modules requires at least one mode flag"
+        );
+    }
 }

@@ -36,7 +36,7 @@ use crate::output::json::Envelope;
 use crate::output::presenter::Presenter;
 use crate::output::text::{TimelineItem, TimelineStatus};
 use crate::support::adapter_input::{
-    parse_launch_mode, parse_required_dump_mode, LaunchModeAliases,
+    parse_launch_target, parse_required_dump_mode, LaunchModeAliases,
 };
 use crate::support::error::AppError;
 use crate::support::fs::clean_dir;
@@ -54,10 +54,10 @@ use crate::use_cases::launch_app;
 use crate::use_cases::load_artifact;
 use crate::use_cases::request::{
     ArtifactsModeRequest, ArtifactsRequest, BuildRequest, ConfigureExtensionsRequest,
-    ConvertRequest, ConvertScopeRequest, DesignerConfigSyntaxRequest,
-    DesignerConfigSyntaxSelection, DesignerModulesSyntaxRequest, DesignerModulesSyntaxSelection,
-    DumpRequest, InitRequest, LaunchRequest, LoadRequest, SyntaxRequest, SyntaxTargetRequest,
-    TestRequest, TestScopeRequest,
+    ConvertRequest, ConvertScopeRequest, DesignerClientScope, DesignerClientScopes,
+    DesignerConfigCheck, DesignerConfigChecks, DesignerConfigSyntaxRequest,
+    DesignerModulesSyntaxRequest, DumpRequest, InitRequest, LaunchRequest, LoadRequest,
+    SyntaxExtensionScope, SyntaxRequest, SyntaxTargetRequest, TestRequest, TestScopeRequest,
 };
 use crate::use_cases::result::{UseCaseError, UseCaseErrorKind};
 use crate::use_cases::run_tests;
@@ -553,8 +553,9 @@ fn execute_syntax(
     clean_before_execution: bool,
     cancellation: CancellationToken,
 ) -> Result<(), UseCaseError> {
-    let request = map_syntax_request(args);
     let context = cli_context(config, CommandName::Syntax, cancellation);
+    let request = map_syntax_request(args)
+        .map_err(|error| render_pre_dispatch_error(presenter, CommandName::Syntax, error))?;
     with_cli_workspace_lock(
         config,
         presenter,
@@ -970,69 +971,109 @@ fn map_artifacts_request_with_config(
     })
 }
 
-fn map_syntax_request(args: &SyntaxArgs) -> SyntaxRequest {
-    SyntaxRequest {
+fn map_syntax_request(args: &SyntaxArgs) -> Result<SyntaxRequest, UseCaseError> {
+    Ok(SyntaxRequest {
         target: match &args.target {
             SyntaxTarget::DesignerConfig(config) => {
-                SyntaxTargetRequest::DesignerConfig(map_designer_config_request(config))
+                SyntaxTargetRequest::DesignerConfig(map_designer_config_request(config)?)
             }
             SyntaxTarget::DesignerModules(modules) => {
-                SyntaxTargetRequest::DesignerModules(map_designer_modules_request(modules))
+                SyntaxTargetRequest::DesignerModules(map_designer_modules_request(modules)?)
             }
             SyntaxTarget::Edt { projects } => SyntaxTargetRequest::Edt {
                 projects: projects.clone(),
             },
         },
-    }
+    })
 }
 
-fn map_designer_config_request(args: &DesignerConfigSyntaxArgs) -> DesignerConfigSyntaxRequest {
-    DesignerConfigSyntaxRequest::from_selection(
-        DesignerConfigSyntaxSelection {
-            config_log_integrity: args.config_log_integrity,
-            incorrect_references: args.incorrect_references,
-            thin_client: args.thin_client,
-            web_client: args.web_client,
-            mobile_client: args.mobile_client,
-            server: args.server,
-            external_connection: args.external_connection,
-            external_connection_server: args.external_connection_server,
-            mobile_app_client: args.mobile_app_client,
-            mobile_app_server: args.mobile_app_server,
-            thick_client_managed_application: args.thick_client_managed_application,
-            thick_client_server_managed_application: args.thick_client_server_managed_application,
-            thick_client_ordinary_application: args.thick_client_ordinary_application,
-            thick_client_server_ordinary_application: args.thick_client_server_ordinary_application,
-            mobile_client_digi_sign: args.mobile_client_digi_sign,
-            distributive_modules: args.distributive_modules,
-            unreference_procedures: args.unreference_procedures,
-            handlers_existence: args.handlers_existence,
-            empty_handlers: args.empty_handlers,
-            extended_modules_check: args.extended_modules_check,
-            check_use_synchronous_calls: args.check_use_synchronous_calls,
-            check_use_modality: args.check_use_modality,
-            unsupported_functional: args.unsupported_functional,
-        },
-        args.extension.clone(),
-        args.all_extensions,
-    )
+fn map_designer_config_request(
+    args: &DesignerConfigSyntaxArgs,
+) -> Result<DesignerConfigSyntaxRequest, UseCaseError> {
+    Ok(DesignerConfigSyntaxRequest::new(
+        DesignerConfigChecks::new(
+            [
+                args.config_log_integrity
+                    .then_some(DesignerConfigCheck::ConfigLogIntegrity),
+                args.incorrect_references
+                    .then_some(DesignerConfigCheck::IncorrectReferences),
+                args.mobile_client_digi_sign
+                    .then_some(DesignerConfigCheck::MobileClientDigiSign),
+                args.distributive_modules
+                    .then_some(DesignerConfigCheck::DistributiveModules),
+                args.unreference_procedures
+                    .then_some(DesignerConfigCheck::UnreferenceProcedures),
+                args.handlers_existence
+                    .then_some(DesignerConfigCheck::HandlersExistence),
+                args.empty_handlers
+                    .then_some(DesignerConfigCheck::EmptyHandlers),
+                args.unsupported_functional
+                    .then_some(DesignerConfigCheck::UnsupportedFunctional),
+            ]
+            .into_iter()
+            .flatten(),
+        ),
+        DesignerClientScopes::new(
+            [
+                args.thin_client.then_some(DesignerClientScope::ThinClient),
+                args.web_client.then_some(DesignerClientScope::WebClient),
+                args.mobile_client
+                    .then_some(DesignerClientScope::MobileClient),
+                args.server.then_some(DesignerClientScope::Server),
+                args.external_connection
+                    .then_some(DesignerClientScope::ExternalConnection),
+                args.external_connection_server
+                    .then_some(DesignerClientScope::ExternalConnectionServer),
+                args.mobile_app_client
+                    .then_some(DesignerClientScope::MobileAppClient),
+                args.mobile_app_server
+                    .then_some(DesignerClientScope::MobileAppServer),
+                args.thick_client_managed_application
+                    .then_some(DesignerClientScope::ThickClientManagedApplication),
+                args.thick_client_server_managed_application
+                    .then_some(DesignerClientScope::ThickClientServerManagedApplication),
+                args.thick_client_ordinary_application
+                    .then_some(DesignerClientScope::ThickClientOrdinaryApplication),
+                args.thick_client_server_ordinary_application
+                    .then_some(DesignerClientScope::ThickClientServerOrdinaryApplication),
+            ]
+            .into_iter()
+            .flatten(),
+        ),
+        crate::use_cases::request::ExtendedModulesPolicy::from_cli_flags(
+            args.extended_modules_check,
+            args.check_use_synchronous_calls,
+            args.check_use_modality,
+        )?,
+        SyntaxExtensionScope::new(args.extension.clone(), args.all_extensions),
+    ))
 }
 
-fn map_designer_modules_request(args: &DesignerModulesSyntaxArgs) -> DesignerModulesSyntaxRequest {
-    DesignerModulesSyntaxRequest::from_selection(
-        DesignerModulesSyntaxSelection {
-            thin_client: args.thin_client,
-            web_client: args.web_client,
-            server: args.server,
-            external_connection: args.external_connection,
-            thick_client_ordinary_application: args.thick_client_ordinary_application,
-            mobile_app_client: args.mobile_app_client,
-            mobile_app_server: args.mobile_app_server,
-            mobile_client: args.mobile_client,
-            extended_modules_check: args.extended_modules_check,
-        },
-        args.extension.clone(),
-        args.all_extensions,
+fn map_designer_modules_request(
+    args: &DesignerModulesSyntaxArgs,
+) -> Result<DesignerModulesSyntaxRequest, UseCaseError> {
+    DesignerModulesSyntaxRequest::new(
+        DesignerClientScopes::new(
+            [
+                args.thin_client.then_some(DesignerClientScope::ThinClient),
+                args.web_client.then_some(DesignerClientScope::WebClient),
+                args.server.then_some(DesignerClientScope::Server),
+                args.external_connection
+                    .then_some(DesignerClientScope::ExternalConnection),
+                args.thick_client_ordinary_application
+                    .then_some(DesignerClientScope::ThickClientOrdinaryApplication),
+                args.mobile_app_client
+                    .then_some(DesignerClientScope::MobileAppClient),
+                args.mobile_app_server
+                    .then_some(DesignerClientScope::MobileAppServer),
+                args.mobile_client
+                    .then_some(DesignerClientScope::MobileClient),
+            ]
+            .into_iter()
+            .flatten(),
+        ),
+        crate::use_cases::request::ExtendedModulesPolicy::basic(args.extended_modules_check),
+        SyntaxExtensionScope::new(args.extension.clone(), args.all_extensions),
     )
 }
 
@@ -1045,7 +1086,7 @@ fn map_launch_request(args: &LaunchArgs) -> Result<LaunchRequest, UseCaseError> 
     };
 
     Ok(LaunchRequest {
-        mode: parse_launch_mode(mode, "mode", LaunchModeAliases::Cli)?,
+        target: parse_launch_target(mode, "mode", LaunchModeAliases::Cli)?,
         launch: map_direct_launch_options(&args.launch),
     })
 }
@@ -1850,8 +1891,8 @@ mod tests {
     use crate::support::temp::platform_logs_dir;
     use crate::use_cases::context::CommandName;
     use crate::use_cases::request::{
-        ArtifactsModeRequest, DumpModeRequest, LaunchModeRequest, LaunchRequest,
-        SyntaxTargetRequest, TestScopeRequest,
+        ArtifactsModeRequest, DesignerClientScope, DesignerConfigCheck, DumpModeRequest,
+        LaunchRequest, LaunchTargetRequest, SyntaxTargetRequest, TestScopeRequest,
     };
     use crate::use_cases::result::UseCaseErrorKind;
     use crate::use_cases::workspace_lock::workspace_lock_path;
@@ -1971,12 +2012,15 @@ mod tests {
                 extension: Some("Ext".to_owned()),
                 all_extensions: false,
             }),
-        });
+        })
+        .expect("request");
 
         assert!(matches!(
             request.target,
             SyntaxTargetRequest::DesignerModules(ref modules)
-                if modules.thin_client && modules.server && modules.extension.as_deref() == Some("Ext")
+                if modules.has_client_scope(DesignerClientScope::ThinClient)
+                    && modules.has_client_scope(DesignerClientScope::Server)
+                    && modules.extension_scope().extension() == Some("Ext")
         ));
     }
 
@@ -2027,7 +2071,7 @@ mod tests {
             })
             .expect("request"),
             LaunchRequest {
-                mode: LaunchModeRequest::Thin,
+                target: LaunchTargetRequest::thin_client(),
                 launch: LaunchOptions {
                     c: Some("Command".to_owned()),
                     execute: Some("tool.epf".to_owned()),
@@ -2045,8 +2089,8 @@ mod tests {
                 launch: LaunchOptionsArgs::default(),
             })
             .expect("request")
-            .mode,
-            LaunchModeRequest::Ordinary
+            .target,
+            LaunchTargetRequest::ordinary_application()
         );
         assert_eq!(
             map_launch_request(&LaunchArgs {
@@ -2055,8 +2099,8 @@ mod tests {
                 launch: LaunchOptionsArgs::default(),
             })
             .expect("request")
-            .mode,
-            LaunchModeRequest::Thin
+            .target,
+            LaunchTargetRequest::thin_client()
         );
         let load = map_load_request(&LoadArgs {
             path: "dist/main.cf".to_owned(),
@@ -2162,13 +2206,52 @@ mod tests {
             unsupported_functional: false,
             extension: Some("Ext".to_owned()),
             all_extensions: false,
-        });
+        })
+        .expect("request");
 
-        assert!(request.config_log_integrity);
-        assert!(request.thin_client);
-        assert!(request.server);
-        assert!(request.extended_modules_check);
-        assert!(request.check_use_synchronous_calls);
+        assert!(request.has_check(DesignerConfigCheck::ConfigLogIntegrity));
+        assert!(request.has_client_scope(DesignerClientScope::ThinClient));
+        assert!(request.has_client_scope(DesignerClientScope::Server));
+        assert!(request.extended_modules().is_enabled());
+        assert!(request.extended_modules().checks_synchronous_calls());
+    }
+
+    #[test]
+    fn rejects_invalid_config_extended_modules_mapping() {
+        let error = map_designer_config_request(&DesignerConfigSyntaxArgs {
+            config_log_integrity: false,
+            incorrect_references: false,
+            thin_client: false,
+            web_client: false,
+            mobile_client: false,
+            server: false,
+            external_connection: false,
+            external_connection_server: false,
+            mobile_app_client: false,
+            mobile_app_server: false,
+            thick_client_managed_application: false,
+            thick_client_server_managed_application: false,
+            thick_client_ordinary_application: false,
+            thick_client_server_ordinary_application: false,
+            mobile_client_digi_sign: false,
+            distributive_modules: false,
+            unreference_procedures: false,
+            handlers_existence: false,
+            empty_handlers: false,
+            extended_modules_check: false,
+            check_use_synchronous_calls: true,
+            check_use_modality: false,
+            unsupported_functional: false,
+            extension: None,
+            all_extensions: false,
+        })
+        .expect_err("invalid dependency");
+
+        assert_eq!(error.kind(), UseCaseErrorKind::Validation);
+        assert_eq!(
+            error.message(),
+            "check-use-synchronous-calls requires extended-modules-check=true"
+        );
     }
 
     #[test]

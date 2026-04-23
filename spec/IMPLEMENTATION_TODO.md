@@ -67,9 +67,18 @@ Detailed ADR task decomposition remains in [ADR_DERIVED_BACKLOG.md](ADR_DERIVED_
   subagent passes, and the final completeness subagent gate all returned `APPROVED`/`no
   findings`.
 
-- [ ] `ADR-TASK-023`: Replace boolean-heavy syntax and launch DTOs with typed policy objects.
+- [x] `ADR-TASK-023`: Replace boolean-heavy syntax and launch DTOs with typed policy objects.
   Client scopes, extension scope, extended module checks, modality and sync-call checks, and
   launch target groups should be modeled by types and constructors rather than large bool sets.
+  Completed `2026-04-23`: transport-neutral syntax requests now use typed client-scope,
+  config-check, extension-scope, and extended-modules policy objects with constructor-enforced
+  dependency and module-mode validation; CLI and MCP adapters build those policies while preserving
+  public flag/schema contracts and rendering pre-dispatch CLI validation errors as text/JSON
+  envelopes. Direct launch now uses grouped `LaunchTargetRequest`/`EnterpriseLaunchTarget` instead
+  of a flat mode DTO, with existing CLI/MCP aliases preserved. Unit and integration coverage was
+  added for policy constructors, syntax/launch mappers, and no-mode `designer-modules` JSON errors;
+  reviewer, separate Rust expert, and final completeness subagent passes returned `no findings` /
+  `APPROVED`, and full `cargo test --locked --quiet` passed.
 
 - [ ] `ADR-TASK-024`: Strengthen the typed error contract and remove string erasure on the
   use-case boundary. `AppError` should evolve from string categories toward typed variants with

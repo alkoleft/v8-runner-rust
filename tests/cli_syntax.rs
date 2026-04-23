@@ -241,6 +241,35 @@ fn syntax_designer_modules_json_returns_structured_validation_failure() {
 }
 
 #[test]
+fn syntax_designer_modules_without_modes_renders_json_error() {
+    let (_dir, config_path) = setup_project("exit 0");
+
+    let output = std::process::Command::cargo_bin("v8-runner")
+        .expect("binary")
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--json-message",
+            "syntax",
+            "designer-modules",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stderr.is_empty());
+
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(payload["ok"], false);
+    assert_eq!(payload["command"], "syntax");
+    assert_eq!(
+        payload["data"]["message"],
+        "syntax designer-modules requires at least one mode flag"
+    );
+}
+
+#[test]
 fn syntax_text_output_hides_raw_stdout_and_prints_structured_issue() {
     let (_dir, config_path) = setup_project(
         "args=\"$*\"\nout=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"/Out\" ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nprintf 'RAW_STDOUT\\n'\nif printf '%s' \"$args\" | grep -F -q -- '/CheckModules'; then\n  cat <<'LOG' > \"$out\"\nCommonModules.TestModule Warning: потенциальная проблема\nLOG\n  exit 101\nfi\nexit 0",
