@@ -138,6 +138,24 @@ Detailed ADR task decomposition remains in [ADR_DERIVED_BACKLOG.md](ADR_DERIVED_
      duration enough?
   4. Should this stay text-only for now, with JSON progress left out of scope?
 
+- [ ] `ADR-TASK-032`: Unify the CLI `--json-message` envelope and MCP `structured_content` command
+  payload for AI-agent consumers. Keep MCP protocol wrapping and transport/internal errors MCP-native,
+  but make successful and business-failure command payloads use the same canonical machine-readable
+  envelope as CLI JSON: `ok`, `command`, `duration_ms`, `data`, `warnings`, and `steps`. Move the
+  envelope contract out of `src/output` into a transport-neutral module so CLI and MCP adapters both
+  project from use-case results into the same type, then retire MCP-only response shapes such as
+  `success/message/build_time_ms/total_tests` or keep them only behind an explicit compatibility
+  boundary during migration. Update ADR-0010 or add a follow-up ADR before implementation because
+  this changes the public MCP surface, then add parity tests proving that CLI JSON and MCP structured
+  content match for `build`, `test`, `dump`, `syntax`, and business failures.
+  Acceptance notes:
+  1. Text stdout remains a separate human-readable renderer and does not define the machine contract.
+  2. MCP `CallToolResult`/`isError` semantics remain protocol-level behavior; only the command payload
+     is unified.
+  3. Validation/runtime/platform business failures must preserve command identity and structured error
+     details in the shared envelope.
+  4. The shared envelope must not depend on CLI, MCP, or presentation modules.
+
 ## P2
 
 - [ ] `ADR-TASK-016`: Fix the CLI JSON error contract for early failures. Some validation,
