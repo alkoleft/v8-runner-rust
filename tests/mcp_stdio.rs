@@ -1,11 +1,12 @@
 #![cfg(unix)]
 
+mod support;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use assert_cmd::cargo::cargo_bin;
 use rmcp::{
     model::ErrorCode,
     model::{CallToolRequest, CallToolRequestParams, CancelledNotificationParam, ClientRequest},
@@ -14,7 +15,10 @@ use rmcp::{
     ServiceError, ServiceExt,
 };
 use serde_json::{json, Value};
-use tempfile::tempdir;
+use support::{
+    read_line_count, temp_workspace, v8_runner_binary, v8_runner_command,
+    wait_for_line_count as wait_for_invocation_count, write_shell_script as write_script,
+};
 
 const V8_CONFIGURATION_NATURE: &str = "com._1c.g5.v8.dt.core.V8ConfigurationNature";
 const EDT_RUNTIME_VERSION: &str = "8.3.27";
@@ -40,7 +44,7 @@ fn run_cli_json(config_path: &Path, args: &[&str]) -> Value {
 }
 
 fn run_cli_json_with_status(config_path: &Path, args: &[&str]) -> (bool, Value) {
-    let output = std::process::Command::new(cargo_bin("v8-runner"))
+    let output = v8_runner_command()
         .arg("--config")
         .arg(config_path)
         .arg("--json-message")
@@ -167,7 +171,7 @@ fn write_edt_configuration_source(path: &Path, project_name: &str) {
 }
 
 fn setup_project() -> (tempfile::TempDir, PathBuf) {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let platform_path = dir.path().join("platform");
@@ -190,7 +194,7 @@ fn setup_edt_project_with_options(
     command_timeout_ms: u64,
     max_concurrent_calls: usize,
 ) -> (tempfile::TempDir, PathBuf) {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let edt_dir = dir.path().join("edt");
@@ -223,7 +227,7 @@ fn setup_designer_project_with_options(
     command_timeout_ms: u64,
     max_concurrent_calls: usize,
 ) -> (tempfile::TempDir, PathBuf) {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let platform_dir = dir.path().join("platform");
@@ -250,7 +254,7 @@ fn setup_hybrid_edt_project_with_options(
     command_timeout_ms: u64,
     max_concurrent_calls: usize,
 ) -> (tempfile::TempDir, PathBuf) {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let edt_dir = dir.path().join("edt");
@@ -297,7 +301,7 @@ fn write_designer_suite_config(
 }
 
 fn setup_designer_suite_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf, PathBuf) {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let platform_dir = dir.path().join("platform");
@@ -381,7 +385,7 @@ fn setup_ibcmd_dump_project_with_infobase(
     fail_pattern: Option<&str>,
     infobase_yaml: &str,
 ) -> (tempfile::TempDir, PathBuf, PathBuf) {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let ibcmd_path = dir.path().join("ibcmd");
@@ -401,24 +405,6 @@ fn setup_ibcmd_dump_project_with_infobase(
     );
 
     (dir, config_path, calls_log)
-}
-
-#[cfg(unix)]
-fn make_executable(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-
-    let mut perms = fs::metadata(path).expect("metadata").permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(path, perms).expect("chmod");
-}
-
-#[cfg(unix)]
-fn write_script(path: &Path, body: &str) {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).expect("create dirs");
-    }
-    fs::write(path, format!("#!/bin/sh\n{body}\n")).expect("write script");
-    make_executable(path);
 }
 
 fn write_interactive_edt_script(
@@ -482,27 +468,6 @@ fn write_interactive_edt_script(
     write_script(path, &body);
 }
 
-fn read_invocation_count(path: &Path) -> usize {
-    fs::read_to_string(path)
-        .ok()
-        .map(|contents| contents.lines().count())
-        .unwrap_or(0)
-}
-
-async fn wait_for_invocation_count(path: &Path, expected: usize) {
-    for _ in 0..300 {
-        if read_invocation_count(path) >= expected {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-
-    panic!(
-        "timed out waiting for {expected} invocation(s), current count={}",
-        read_invocation_count(path)
-    );
-}
-
 fn schema_supports_type(value: &Value, expected: &str) -> bool {
     value == expected
         || value
@@ -512,7 +477,7 @@ fn schema_supports_type(value: &Value, expected: &str) -> bool {
 
 #[test]
 fn mcp_missing_config_reports_error_on_stderr() {
-    let output = std::process::Command::new(cargo_bin("v8-runner"))
+    let output = v8_runner_command()
         .args([
             "--config",
             "/definitely/missing/v8project.yaml",
@@ -533,7 +498,7 @@ fn mcp_missing_config_reports_error_on_stderr() {
 
 #[test]
 fn mcp_legacy_top_level_connection_reports_error_on_stderr() {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let config_path = dir.path().join("v8project.yaml");
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
@@ -549,7 +514,7 @@ fn mcp_legacy_top_level_connection_reports_error_on_stderr() {
     )
     .expect("config");
 
-    let output = std::process::Command::new(cargo_bin("v8-runner"))
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -569,7 +534,7 @@ fn mcp_legacy_top_level_connection_reports_error_on_stderr() {
 
 #[test]
 fn mcp_legacy_top_level_credentials_reports_error_on_stderr() {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let config_path = dir.path().join("v8project.yaml");
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
@@ -585,7 +550,7 @@ fn mcp_legacy_top_level_credentials_reports_error_on_stderr() {
     )
     .expect("config");
 
-    let output = std::process::Command::new(cargo_bin("v8-runner"))
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -607,7 +572,7 @@ fn mcp_legacy_top_level_credentials_reports_error_on_stderr() {
 async fn mcp_stdio_exposes_expected_tools_and_capabilities() {
     let (_dir, config_path) = setup_project();
     let (transport, _stderr) = TokioChildProcess::builder(
-        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
+        tokio::process::Command::new(v8_runner_binary()).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -742,7 +707,7 @@ async fn mcp_stdio_structured_content_matches_cli_json_envelope() {
         run_cli_json_with_status(&config_path, &["syntax", "designer-modules", "--server"]);
     assert!(!cli_syntax_success);
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
+        tokio::process::Command::new(v8_runner_binary()).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -860,7 +825,7 @@ async fn mcp_stdio_structured_content_matches_cli_json_envelope() {
 async fn mcp_stdio_returns_structured_business_failure() {
     let (_dir, config_path) = setup_project();
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
+        tokio::process::Command::new(v8_runner_binary()).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -896,7 +861,7 @@ async fn mcp_stdio_run_all_tests_returns_success_payload() {
     let (_dir, config_path, designer_calls_log, enterprise_calls_log, _captured_config) =
         setup_designer_suite_project();
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
+        tokio::process::Command::new(v8_runner_binary()).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -933,7 +898,7 @@ async fn mcp_stdio_run_module_tests_preserves_module_scope() {
     let (_dir, config_path, _designer_calls_log, enterprise_calls_log, captured_config) =
         setup_designer_suite_project();
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
+        tokio::process::Command::new(v8_runner_binary()).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -975,7 +940,7 @@ async fn mcp_stdio_build_project_runs_full_rebuild_successfully() {
     let (_dir, config_path, designer_calls_log, _enterprise_calls_log, _captured_config) =
         setup_designer_suite_project();
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
+        tokio::process::Command::new(v8_runner_binary()).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -1010,7 +975,7 @@ async fn mcp_stdio_launch_app_returns_success_for_thin_client() {
     let (_dir, config_path, _designer_calls_log, enterprise_calls_log, _captured_config) =
         setup_designer_suite_project();
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
+        tokio::process::Command::new(v8_runner_binary()).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -1045,7 +1010,7 @@ async fn mcp_stdio_check_syntax_designer_modules_returns_structured_issues() {
     let (_dir, config_path, designer_calls_log, _enterprise_calls_log, _captured_config) =
         setup_designer_suite_project();
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
+        tokio::process::Command::new(v8_runner_binary()).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -1087,7 +1052,7 @@ async fn mcp_stdio_dump_config_full_returns_success_payload() {
     let (_dir, config_path, designer_calls_log, _enterprise_calls_log, _captured_config) =
         setup_designer_suite_project();
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
+        tokio::process::Command::new(v8_runner_binary()).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -1124,7 +1089,7 @@ async fn mcp_stdio_dump_config_partial_designer_preserves_partial_mode() {
     let (_dir, config_path, designer_calls_log, _enterprise_calls_log, _captured_config) =
         setup_designer_suite_project();
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
+        tokio::process::Command::new(v8_runner_binary()).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -1165,7 +1130,7 @@ async fn mcp_stdio_dump_config_partial_designer_preserves_partial_mode() {
 async fn mcp_stdio_dump_config_partial_ibcmd_returns_degraded_success() {
     let (_dir, config_path, calls_log) = setup_ibcmd_dump_project(None);
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
+        tokio::process::Command::new(v8_runner_binary()).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -1213,7 +1178,7 @@ async fn mcp_stdio_dump_config_full_ibcmd_server_contract_passes_dbms_and_infoba
         "  connection: 'Srvr=server;Ref=main'\n  user: Admin\n  password: secret\n  dbms:\n    kind: PostgreSQL\n    server: localhost\n    name: maindb\n    user: postgres\n    password: pg-secret\n",
     );
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
+        tokio::process::Command::new(v8_runner_binary()).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -1249,7 +1214,7 @@ async fn mcp_stdio_dump_config_full_ibcmd_server_contract_passes_dbms_and_infoba
 async fn mcp_stdio_dump_config_partial_ibcmd_preserves_partial_mode_on_failure() {
     let (_dir, config_path, calls_log) = setup_ibcmd_dump_project(Some("--sync"));
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
+        tokio::process::Command::new(v8_runner_binary()).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -1297,7 +1262,7 @@ async fn mcp_stdio_dump_config_partial_ibcmd_preserves_partial_mode_on_failure()
 async fn mcp_stdio_returns_terminal_business_failure_for_edt_syntax_timeout() {
     let (_dir, config_path) = setup_edt_project();
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
+        tokio::process::Command::new(v8_runner_binary()).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -1335,7 +1300,7 @@ async fn mcp_stdio_edt_syntax_resets_interactive_state_before_each_call() {
     let validate_handler = "if [ \"$cwd\" != \"$workspace\" ]; then\n  printf 'cwd mismatch:%s\\n' \"$cwd\"\nelif [ \"$dirty\" -ne 0 ]; then\n  printf 'state leaked\\n'\nelse\n  if [ -n \"$out\" ]; then : > \"$out\"; fi\n  dirty=1\nfi\nprompt";
     let (dir, config_path) = setup_edt_project_with_options(validate_handler, 200, 1);
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
+        tokio::process::Command::new(v8_runner_binary()).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -1377,7 +1342,7 @@ async fn mcp_stdio_edt_syntax_resets_interactive_state_before_each_call() {
 
 #[tokio::test]
 async fn mcp_stdio_cancels_running_edt_tool_and_retains_capacity_until_detached_completion() {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let starts_log = dir.path().join("edt-starts.log");
     let validate_handler = format!(
         "printf 'start\\n' >> '{}'\nif [ -n \"$out\" ]; then : > \"$out\"; fi\nsleep 0.2\nprompt",
@@ -1385,7 +1350,7 @@ async fn mcp_stdio_cancels_running_edt_tool_and_retains_capacity_until_detached_
     );
     let (_project, config_path) = setup_edt_project_with_options(&validate_handler, 1200, 1);
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
+        tokio::process::Command::new(v8_runner_binary()).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -1442,14 +1407,14 @@ async fn mcp_stdio_cancels_running_edt_tool_and_retains_capacity_until_detached_
         }
     });
     tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(read_invocation_count(&starts_log), 1);
+    assert_eq!(read_line_count(&starts_log), 1);
 
     let follow_up = follow_up
         .await
         .expect("follow-up task join")
         .expect("capacity must recover after detached work finishes");
     assert_eq!(follow_up.is_error, Some(false));
-    assert_eq!(read_invocation_count(&starts_log), 2);
+    assert_eq!(read_line_count(&starts_log), 2);
 
     client.cancel().await.expect("cancel client");
 }
@@ -1459,7 +1424,7 @@ async fn mcp_stdio_edt_syntax_preserves_issues_found_when_stdout_is_non_empty() 
     let validate_handler = "printf 'informational stdout\\n'\nif [ -n \"$out\" ]; then printf 'ERROR\\tCatalogs.Items\\t1\\t2\\tUnusedVariables\\tunused variable\\n' > \"$out\"; fi\nprompt";
     let (_dir, config_path) = setup_edt_project_with_options(validate_handler, 200, 1);
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
+        tokio::process::Command::new(v8_runner_binary()).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -1495,7 +1460,7 @@ async fn mcp_stdio_edt_syntax_treats_stdout_without_issues_as_tool_failure() {
         "printf 'unexpected stdout\\n'\nif [ -n \"$out\" ]; then : > \"$out\"; fi\nprompt";
     let (_dir, config_path) = setup_edt_project_with_options(validate_handler, 200, 1);
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
+        tokio::process::Command::new(v8_runner_binary()).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -1526,7 +1491,7 @@ async fn mcp_stdio_edt_syntax_treats_stdout_without_issues_as_tool_failure() {
 
 #[tokio::test]
 async fn mcp_stdio_cancels_running_standard_tool_and_recovers_capacity_after_terminal_state() {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let starts_log = dir.path().join("designer-starts.log");
     let script_body = format!(
         "printf 'start\\n' >> '{}'\nout=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"/Out\" ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$out\" ]; then printf '' > \"$out\"; fi\nsleep 1\nexit 0",
@@ -1534,7 +1499,7 @@ async fn mcp_stdio_cancels_running_standard_tool_and_recovers_capacity_after_ter
     );
     let (_project, config_path) = setup_designer_project_with_options(&script_body, 20, 1);
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
+        tokio::process::Command::new(v8_runner_binary()).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -1589,14 +1554,14 @@ async fn mcp_stdio_cancels_running_standard_tool_and_recovers_capacity_after_ter
         .await
         .expect("follow-up task join")
         .expect("capacity must recover after terminal state");
-    assert_eq!(read_invocation_count(&starts_log), 2);
+    assert_eq!(read_line_count(&starts_log), 2);
 
     client.cancel().await.expect("cancel client");
 }
 
 #[tokio::test]
 async fn mcp_stdio_queued_timeout_reports_full_payload_for_bounded_tool() {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let edt_starts_log = dir.path().join("edt-starts.log");
     let launch_starts_log = dir.path().join("launch-starts.log");
     let edt_script_body = format!(
@@ -1610,7 +1575,7 @@ async fn mcp_stdio_queued_timeout_reports_full_payload_for_bounded_tool() {
     let (_project, config_path) =
         setup_hybrid_edt_project_with_options(&edt_script_body, &platform_script_body, 20, 1);
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
+        tokio::process::Command::new(v8_runner_binary()).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")
@@ -1667,7 +1632,7 @@ async fn mcp_stdio_queued_timeout_reports_full_payload_for_bounded_tool() {
     let first_result = first.await.expect("first task join");
     let launch_result = first_result.expect("first launch call");
     assert_eq!(launch_result.is_error, Some(false));
-    assert_eq!(read_invocation_count(&edt_starts_log), 0);
+    assert_eq!(read_line_count(&edt_starts_log), 0);
 
     client.cancel().await.expect("cancel client");
 }
@@ -1680,7 +1645,7 @@ async fn mcp_stdio_standard_tools_do_not_inherit_edt_running_timeout() {
         1,
     );
     let transport = TokioChildProcess::new(
-        tokio::process::Command::new(cargo_bin("v8-runner")).configure(|cmd| {
+        tokio::process::Command::new(v8_runner_binary()).configure(|cmd| {
             cmd.arg("--config")
                 .arg(config_path.as_os_str())
                 .arg("mcp")

@@ -1,44 +1,22 @@
 #![cfg(unix)]
 
+mod support;
+
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use assert_cmd::prelude::*;
 use serde_json::Value;
-use tempfile::tempdir;
-
-fn make_executable(path: &Path) {
-    let mut perms = fs::metadata(path).expect("metadata").permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(path, perms).expect("chmod");
-}
+use support::{temp_workspace, v8_runner_command, write_shell_script_atomically};
 
 fn write_script(path: &Path) {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).expect("parent");
-    }
-    let staged = path.with_extension("tmp");
-    fs::write(&staged, "#!/bin/sh\nsleep 1\n").expect("write");
-    make_executable(&staged);
-    fs::rename(&staged, path).expect("rename");
+    write_shell_script_atomically(path, "sleep 1");
 }
 
 fn write_logging_script(path: &Path, args_log: &Path) {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).expect("parent");
-    }
-    let staged = path.with_extension("tmp");
-    fs::write(
-        &staged,
-        format!(
-            "#!/bin/sh\nprintf '%s\n' \"$@\" > '{}'\nsleep 1\n",
-            args_log.display()
-        ),
-    )
-    .expect("write");
-    make_executable(&staged);
-    fs::rename(&staged, path).expect("rename");
+    write_shell_script_atomically(
+        path,
+        &format!("printf '%s\n' \"$@\" > '{}'\nsleep 1", args_log.display()),
+    );
 }
 
 fn write_config(
@@ -62,7 +40,7 @@ fn write_config(
 }
 
 fn setup_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let install_dir = dir.path().join("platform");
@@ -78,7 +56,7 @@ fn setup_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
 }
 
 fn setup_versioned_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let root_path = dir.path().join("platform-root");
@@ -103,8 +81,7 @@ fn setup_versioned_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
 #[test]
 fn launch_json_returns_pid_and_selected_binary() {
     let (_dir, config_path, install_dir, _work_path) = setup_project();
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -136,8 +113,7 @@ fn launch_text_includes_binary_pid_and_cleans_platform_logs() {
     let stale_log = logs_dir.join("stale.log");
     fs::write(&stale_log, "old log").expect("stale log");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -169,8 +145,7 @@ fn launch_text_includes_binary_pid_and_cleans_platform_logs() {
 #[test]
 fn launch_designer_accepts_positional_mode() {
     let (_dir, config_path, install_dir, _work_path) = setup_project();
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -193,8 +168,7 @@ fn launch_designer_accepts_positional_mode() {
 #[test]
 fn launch_thick_uses_v8_binary() {
     let (_dir, config_path, install_dir, _work_path) = setup_project();
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -217,8 +191,7 @@ fn launch_thick_uses_v8_binary() {
 #[test]
 fn launch_uses_versioned_root_hint() {
     let (_dir, config_path, version_dir, _work_path) = setup_versioned_project();
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -242,13 +215,9 @@ fn launch_uses_versioned_root_hint() {
 fn launch_fails_when_process_exits_during_startup_probe() {
     let (_dir, config_path, install_dir, _work_path) = setup_project();
     let thin = install_dir.join("bin").join("1cv8c");
-    let staged = thin.with_extension("tmp");
-    fs::write(&staged, "#!/bin/sh\nexit 9\n").expect("write");
-    make_executable(&staged);
-    fs::rename(&staged, &thin).expect("rename");
+    write_shell_script_atomically(&thin, "exit 9");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -268,13 +237,9 @@ fn launch_fails_when_process_exits_during_startup_probe() {
 fn launch_json_failure_returns_error_envelope_and_exit_code() {
     let (_dir, config_path, install_dir, _work_path) = setup_project();
     let thin = install_dir.join("bin").join("1cv8c");
-    let staged = thin.with_extension("tmp");
-    fs::write(&staged, "#!/bin/sh\nexit 9\n").expect("write");
-    make_executable(&staged);
-    fs::rename(&staged, &thin).expect("rename");
+    write_shell_script_atomically(&thin, "exit 9");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -306,8 +271,7 @@ fn launch_ordinary_supports_typed_keys_and_filters_reserved_raw_duplicates() {
     let args_log = install_dir.join("ordinary.args.log");
     write_logging_script(&install_dir.join("bin").join("1cv8"), &args_log);
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),

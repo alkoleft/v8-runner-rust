@@ -1,10 +1,11 @@
 #![cfg(unix)]
 
-use assert_cmd::prelude::*;
+mod support;
+
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tempfile::tempdir;
+use support::{temp_workspace, v8_runner_command};
 
 const V8_EXTERNAL_OBJECTS_NATURE: &str = "com._1c.g5.v8.dt.core.V8ExternalObjectsNature";
 
@@ -62,7 +63,7 @@ fn create_native_edt_external_project(project_dir: &Path, name: &str, descriptor
 
 #[test]
 fn config_init_creates_yaml_with_detected_designer_sources() {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let main = dir.path().join("src").join("configuration");
     let ext = dir.path().join("extensions").join("sales");
     fs::create_dir_all(&main).expect("main");
@@ -74,8 +75,7 @@ fn config_init_creates_yaml_with_detected_designer_sources() {
     )
     .expect("ext xml");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .current_dir(dir.path())
         .args(["config", "init"])
         .output()
@@ -95,12 +95,11 @@ fn config_init_creates_yaml_with_detected_designer_sources() {
 
 #[test]
 fn config_init_uses_json_envelope_and_output_override() {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     fs::write(dir.path().join("Configuration.xml"), "<Configuration/>").expect("xml");
     let config_path = dir.path().join("custom.yaml");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .current_dir(dir.path())
         .args([
             "--json-message",
@@ -128,11 +127,10 @@ fn config_init_uses_json_envelope_and_output_override() {
 
 #[test]
 fn config_init_rejects_global_config_shortcut_in_text_mode() {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     fs::write(dir.path().join("Configuration.xml"), "<Configuration/>").expect("xml");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .current_dir(dir.path())
         .args(["--config", "custom.yaml", "config", "init"])
         .output()
@@ -148,11 +146,10 @@ fn config_init_rejects_global_config_shortcut_in_text_mode() {
 
 #[test]
 fn config_init_rejects_global_config_shortcut_in_json_mode() {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     fs::write(dir.path().join("Configuration.xml"), "<Configuration/>").expect("xml");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .current_dir(dir.path())
         .args([
             "--config",
@@ -179,11 +176,10 @@ fn config_init_rejects_global_config_shortcut_in_json_mode() {
 
 #[test]
 fn config_init_ignores_v8tr_config_env_for_output_path_selection() {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     fs::write(dir.path().join("Configuration.xml"), "<Configuration/>").expect("xml");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .current_dir(dir.path())
         .env("V8TR_CONFIG", dir.path().join("existing.yaml"))
         .args(["config", "init"])
@@ -197,12 +193,11 @@ fn config_init_ignores_v8tr_config_env_for_output_path_selection() {
 
 #[test]
 fn config_init_detects_native_edt_fixture_source_sets() {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let workspace = dir.path().join("workspace");
     copy_native_edt_fixture(&workspace);
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .current_dir(dir.path())
         .args(["config", "init"])
         .output()
@@ -221,7 +216,7 @@ fn config_init_detects_native_edt_fixture_source_sets() {
 
 #[test]
 fn config_init_detects_edt_extension_without_base_project_and_warns() {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let workspace = dir.path().join("workspace");
     copy_native_edt_fixture(&workspace);
     fs::write(
@@ -233,8 +228,7 @@ fn config_init_detects_edt_extension_without_base_project_and_warns() {
     )
     .expect("manifest");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .current_dir(dir.path())
         .args(["--no-color", "config", "init"])
         .output()
@@ -254,8 +248,7 @@ fn config_init_detects_edt_extension_without_base_project_and_warns() {
     assert!(config.contains("path: 'workspace/extension'"));
     assert!(config.contains("type: EXTENSION"));
 
-    let json_output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let json_output = v8_runner_command()
         .current_dir(dir.path())
         .args([
             "--json-message",
@@ -291,11 +284,10 @@ fn config_init_detects_edt_extension_without_base_project_and_warns() {
 
 #[test]
 fn config_init_refuses_to_overwrite_without_force() {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     fs::write(dir.path().join("v8project.yaml"), "existing").expect("existing");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .current_dir(dir.path())
         .args(["config", "init"])
         .output()
@@ -305,8 +297,7 @@ fn config_init_refuses_to_overwrite_without_force() {
     assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr).contains("already exists"));
 
-    let json_output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let json_output = v8_runner_command()
         .current_dir(dir.path())
         .args(["--json-message", "config", "init"])
         .output()
@@ -326,7 +317,7 @@ fn config_init_refuses_to_overwrite_without_force() {
 
 #[test]
 fn config_init_detects_designer_external_aggregate_source_set() {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     fs::write(dir.path().join("Configuration.xml"), "<Configuration/>").expect("config xml");
     fs::create_dir_all(dir.path().join("tools")).expect("tools dir");
     fs::write(
@@ -340,8 +331,7 @@ fn config_init_detects_designer_external_aggregate_source_set() {
     )
     .expect("beta xml");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .current_dir(dir.path())
         .args(["config", "init", "--format", "designer"])
         .output()
@@ -355,7 +345,7 @@ fn config_init_detects_designer_external_aggregate_source_set() {
 
 #[test]
 fn config_init_rejects_external_only_autodiscovery_without_configuration() {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     fs::create_dir_all(dir.path().join("tools")).expect("tools dir");
     fs::write(
         dir.path().join("tools").join("alpha.xml"),
@@ -363,8 +353,7 @@ fn config_init_rejects_external_only_autodiscovery_without_configuration() {
     )
     .expect("alpha xml");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .current_dir(dir.path())
         .args(["config", "init", "--format", "designer"])
         .output()
@@ -379,7 +368,7 @@ fn config_init_rejects_external_only_autodiscovery_without_configuration() {
 
 #[test]
 fn config_init_auto_prefers_edt_when_designer_only_has_external_root() {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let workspace = dir.path().join("workspace");
     copy_dir_all(
         &edt_fixture_root().join("configuration"),
@@ -392,8 +381,7 @@ fn config_init_auto_prefers_edt_when_designer_only_has_external_root() {
     )
     .expect("alpha xml");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .current_dir(dir.path())
         .args(["config", "init"])
         .output()
@@ -408,7 +396,7 @@ fn config_init_auto_prefers_edt_when_designer_only_has_external_root() {
 
 #[test]
 fn config_init_keeps_nested_edt_configuration_under_external_root() {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let external_root = dir.path().join("processors");
     for name in ["alpha", "beta"] {
         let project = external_root.join(name);
@@ -423,8 +411,7 @@ fn config_init_keeps_nested_edt_configuration_under_external_root() {
     let config_project = external_root.join("apps").join("cfg");
     copy_dir_all(&edt_fixture_root().join("configuration"), &config_project);
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .current_dir(dir.path())
         .args(["config", "init", "--format", "edt"])
         .output()
@@ -440,7 +427,7 @@ fn config_init_keeps_nested_edt_configuration_under_external_root() {
 
 #[test]
 fn config_init_ignores_non_edt_root_project_marker_when_nested_project_exists() {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     fs::write(dir.path().join(".project"), "<root/>").expect("root project marker");
     let workspace = dir.path().join("workspace");
     copy_dir_all(
@@ -448,8 +435,7 @@ fn config_init_ignores_non_edt_root_project_marker_when_nested_project_exists() 
         &workspace.join("configuration"),
     );
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .current_dir(dir.path())
         .args(["config", "init", "--format", "edt"])
         .output()

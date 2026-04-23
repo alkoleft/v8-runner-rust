@@ -1,30 +1,16 @@
 #![cfg(unix)]
 
+mod support;
+
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use assert_cmd::prelude::*;
 use serde_json::Value;
-use tempfile::tempdir;
+use support::{temp_workspace, v8_runner_command, write_shell_script as write_script};
 
 const V8_CONFIGURATION_NATURE: &str = "com._1c.g5.v8.dt.core.V8ConfigurationNature";
 const V8_EXTENSION_NATURE: &str = "com._1c.g5.v8.dt.core.V8ExtensionNature";
 const EDT_RUNTIME_VERSION: &str = "8.3.27";
-
-fn make_executable(path: &Path) {
-    let mut perms = fs::metadata(path).expect("metadata").permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(path, perms).expect("chmod");
-}
-
-fn write_script(path: &Path, body: &str) {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).expect("parent");
-    }
-    fs::write(path, format!("#!/bin/sh\n{body}\n")).expect("write");
-    make_executable(path);
-}
 
 fn write_build_script(path: &Path, fail_pattern: Option<&str>) {
     let pattern_branch = fail_pattern
@@ -187,7 +173,7 @@ fn write_live_workspace_lock(work_path: &Path, command: &str) {
 }
 
 fn setup_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let config_path = dir.path().join("v8project.yaml");
@@ -235,7 +221,7 @@ fn setup_ibcmd_project() -> (
     PathBuf,
     PathBuf,
 ) {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let config_path = dir.path().join("v8project.yaml");
@@ -291,7 +277,7 @@ fn setup_ibcmd_project() -> (
 }
 
 fn setup_edt_ibcmd_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let config_path = dir.path().join("v8project.yaml");
@@ -333,7 +319,7 @@ fn setup_edt_ibcmd_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
 }
 
 fn setup_edt_extension_project() -> (tempfile::TempDir, PathBuf, PathBuf) {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let config_path = dir.path().join("v8project.yaml");
@@ -398,8 +384,7 @@ fn build_json_failure_returns_step_payload() {
     let (_dir, config_path, binary_path, _work_path) = setup_project();
     write_build_script(&binary_path, Some("/UpdateDBCfg -Extension ext"));
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -434,8 +419,7 @@ fn build_ibcmd_json_failure_reports_operation_target_and_exit_code() {
     let (_dir, config_path, binary_path, _work_path, _base_path, calls_log) = setup_ibcmd_project();
     write_ibcmd_script(&binary_path, &calls_log, Some("config apply"));
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -462,8 +446,7 @@ fn build_text_failure_does_not_print_success_footer() {
     let (_dir, config_path, binary_path, _work_path) = setup_project();
     write_build_script(&binary_path, Some("/UpdateDBCfg -Extension ext"));
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -483,8 +466,7 @@ fn build_text_failure_does_not_print_success_footer() {
 fn build_text_stdout_includes_action_logs() {
     let (_dir, config_path, _binary_path, _work_path) = setup_project();
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--no-color",
             "--config",
@@ -510,8 +492,7 @@ fn build_text_stdout_includes_action_logs() {
 fn build_text_highlights_timeline_detail_prefixes() {
     let (_dir, config_path, _binary_path, _work_path) = setup_project();
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args(["--config", &config_path.display().to_string(), "build"])
         .output()
         .expect("run designer build");
@@ -524,8 +505,7 @@ fn build_text_highlights_timeline_detail_prefixes() {
     assert!(stdout.contains("\x1b[1;32m✓\x1b[0m partial load"));
 
     let (_dir, config_path, _ibcmd_calls_log, _edt_calls_log) = setup_edt_ibcmd_project();
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args(["--config", &config_path.display().to_string(), "build"])
         .output()
         .expect("run edt build");
@@ -541,8 +521,7 @@ fn build_text_workspace_lock_conflict_prints_single_error() {
     let (_dir, config_path, _binary_path, work_path) = setup_project();
     write_live_workspace_lock(&work_path, "build");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--no-color",
             "--config",
@@ -579,8 +558,7 @@ fn build_text_workspace_lock_conflict_prints_single_error() {
 fn build_text_no_changes_collapses_per_source_set_noise() {
     let (_dir, config_path, _binary_path, _work_path) = setup_project();
 
-    let first = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let first = v8_runner_command()
         .args([
             "--no-color",
             "--config",
@@ -591,8 +569,7 @@ fn build_text_no_changes_collapses_per_source_set_noise() {
         .expect("first build");
     assert!(first.status.success());
 
-    let second = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let second = v8_runner_command()
         .args([
             "--no-color",
             "--config",
@@ -623,8 +600,7 @@ fn build_text_no_changes_collapses_per_source_set_noise() {
 fn build_edt_text_interleaves_export_stage_after_edt_log() {
     let (_dir, config_path, ibcmd_calls_log, edt_calls_log) = setup_edt_ibcmd_project();
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--no-color",
             "--config",
@@ -662,8 +638,7 @@ fn build_edt_text_interleaves_export_stage_after_edt_log() {
 fn build_json_writes_action_log_file_without_polluting_stdout() {
     let (_dir, config_path, _binary_path, work_path) = setup_project();
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -688,8 +663,7 @@ fn build_json_writes_action_log_file_without_polluting_stdout() {
 fn build_json_edt_extension_uses_full_load_and_writes_platform_log() {
     let (_dir, config_path, work_path) = setup_edt_extension_project();
 
-    let first = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let first = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -712,8 +686,7 @@ fn build_json_edt_extension_uses_full_load_and_writes_platform_log() {
     )
     .expect("modify extension");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -743,8 +716,7 @@ fn build_ibcmd_full_rebuild_invokes_import_and_apply() {
     let (_dir, config_path, _binary_path, _work_path, _base_path, calls_log) =
         setup_ibcmd_project();
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--no-color",
             "--config",
@@ -777,8 +749,7 @@ fn build_ibcmd_passes_credentials_to_import_and_apply() {
     );
     fs::write(&config_path, config).expect("config");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -805,8 +776,7 @@ fn build_ibcmd_passes_credentials_to_import_and_apply() {
 fn build_ibcmd_partial_uses_relative_positional_args_and_base_dir() {
     let (_dir, config_path, _binary_path, _work_path, base_path, calls_log) = setup_ibcmd_project();
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -823,8 +793,7 @@ fn build_ibcmd_partial_uses_relative_positional_args_and_base_dir() {
         .join("ObjectModule.bsl");
     fs::write(&changed_file, "procedure Test() // changed endprocedure").expect("change");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args(["--config", &config_path.display().to_string(), "build"])
         .output()
         .expect("run command");
@@ -849,8 +818,7 @@ fn build_ibcmd_server_connection_fails_at_config_load() {
         "Srvr=server;Ref=main",
     );
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args(["--config", &config_path.display().to_string(), "build"])
         .output()
         .expect("run command");
@@ -871,8 +839,7 @@ fn build_ibcmd_server_connection_passes_dbms_and_infobase_credentials() {
         "  connection: 'Srvr=server;Ref=main'\n  user: Admin\n  password: secret\n  dbms:\n    kind: PostgreSQL\n    server: localhost\n    name: maindb\n    user: postgres\n    password: pg-secret\n",
     );
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -903,8 +870,7 @@ fn build_ibcmd_accepts_raw_f_connection() {
         "/F /tmp/ib",
     );
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),

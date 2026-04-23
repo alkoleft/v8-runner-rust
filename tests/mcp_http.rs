@@ -1,13 +1,17 @@
 #![cfg(unix)]
 
+mod support;
+
 use std::fs;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use assert_cmd::cargo::cargo_bin;
 use serde_json::{json, Value};
-use tempfile::tempdir;
+use support::{
+    temp_workspace, v8_runner_binary, v8_runner_command, wait_for_log_contains,
+    wait_until_async_condition, write_shell_script as write_script,
+};
 
 const ACCEPT_BOTH: &str = "application/json, text/event-stream";
 const V8_CONFIGURATION_NATURE: &str = "com._1c.g5.v8.dt.core.V8ConfigurationNature";
@@ -31,24 +35,6 @@ fn reserve_local_address() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral listener");
     let address = listener.local_addr().expect("local addr");
     address.to_string()
-}
-
-#[cfg(unix)]
-fn make_executable(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-
-    let mut perms = fs::metadata(path).expect("metadata").permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(path, perms).expect("chmod");
-}
-
-#[cfg(unix)]
-fn write_script(path: &Path, body: &str) {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).expect("create dirs");
-    }
-    fs::write(path, format!("#!/bin/sh\n{body}\n")).expect("write script");
-    make_executable(path);
 }
 
 fn write_interactive_edt_script(
@@ -251,7 +237,7 @@ fn setup_http_designer_project_with_script(
     max_sessions: usize,
     idle_ttl_secs: u64,
 ) -> (tempfile::TempDir, PathBuf, String) {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let platform_dir = dir.path().join("platform");
@@ -294,7 +280,7 @@ fn setup_http_ibcmd_dump_project_with_infobase(
     idle_ttl_secs: u64,
     infobase_yaml: &str,
 ) -> (tempfile::TempDir, PathBuf, String, PathBuf) {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let ibcmd_path = dir.path().join("ibcmd");
@@ -332,7 +318,7 @@ fn setup_http_edt_project(
     max_concurrent_calls: usize,
     command_timeout_ms: u64,
 ) -> (tempfile::TempDir, PathBuf, String, PathBuf) {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let edt_dir = dir.path().join("edt");
@@ -378,7 +364,7 @@ struct HttpServerProcess {
 
 impl HttpServerProcess {
     async fn spawn(config_path: &Path, url: &str) -> Self {
-        let child = tokio::process::Command::new(cargo_bin("v8-runner"))
+        let child = tokio::process::Command::new(v8_runner_binary())
             .arg("--config")
             .arg(config_path)
             .arg("mcp")
@@ -408,14 +394,17 @@ async fn wait_for_server(url: &str) {
         .next()
         .expect("authority")
         .to_owned();
-    for _ in 0..100 {
-        if tokio::net::TcpStream::connect(authority.as_str())
-            .await
-            .is_ok()
-        {
-            return;
+    if wait_until_async_condition(100, Duration::from_millis(20), || {
+        let authority = authority.clone();
+        async move {
+            tokio::net::TcpStream::connect(authority.as_str())
+                .await
+                .is_ok()
         }
-        tokio::time::sleep(Duration::from_millis(20)).await;
+    })
+    .await
+    {
+        return;
     }
     panic!("timed out waiting for HTTP server at {url}");
 }
@@ -553,33 +542,21 @@ where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = reqwest::Response>,
 {
-    for _ in 0..100 {
-        let response = request().await;
-        if response.status() == expected {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
+    if wait_until_async_condition(100, Duration::from_millis(20), || {
+        let response = request();
+        async move { response.await.status() == expected }
+    })
+    .await
+    {
+        return;
     }
 
     panic!("timed out waiting for status {expected}");
 }
 
-async fn wait_for_log_contains(path: &Path, needle: &str) {
-    for _ in 0..100 {
-        if let Ok(contents) = fs::read_to_string(path) {
-            if contents.contains(needle) {
-                return;
-            }
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-
-    panic!("timed out waiting for '{needle}' in {}", path.display());
-}
-
 #[test]
 fn mcp_http_missing_config_reports_error_on_stderr() {
-    let output = std::process::Command::new(cargo_bin("v8-runner"))
+    let output = v8_runner_command()
         .args([
             "--config",
             "/definitely/missing/v8project.yaml",

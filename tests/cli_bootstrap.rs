@@ -1,10 +1,11 @@
 #![cfg(unix)]
 
-use assert_cmd::prelude::*;
+mod support;
+
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tempfile::tempdir;
+use support::{temp_workspace, v8_runner_command};
 
 fn write_minimal_config(dir: &Path) -> PathBuf {
     let config_path = dir.join("v8project.yaml");
@@ -26,8 +27,7 @@ fn write_minimal_config(dir: &Path) -> PathBuf {
 
 #[test]
 fn missing_config_in_text_mode_returns_validation_error_on_stderr() {
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args(["--config", "/definitely/missing/v8project.yaml", "build"])
         .output()
         .expect("run command");
@@ -40,8 +40,7 @@ fn missing_config_in_text_mode_returns_validation_error_on_stderr() {
 
 #[test]
 fn missing_config_in_json_mode_keeps_error_envelope_shape() {
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             "/definitely/missing/v8project.yaml",
@@ -68,11 +67,10 @@ fn missing_config_in_json_mode_keeps_error_envelope_shape() {
 
 #[test]
 fn default_config_path_uses_v8project_yaml_from_current_dir() {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let _config_path = write_minimal_config(dir.path());
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .current_dir(dir.path())
         .args(["--json-message", "build"])
         .output()
@@ -86,13 +84,12 @@ fn default_config_path_uses_v8project_yaml_from_current_dir() {
 
 #[test]
 fn action_logging_failure_in_json_mode_keeps_command_identity() {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let config_path = write_minimal_config(dir.path());
     let log_path = dir.path().join("action-log-as-dir");
     fs::create_dir_all(&log_path).expect("log dir");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .env("V8TR_ACTION_LOG_FILE", &log_path)
         .args([
             "--config",
@@ -119,11 +116,10 @@ fn action_logging_failure_in_json_mode_keeps_command_identity() {
 
 #[test]
 fn test_module_pre_dispatch_validation_in_json_mode_keeps_command_identity() {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let config_path = write_minimal_config(dir.path());
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -152,11 +148,10 @@ fn test_module_pre_dispatch_validation_in_json_mode_keeps_command_identity() {
 
 #[test]
 fn artifacts_pre_dispatch_validation_in_json_mode_keeps_command_identity() {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let config_path = write_minimal_config(dir.path());
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -183,7 +178,7 @@ fn artifacts_pre_dispatch_validation_in_json_mode_keeps_command_identity() {
 
 #[test]
 fn mcp_rejects_clean_before_execution_flag() {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let config_path = dir.path().join("v8project.yaml");
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
@@ -199,8 +194,7 @@ fn mcp_rejects_clean_before_execution_flag() {
     )
     .expect("config");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -221,7 +215,7 @@ fn mcp_rejects_clean_before_execution_flag() {
 
 #[test]
 fn legacy_top_level_connection_is_rejected_in_json_mode() {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let config_path = dir.path().join("v8project.yaml");
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
@@ -237,8 +231,7 @@ fn legacy_top_level_connection_is_rejected_in_json_mode() {
     )
     .expect("config");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -261,7 +254,7 @@ fn legacy_top_level_connection_is_rejected_in_json_mode() {
 
 #[test]
 fn legacy_top_level_credentials_is_rejected_in_json_mode() {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let config_path = dir.path().join("v8project.yaml");
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
@@ -277,8 +270,7 @@ fn legacy_top_level_credentials_is_rejected_in_json_mode() {
     )
     .expect("config");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),

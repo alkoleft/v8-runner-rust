@@ -1,17 +1,20 @@
 #![cfg(unix)]
 
+mod support;
+
 use std::fs;
 use std::io::{BufRead, BufReader};
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use assert_cmd::prelude::*;
 use insta::assert_debug_snapshot;
 use serde_json::Value;
-use tempfile::tempdir;
+use support::{
+    temp_workspace, v8_runner_command, wait_for_file, wait_for_received_line,
+    write_shell_script as write_script,
+};
 
 const V8_CONFIGURATION_NATURE: &str = "com._1c.g5.v8.dt.core.V8ConfigurationNature";
 const V8_EXTENSION_NATURE: &str = "com._1c.g5.v8.dt.core.V8ExtensionNature";
@@ -25,31 +28,6 @@ const YAXUNIT_LOG_FIXTURE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/parsers/yaxunit.log"
 ));
-
-fn make_executable(path: &Path) {
-    let mut perms = fs::metadata(path).expect("metadata").permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(path, perms).expect("chmod");
-}
-
-fn write_script(path: &Path, body: &str) {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).expect("parent");
-    }
-    fs::write(path, format!("#!/bin/sh\n{body}\n")).expect("write");
-    make_executable(path);
-}
-
-fn wait_for_file(path: &Path, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if path.exists() {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    path.exists()
-}
 
 fn write_test_script(
     path: &Path,
@@ -214,7 +192,7 @@ fn setup_project_with_additional_launch_keys(
     sleep_seconds: Option<u64>,
     additional_launch_keys: &[&str],
 ) -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf, PathBuf) {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join(work_dir_name);
     let install_dir = dir.path().join("platform");
@@ -261,7 +239,7 @@ fn setup_va_project(
     report_xml: &str,
     additional_launch_keys: &[&str],
 ) -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf, PathBuf) {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let install_dir = dir.path().join("platform");
@@ -380,8 +358,7 @@ fn test_all_full_json_runs_build_first_and_returns_report() {
         None,
     );
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -435,8 +412,7 @@ fn test_run_appends_enterprise_additional_launch_keys() {
             &["/TESTMANAGER", "/TCUser", "ci-user"],
         );
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -474,8 +450,7 @@ fn test_text_output_splits_pipeline_into_timeline_stages() {
         None,
     );
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -534,7 +509,7 @@ fn test_command_streams_enterprise_stage_before_runner_finishes() {
         ),
     );
 
-    let mut command = std::process::Command::cargo_bin("v8-runner").expect("binary");
+    let mut command = v8_runner_command();
     command
         .args([
             "--config",
@@ -559,19 +534,12 @@ fn test_command_streams_enterprise_stage_before_runner_finishes() {
         }
     });
 
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut saw_enterprise_stage = false;
-    while Instant::now() < deadline {
-        match rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(line) if line.contains("● test: enterprise run") => {
-                saw_enterprise_stage = true;
-                break;
-            }
-            Ok(_) => {}
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-    }
+    let saw_enterprise_stage = wait_for_received_line(
+        &rx,
+        Duration::from_secs(5),
+        Duration::from_millis(100),
+        |line| line.contains("● test: enterprise run"),
+    );
 
     let runner_started_before_release = wait_for_file(&runner_started, Duration::from_secs(5));
     let early_status = child.try_wait().ok().flatten();
@@ -595,8 +563,7 @@ fn test_text_output_surfaces_failure_code_and_retained_artifacts() {
     let (_dir, config_path, _build_calls, _test_calls, _captured_config) =
         setup_project("work", JUNIT_SMOKE_REPORT_FIXTURE, "", 0, false, 1, Some(2));
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -631,8 +598,7 @@ fn test_text_output_surfaces_success_log_findings_without_full_step_noise() {
         None,
     );
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -671,8 +637,7 @@ fn test_accepts_explicit_client_mode_for_vanessa_and_yaxunit() {
         ),
     );
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -702,8 +667,7 @@ fn test_rejects_c_and_execute_on_test_surface() {
     let (_dir, config_path, _build_calls, test_calls, _captured_config) =
         setup_project("work", JUNIT_SMOKE_REPORT_FIXTURE, "", 0, false, 5, None);
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -728,8 +692,7 @@ fn test_va_builds_vanessa_command_and_overlay() {
         &["/TESTMANAGER", "/VAUSER", "ci-user"],
     );
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -787,8 +750,7 @@ fn test_module_build_failure_prevents_enterprise_launch() {
     let (_dir, config_path, _build_calls, test_calls, _captured_config) =
         setup_project("work", JUNIT_SMOKE_REPORT_FIXTURE, "", 0, true, 5, None);
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -812,7 +774,7 @@ fn test_module_build_failure_prevents_enterprise_launch() {
 
 #[test]
 fn test_module_edt_extension_build_uses_full_load_before_enterprise_launch() {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let install_dir = dir.path().join("platform");
@@ -882,8 +844,7 @@ fn test_module_edt_extension_build_uses_full_load_before_enterprise_launch() {
     );
     fs::write(&config_path, config).expect("config");
 
-    let first = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let first = v8_runner_command()
         .args(["--config", &config_path.display().to_string(), "build"])
         .output()
         .expect("prime build");
@@ -895,8 +856,7 @@ fn test_module_edt_extension_build_uses_full_load_before_enterprise_launch() {
     )
     .expect("modify extension");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -942,8 +902,7 @@ stack trace line 2</failure>
     let (_dir, config_path, _build_calls, _test_calls, captured_config) =
         setup_project("work", report, YAXUNIT_LOG_FIXTURE, 0, false, 5, None);
 
-    let compact = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let compact = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -981,8 +940,7 @@ stack trace line 2</failure>
         .expect("captured config")
         .contains("Foo"));
 
-    let full = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let full = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -1018,8 +976,7 @@ fn test_timeout_retains_artifacts() {
     let (_dir, config_path, _build_calls, _test_calls, _captured_config) =
         setup_project("work", JUNIT_SMOKE_REPORT_FIXTURE, "", 0, false, 1, Some(2));
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),

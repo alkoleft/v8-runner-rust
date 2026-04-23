@@ -1,30 +1,16 @@
 #![cfg(unix)]
 
+mod support;
+
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use assert_cmd::prelude::*;
 use serde_json::Value;
-use tempfile::tempdir;
+use support::{temp_workspace, v8_runner_command, write_shell_script as write_script};
 
 const V8_CONFIGURATION_NATURE: &str = "com._1c.g5.v8.dt.core.V8ConfigurationNature";
 const V8_EXTENSION_NATURE: &str = "com._1c.g5.v8.dt.core.V8ExtensionNature";
 const EDT_RUNTIME_VERSION: &str = "8.3.27";
-
-fn make_executable(path: &Path) {
-    let mut perms = fs::metadata(path).expect("metadata").permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(path, perms).expect("chmod");
-}
-
-fn write_script(path: &Path, body: &str) {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).expect("parent");
-    }
-    fs::write(path, format!("#!/bin/sh\n{body}\n")).expect("write");
-    make_executable(path);
-}
 
 fn write_native_edt_project(
     path: &Path,
@@ -93,7 +79,7 @@ fn setup_designer_init_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBu
 fn setup_designer_init_project_with_body(
     script_body: &str,
 ) -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let config_path = dir.path().join("v8project.yaml");
@@ -131,7 +117,7 @@ fn setup_edt_init_project(
     PathBuf,
     PathBuf,
 ) {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let config_path = dir.path().join("v8project.yaml");
@@ -196,7 +182,7 @@ fn setup_edt_init_project(
 fn setup_ibcmd_server_init_project(
     script_body: &str,
 ) -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let config_path = dir.path().join("v8project.yaml");
@@ -229,8 +215,7 @@ fn setup_ibcmd_server_init_project(
 fn init_designer_creates_infobase_and_skips_edt_workspace() {
     let (_dir, config_path, work_path, infobase_path) = setup_designer_init_project();
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args(["--config", &config_path.display().to_string(), "init"])
         .output()
         .expect("run command");
@@ -250,8 +235,7 @@ fn init_designer_non_zero_create_exit_stays_fatal_even_when_marker_appears() {
         "if [ \"$1\" = \"CREATEINFOBASE\" ]; then mkdir -p \"$ib_path\" && : > \"$ib_path/1Cv8.1CD\"; fi\nprintf 'designer create failed\\n' >&2\nexit 1",
     );
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -275,8 +259,7 @@ fn init_ibcmd_creates_infobase_and_imports_edt_projects_in_order() {
     let (_dir, config_path, work_path, _base_path, _platform_path, edt_calls_log) =
         setup_edt_init_project("DESIGNER", "IBCMD", "__AUTO_FILE__");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args(["--config", &config_path.display().to_string(), "init"])
         .output()
         .expect("run command");
@@ -306,8 +289,7 @@ fn init_ibcmd_file_already_exists_without_marker_is_fatal() {
         "if [ \"$1\" = \"infobase\" ]; then printf 'already exists\\n' >&2; exit 17; fi\nexit 0",
     );
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -331,8 +313,7 @@ fn init_edt_with_ibcmd_creates_infobase_and_imports_projects_in_order() {
     let (_dir, config_path, work_path, base_path, _platform_path, edt_calls_log) =
         setup_edt_init_project("EDT", "IBCMD", "__AUTO_FILE__");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args(["--config", &config_path.display().to_string(), "init"])
         .output()
         .expect("run command");
@@ -362,8 +343,7 @@ fn init_edt_imports_projects_in_configuration_then_extension_order() {
     let (_dir, config_path, work_path, base_path, _platform_path, edt_calls_log) =
         setup_edt_init_project("EDT", "DESIGNER", "__AUTO_FILE__");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args(["--config", &config_path.display().to_string(), "init"])
         .output()
         .expect("run command");
@@ -393,8 +373,7 @@ fn init_non_file_connection_keeps_running_workspace_step_and_returns_payload() {
     let (_dir, config_path, work_path, base_path, _platform_path, edt_calls_log) =
         setup_edt_init_project("EDT", "DESIGNER", "Srvr=demo;Ref=test");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -427,8 +406,7 @@ fn init_skips_existing_workspace() {
     )
     .expect("marker");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -457,8 +435,7 @@ fn init_retries_edt_import_when_previous_run_left_incomplete_workspace() {
         ),
     );
 
-    let first = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let first = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -491,8 +468,7 @@ fn init_retries_edt_import_when_previous_run_left_incomplete_workspace() {
         ),
     );
 
-    let second = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let second = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -522,8 +498,7 @@ fn init_rejects_workspace_path_that_is_not_a_directory() {
         setup_edt_init_project("EDT", "DESIGNER", "__AUTO_FILE__");
     fs::write(work_path.join("edt-workspace"), "not a dir\n").expect("workspace file");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -546,8 +521,7 @@ fn init_rejects_workspace_path_that_is_not_a_directory() {
 fn init_ibcmd_server_provisions_infobase_without_precheck() {
     let (_dir, config_path, work_path, calls_log) = setup_ibcmd_server_init_project("exit 0");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -573,8 +547,7 @@ fn init_ibcmd_server_already_exists_is_non_fatal() {
     let (_dir, config_path, _work_path, _calls_log) =
         setup_ibcmd_server_init_project("printf 'already exists\\n' >&2\nexit 17");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -598,8 +571,7 @@ fn init_ibcmd_server_auth_failure_stays_fatal() {
     let (_dir, config_path, _work_path, _calls_log) =
         setup_ibcmd_server_init_project("printf 'access denied\\n' >&2\nexit 17");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),

@@ -1,12 +1,12 @@
 #![cfg(unix)]
 
+mod support;
+
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use assert_cmd::prelude::*;
 use serde_json::Value;
-use tempfile::tempdir;
+use support::{temp_workspace, v8_runner_command, write_shell_script as write_script};
 
 const V8_CONFIGURATION_NATURE: &str = "com._1c.g5.v8.dt.core.V8ConfigurationNature";
 const V8_EXTENSION_NATURE: &str = "com._1c.g5.v8.dt.core.V8ExtensionNature";
@@ -18,20 +18,6 @@ struct SourceSetSpec<'a> {
     name: &'a str,
     kind: &'a str,
     path: &'a str,
-}
-
-fn make_executable(path: &Path) {
-    let mut perms = fs::metadata(path).expect("metadata").permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(path, perms).expect("chmod");
-}
-
-fn write_script(path: &Path, body: &str) {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).expect("parent");
-    }
-    fs::write(path, format!("#!/bin/sh\n{body}\n")).expect("write");
-    make_executable(path);
 }
 
 fn write_edt_script(path: &Path, calls_log: &Path) {
@@ -342,7 +328,7 @@ fn setup_project() -> (
     PathBuf,
     PathBuf,
 ) {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let config_path = dir.path().join("v8project.yaml");
@@ -501,8 +487,7 @@ fn convert_without_source_set_processes_all_source_sets_into_work_path_out() {
     fs::create_dir_all(stale_output.parent().expect("parent")).expect("stale dir");
     fs::write(&stale_output, "stale").expect("stale file");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -580,8 +565,7 @@ fn convert_single_source_set_uses_inferred_edt_to_designer_direction() {
         "<Configuration><ConfigurationExtensionPurpose>Extension</ConfigurationExtensionPurpose></Configuration>",
     );
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -646,8 +630,7 @@ fn convert_single_extension_source_set_infers_base_project_name_from_configurati
     write_designer_source(&base_path.join("main"), "BaseProject", false);
     write_designer_source(&base_path.join("ext-sales"), "SalesExtension", true);
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -710,8 +693,7 @@ fn convert_unknown_source_set_json_keeps_convert_command_identity_before_workspa
     write_designer_source(&base_path.join("main"), "BaseProject", false);
     write_live_workspace_lock(&work_path, "convert");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -753,8 +735,7 @@ fn convert_workspace_lock_conflict_uses_runtime_error_after_valid_preflight() {
     write_designer_source(&base_path.join("main"), "BaseProject", false);
     write_live_workspace_lock(&work_path, "convert");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -792,8 +773,7 @@ fn convert_external_edt_source_set_preserves_all_exported_descriptors() {
     write_edt_external_project(&base_path.join("processors/processor-a"), "ProcessorA");
     write_edt_external_project(&base_path.join("processors/processor-b"), "ProcessorB");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -846,8 +826,7 @@ fn convert_external_designer_source_set_does_not_require_configuration_source_se
         &["processor-a", "processor-b"],
     );
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -880,7 +859,7 @@ fn convert_external_designer_source_set_does_not_require_configuration_source_se
 
 #[test]
 fn convert_output_root_mirrors_source_set_layout_and_stabilizes_edt_project_names() {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let base_path = dir.path().join("designer");
     let work_path = dir.path().join("work");
     let output_root = dir.path().join("edt");
@@ -926,8 +905,7 @@ fn convert_output_root_mirrors_source_set_layout_and_stabilizes_edt_project_name
     fs::create_dir_all(stale_file.parent().expect("stale parent")).expect("stale dir");
     fs::write(&stale_file, "stale").expect("stale");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -1007,8 +985,7 @@ fn convert_output_root_rejects_source_overlap_before_workspace_lock() {
     write_designer_source(&base_path.join("main"), "BaseProject", false);
     write_live_workspace_lock(&work_path, "convert");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -1058,8 +1035,7 @@ fn convert_single_source_output_rejects_unselected_source_set_overlap() {
     write_designer_source(&base_path.join("ext"), "SalesExtension", true);
     write_live_workspace_lock(&work_path, "convert");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -1103,8 +1079,7 @@ fn convert_output_root_rejects_base_path_child_before_workspace_lock() {
     write_designer_source(&base_path.join("main"), "BaseProject", false);
     write_live_workspace_lock(&work_path, "convert");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -1146,8 +1121,7 @@ fn convert_output_root_rejects_work_path_child_before_workspace_lock() {
     write_designer_source(&base_path.join("main"), "BaseProject", false);
     write_live_workspace_lock(&work_path, "convert");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -1194,8 +1168,7 @@ fn convert_output_root_rejects_filesystem_root_before_workspace_lock() {
     write_live_workspace_lock(&work_path, "convert");
     let root_output = std::path::MAIN_SEPARATOR.to_string();
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -1246,8 +1219,7 @@ fn convert_output_root_rejects_overlapping_targets_before_workspace_lock() {
     write_live_workspace_lock(&work_path, "convert");
     let output_root = base_path.parent().expect("parent").join("converted");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),

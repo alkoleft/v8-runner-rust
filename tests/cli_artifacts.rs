@@ -1,25 +1,11 @@
 #![cfg(unix)]
 
+mod support;
+
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use assert_cmd::prelude::*;
-use tempfile::tempdir;
-
-fn make_executable(path: &Path) {
-    let mut perms = fs::metadata(path).expect("metadata").permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(path, perms).expect("chmod");
-}
-
-fn write_script(path: &Path, body: &str) {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).expect("parent");
-    }
-    fs::write(path, format!("#!/bin/sh\n{body}\n")).expect("write");
-    make_executable(path);
-}
+use support::{temp_workspace, v8_runner_command, write_shell_script as write_script};
 
 fn write_designer_script(path: &Path, fail: bool) {
     let failure_branch = if fail { "exit 17" } else { "exit 0" };
@@ -42,7 +28,7 @@ fn write_config(path: &Path, base_path: &Path, work_path: &Path, platform_path: 
 }
 
 fn setup_project(fail: bool) -> (tempfile::TempDir, PathBuf, PathBuf) {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let config_path = dir.path().join("v8project.yaml");
@@ -61,8 +47,7 @@ fn artifacts_text_success_keeps_output_artifact_visible() {
     let (_dir, config_path, base_path) = setup_project(false);
     let output_path = base_path.join("dist").join("release.cf");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -89,8 +74,7 @@ fn artifacts_text_failure_surfaces_error_and_diagnostic_path() {
     let (_dir, config_path, base_path) = setup_project(true);
     let output_path = base_path.join("dist").join("release.cf");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),

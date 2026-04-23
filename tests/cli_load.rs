@@ -1,29 +1,15 @@
 #![cfg(unix)]
 
+mod support;
+
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use assert_cmd::prelude::*;
 use serde_json::Value;
-use tempfile::tempdir;
+use support::{temp_workspace, v8_runner_command, write_shell_script as write_script};
 
 const V8_CONFIGURATION_NATURE: &str = "com._1c.g5.v8.dt.core.V8ConfigurationNature";
 const EDT_RUNTIME_VERSION: &str = "8.3.27";
-
-fn make_executable(path: &Path) {
-    let mut perms = fs::metadata(path).expect("metadata").permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(path, perms).expect("chmod");
-}
-
-fn write_script(path: &Path, body: &str) {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).expect("parent");
-    }
-    fs::write(path, format!("#!/bin/sh\n{body}\n")).expect("write");
-    make_executable(path);
-}
 
 fn write_designer_script(path: &Path, calls_log: &Path) {
     let body = format!(
@@ -86,7 +72,7 @@ fn write_config(
 }
 
 fn setup_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf, PathBuf) {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let config_path = dir.path().join("v8project.yaml");
@@ -112,8 +98,7 @@ fn load_cf_json_success_runs_probe_load_and_update() {
     let (_dir, config_path, _binary_path, base_path, calls_log) = setup_project();
     fs::write(base_path.join("release.cf"), "cf").expect("artifact");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -150,8 +135,7 @@ fn load_text_success_is_compact_and_keeps_target_visible() {
     let artifact_path = base_path.join("release.cf");
     fs::write(&artifact_path, "cf").expect("artifact");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -178,8 +162,7 @@ fn merge_cfe_json_success_requires_extension_and_settings() {
     fs::write(base_path.join("release.cfe"), "cfe").expect("artifact");
     fs::write(base_path.join("merge.xml"), "<settings/>").expect("settings");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -216,8 +199,7 @@ fn load_update_mode_returns_validation_payload() {
     let (_dir, config_path, _binary_path, base_path, _calls_log) = setup_project();
     fs::write(base_path.join("release.cf"), "cf").expect("artifact");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -249,8 +231,7 @@ fn load_text_failure_surfaces_structured_error() {
     let (_dir, config_path, _binary_path, base_path, _calls_log) = setup_project();
     fs::write(base_path.join("release.cf"), "cf").expect("artifact");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -286,8 +267,7 @@ fn load_rejects_edt_format_even_with_designer_builder() {
         "EDT",
     );
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -313,8 +293,7 @@ fn load_rejects_unknown_artifact_type_with_unknown_payload_metadata() {
     let (_dir, config_path, _binary_path, base_path, _calls_log) = setup_project();
     fs::write(base_path.join("release.zip"), "zip").expect("artifact");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -342,8 +321,7 @@ fn load_rejects_external_artifact_type_with_unknown_target_kind_payload_metadata
     let (_dir, config_path, _binary_path, base_path, _calls_log) = setup_project();
     fs::write(base_path.join("tool.epf"), "epf").expect("artifact");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),

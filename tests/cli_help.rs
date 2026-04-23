@@ -1,11 +1,12 @@
 #![cfg(unix)]
 
-use assert_cmd::prelude::*;
+mod support;
+
+use support::v8_runner_command;
 
 #[test]
 fn root_help_splits_commands_and_global_options() {
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args(["--help"])
         .output()
         .expect("run command");
@@ -20,8 +21,7 @@ fn root_help_splits_commands_and_global_options() {
 
 #[test]
 fn config_init_help_separates_global_and_command_options() {
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args(["config", "init", "--help"])
         .output()
         .expect("run command");
@@ -37,8 +37,7 @@ fn config_init_help_separates_global_and_command_options() {
 
 #[test]
 fn launch_help_uses_output_path_name_and_global_json_selector() {
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args(["launch", "--help"])
         .output()
         .expect("run command");
@@ -54,8 +53,7 @@ fn launch_help_uses_output_path_name_and_global_json_selector() {
 
 #[test]
 fn make_help_keeps_output_path_under_command_options() {
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args(["make", "--help"])
         .output()
         .expect("run command");
@@ -70,8 +68,7 @@ fn make_help_keeps_output_path_under_command_options() {
 
 #[test]
 fn convert_help_uses_output_target_root_name() {
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args(["convert", "--help"])
         .output()
         .expect("run command");

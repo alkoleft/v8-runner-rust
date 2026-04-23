@@ -1,33 +1,21 @@
 #![cfg(unix)]
 
+mod support;
+
 use std::fs;
 use std::io::{BufRead, BufReader};
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use assert_cmd::prelude::*;
-use tempfile::tempdir;
+use support::{
+    temp_workspace, v8_runner_command, wait_for_received_line, write_shell_script as write_script,
+};
 
 const V8_CONFIGURATION_NATURE: &str = "com._1c.g5.v8.dt.core.V8ConfigurationNature";
 const V8_EXTENSION_NATURE: &str = "com._1c.g5.v8.dt.core.V8ExtensionNature";
 const EDT_RUNTIME_VERSION: &str = "8.3.27";
-
-fn make_executable(path: &Path) {
-    let mut perms = fs::metadata(path).expect("metadata").permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(path, perms).expect("chmod");
-}
-
-fn write_script(path: &Path, body: &str) {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).expect("parent");
-    }
-    fs::write(path, format!("#!/bin/sh\n{body}\n")).expect("write");
-    make_executable(path);
-}
 
 fn write_native_edt_project(
     path: &Path,
@@ -93,7 +81,7 @@ fn write_edt_extension_source(path: &Path, project_name: &str) {
 }
 
 fn setup_extensions_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let config_path = dir.path().join("v8project.yaml");
@@ -131,8 +119,7 @@ fn setup_extensions_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) 
 fn extensions_command_updates_all_extension_properties() {
     let (_dir, config_path, calls_log, _ibcmd_path) = setup_extensions_project();
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -169,7 +156,7 @@ fn extensions_command_streams_stage_before_pipeline_finishes() {
         "case \"$*\" in\n  *\"--name tests\"*) sleep 2 ;;\nesac\nexit 0",
     );
 
-    let mut command = std::process::Command::cargo_bin("v8-runner").expect("binary");
+    let mut command = v8_runner_command();
     command
         .args([
             "--config",
@@ -190,19 +177,12 @@ fn extensions_command_streams_stage_before_pipeline_finishes() {
         }
     });
 
-    let deadline = Instant::now() + Duration::from_secs(1);
-    let mut saw_first_stage = false;
-    while Instant::now() < deadline {
-        match rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(line) if line.contains("● client_mcp: disable_safety") => {
-                saw_first_stage = true;
-                break;
-            }
-            Ok(_) => {}
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-    }
+    let saw_first_stage = wait_for_received_line(
+        &rx,
+        Duration::from_secs(1),
+        Duration::from_millis(100),
+        |line| line.contains("● client_mcp: disable_safety"),
+    );
 
     assert!(saw_first_stage, "first extension stage was not streamed");
     assert!(
@@ -218,8 +198,7 @@ fn extensions_command_streams_stage_before_pipeline_finishes() {
 fn extensions_command_filters_by_requested_source_set_names() {
     let (_dir, config_path, calls_log, _ibcmd_path) = setup_extensions_project();
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -242,8 +221,7 @@ fn extensions_command_json_failure_reports_operation_target_and_exit_code() {
     let (_dir, config_path, _calls_log, ibcmd_path) = setup_extensions_project();
     write_script(&ibcmd_path, "echo 'cannot update extension' >&2\nexit 17");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),

@@ -1,29 +1,15 @@
 #![cfg(unix)]
 
+mod support;
+
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use assert_cmd::prelude::*;
 use serde_json::Value;
-use tempfile::tempdir;
+use support::{temp_workspace, v8_runner_command, write_shell_script as write_script};
 
 const V8_CONFIGURATION_NATURE: &str = "com._1c.g5.v8.dt.core.V8ConfigurationNature";
 const EDT_RUNTIME_VERSION: &str = "8.3.27";
-
-fn make_executable(path: &Path) {
-    let mut perms = fs::metadata(path).expect("metadata").permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(path, perms).expect("chmod");
-}
-
-fn write_script(path: &Path, body: &str) {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).expect("parent");
-    }
-    fs::write(path, format!("#!/bin/sh\n{body}\n")).expect("write");
-    make_executable(path);
-}
 
 fn write_ibcmd_script(path: &Path, calls_log: &Path, fail_pattern: Option<&str>) {
     let pattern_branch = fail_pattern
@@ -152,7 +138,7 @@ fn setup_project() -> (
     PathBuf,
     PathBuf,
 ) {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let config_path = dir.path().join("v8project.yaml");
@@ -204,7 +190,7 @@ fn setup_edt_project() -> (
     PathBuf,
     PathBuf,
 ) {
-    let dir = tempdir().expect("tempdir");
+    let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let config_path = dir.path().join("v8project.yaml");
@@ -244,8 +230,7 @@ fn setup_edt_project() -> (
 fn dump_ibcmd_full_json_success() {
     let (_dir, config_path, _binary_path, _work_path, base_path, calls_log) = setup_project();
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -280,8 +265,7 @@ fn dump_edt_full_json_success_updates_designer_mirror_and_edt_target() {
         edt_calls,
     ) = setup_edt_project();
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -332,8 +316,7 @@ fn dump_edt_full_json_success_updates_designer_mirror_and_edt_target() {
 fn dump_text_success_is_compact_and_keeps_output_visible() {
     let (_dir, config_path, _binary_path, _work_path, base_path, _calls_log) = setup_project();
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -370,8 +353,7 @@ fn dump_ibcmd_incremental_json_success() {
     let (_dir, config_path, _binary_path, _work_path, base_path, calls_log) = setup_project();
     fs::remove_dir_all(base_path.join("main")).expect("remove target");
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -397,8 +379,7 @@ fn dump_ibcmd_incremental_json_success() {
 fn dump_ibcmd_partial_json_success_uses_degraded_fallback() {
     let (_dir, config_path, _binary_path, _work_path, _base_path, calls_log) = setup_project();
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -431,8 +412,7 @@ fn dump_ibcmd_partial_json_success_uses_degraded_fallback() {
 fn dump_text_warning_shows_degraded_fallback_reason() {
     let (_dir, config_path, _binary_path, _work_path, _base_path, _calls_log) = setup_project();
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -459,8 +439,7 @@ fn dump_ibcmd_partial_failure_keeps_partial_mode_and_warning() {
     let (_dir, config_path, binary_path, _work_path, _base_path, calls_log) = setup_project();
     write_ibcmd_script(&binary_path, &calls_log, Some("--sync"));
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -497,8 +476,7 @@ fn dump_text_failure_shows_error_message() {
     let (_dir, config_path, binary_path, _work_path, _base_path, calls_log) = setup_project();
     write_ibcmd_script(&binary_path, &calls_log, Some("--force"));
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),
@@ -530,8 +508,7 @@ fn dump_ibcmd_full_server_connection_passes_dbms_and_infobase_credentials() {
         "  connection: 'Srvr=server;Ref=main'\n  user: Admin\n  password: secret\n  dbms:\n    kind: PostgreSQL\n    server: localhost\n    name: maindb\n    user: postgres\n    password: pg-secret\n",
     );
 
-    let output = std::process::Command::cargo_bin("v8-runner")
-        .expect("binary")
+    let output = v8_runner_command()
         .args([
             "--config",
             &config_path.display().to_string(),

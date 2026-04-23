@@ -178,10 +178,17 @@ Detailed ADR task decomposition remains in [ADR_DERIVED_BACKLOG.md](ADR_DERIVED_
   `cargo test --locked --quiet`, local full `cargo test --locked --quiet`, reviewer, and separate
   Rust expert subagent gates passed.
 
-- [ ] `ADR-TASK-026`: Reduce test maintenance cost with a shared test harness for shell and
+- [x] `ADR-TASK-026`: Reduce test maintenance cost with a shared test harness for shell and
   platform fixtures. Move repeated script creation, chmod, tempdir setup, cargo-bin bootstrap,
   and polling helpers into common test support so new CLI/MCP/platform regressions stop copying
-  shell-stub boilerplate across many files.
+  shell-stub boilerplate across many files. Completed `2026-04-23`: integration test support now
+  lives in `tests/support/mod.rs` with shared shell-script/chmod, temp workspace, `v8-runner`
+  command/binary, synchronous and asynchronous polling, mpsc line-wait, log-wait, and line-count
+  helpers. CLI/MCP integration tests now reuse the shared harness across `cli_*`, `mcp_stdio`, and
+  `mcp_http` suites while keeping scenario-specific shell bodies local. Targeted CLI/MCP matrix,
+  full `cargo test --locked --quiet`, `cargo fmt --all -- --check`, `git diff --check`, reviewer,
+  separate Rust expert, and final completeness subagent gates passed; completeness returned
+  `APPROVED`.
 
 - [ ] `ADR-TASK-027`: Extract a shared staged-publication mechanism for full-replacement outputs.
   `dump` and `artifacts` still duplicate the ADR-0015 flow: create target-local staging, write
