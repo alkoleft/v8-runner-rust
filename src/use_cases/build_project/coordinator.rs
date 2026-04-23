@@ -8,20 +8,15 @@ pub(super) fn run_build_designer(
     debug!(full_rebuild = args.full_rebuild, "preparing build plan");
 
     let started = Instant::now();
-    let service = SourceSetsService::new(config);
-    let contexts = service.designer_contexts();
-    let contexts_by_name: HashMap<String, SourceSetContext> = contexts
-        .into_iter()
-        .map(|context| (context.name().to_owned(), context))
-        .collect();
-    let ordered_source_sets = ordered_source_sets(config);
+    let inventory = SourceSetInventory::new(config);
+    let ordered_source_sets = inventory.ordered_source_sets();
 
     let analysis_by_name = if args.full_rebuild {
         None
     } else {
         Some(analyze_contexts_by_name(
-            &service,
-            &contexts_by_name.values().cloned().collect::<Vec<_>>(),
+            &inventory,
+            inventory.designer_contexts(),
         ))
     };
 
@@ -30,7 +25,7 @@ pub(super) fn run_build_designer(
     let mut steps = Vec::new();
 
     for (index, source_set) in ordered_source_sets.iter().enumerate() {
-        let Some(source_context) = contexts_by_name.get(&source_set.name).cloned() else {
+        let Some(source_context) = inventory.designer_context(&source_set.name).cloned() else {
             continue;
         };
 
@@ -38,7 +33,7 @@ pub(super) fn run_build_designer(
             let step_started = Instant::now();
             let result = discover_designer_external_artifacts(
                 &source_set.name,
-                &resolve_source_set_path(config, source_set),
+                &inventory.source_path(source_set),
                 source_set_external_kind(source_set).expect("external kind"),
             );
             match result {
@@ -204,20 +199,15 @@ pub(super) fn run_build_ibcmd(
     );
 
     let started = Instant::now();
-    let service = SourceSetsService::new(config);
-    let contexts = service.designer_contexts();
-    let contexts_by_name: HashMap<String, SourceSetContext> = contexts
-        .into_iter()
-        .map(|context| (context.name().to_owned(), context))
-        .collect();
-    let ordered_source_sets = ordered_source_sets(config);
+    let inventory = SourceSetInventory::new(config);
+    let ordered_source_sets = inventory.ordered_source_sets();
 
     let analysis_by_name = if args.full_rebuild {
         None
     } else {
         Some(analyze_contexts_by_name(
-            &service,
-            &contexts_by_name.values().cloned().collect::<Vec<_>>(),
+            &inventory,
+            inventory.designer_contexts(),
         ))
     };
 
@@ -226,7 +216,7 @@ pub(super) fn run_build_ibcmd(
     let mut steps = Vec::new();
 
     for (index, source_set) in ordered_source_sets.iter().enumerate() {
-        let Some(source_context) = contexts_by_name.get(&source_set.name).cloned() else {
+        let Some(source_context) = inventory.designer_context(&source_set.name).cloned() else {
             continue;
         };
 
@@ -371,25 +361,15 @@ pub(super) fn run_build_edt(
     }
 
     let started = Instant::now();
-    let service = SourceSetsService::new(config);
-    let edt_contexts = service.edt_contexts();
-    let designer_contexts = service.designer_contexts();
-    let edt_contexts_by_name: HashMap<String, SourceSetContext> = edt_contexts
-        .into_iter()
-        .map(|context| (context.name().to_owned(), context))
-        .collect();
-    let designer_contexts_by_name: HashMap<String, SourceSetContext> = designer_contexts
-        .into_iter()
-        .map(|context| (context.name().to_owned(), context))
-        .collect();
-    let ordered_source_sets = ordered_source_sets(config);
+    let inventory = SourceSetInventory::new(config);
+    let ordered_source_sets = inventory.ordered_source_sets();
 
     let edt_analysis_by_name = if args.full_rebuild {
         None
     } else {
         Some(analyze_contexts_by_name(
-            &service,
-            &edt_contexts_by_name.values().cloned().collect::<Vec<_>>(),
+            &inventory,
+            inventory.edt_contexts(),
         ))
     };
 
@@ -401,11 +381,10 @@ pub(super) fn run_build_edt(
     let mut steps = Vec::new();
 
     for (index, source_set) in ordered_source_sets.iter().enumerate() {
-        let Some(edt_context) = edt_contexts_by_name.get(&source_set.name).cloned() else {
+        let Some(edt_context) = inventory.edt_context(&source_set.name).cloned() else {
             continue;
         };
-        let Some(designer_context) = designer_contexts_by_name.get(&source_set.name).cloned()
-        else {
+        let Some(designer_context) = inventory.designer_context(&source_set.name).cloned() else {
             continue;
         };
 

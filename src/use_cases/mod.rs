@@ -36,6 +36,8 @@ pub mod request;
 pub mod result;
 /// Test orchestration use case.
 pub mod run_tests;
+/// Read-only source-set runtime indexes shared by orchestrating use cases.
+pub(crate) mod source_inventory;
 /// Shared staged publication mechanics for full-replacement use-case outputs.
 mod staged_publication;
 /// Shared transport-neutral adapter helpers used by CLI and MCP boundaries.

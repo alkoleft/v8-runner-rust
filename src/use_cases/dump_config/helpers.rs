@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use tempfile::NamedTempFile;
 
-use crate::config::model::{AppConfig, BuilderBackend, SourceSetConfig, SourceSetPurpose};
+use crate::config::model::{AppConfig, BuilderBackend, SourceSetPurpose};
 use crate::domain::dump::{DumpMode, DumpResult};
 use crate::platform::designer::DesignerDsl;
 use crate::platform::ibcmd::{IbcmdConnection, IbcmdDsl, IbcmdError};
@@ -20,6 +20,7 @@ use crate::support::temp::{dump_object_list_file, platform_logs_dir};
 use crate::use_cases::context::{ExecutionContext, InterruptionSafetyClass};
 use crate::use_cases::ibcmd_diagnostics::format_ibcmd_failure_details;
 use crate::use_cases::interruption;
+use crate::use_cases::source_inventory::SourceSetInventory;
 
 use super::ResolvedDumpTarget;
 
@@ -160,20 +161,11 @@ fn cleanup_orphan_dirs_for(target_path: &Path, target_identity: &str) -> Result<
     Ok(())
 }
 
-pub(super) fn resolve_source_set_path(config: &AppConfig, source_set: &SourceSetConfig) -> PathBuf {
-    if source_set.path.is_absolute() {
-        source_set.path.clone()
-    } else {
-        config.base_path.join(&source_set.path)
-    }
-}
-
-pub(super) fn resolve_dump_edt_base_project_name(config: &AppConfig) -> Result<String, AppError> {
-    let configuration_source_sets = config
-        .source_sets
-        .iter()
-        .filter(|source_set| source_set.purpose == SourceSetPurpose::Configuration)
-        .collect::<Vec<_>>();
+pub(super) fn resolve_dump_edt_base_project_name(
+    inventory: &SourceSetInventory<'_>,
+) -> Result<String, AppError> {
+    let configuration_source_sets =
+        inventory.source_sets_with_purpose(SourceSetPurpose::Configuration);
     if configuration_source_sets.len() != 1 {
         let candidates = configuration_source_sets
             .iter()
@@ -186,7 +178,7 @@ pub(super) fn resolve_dump_edt_base_project_name(config: &AppConfig) -> Result<S
     }
 
     read_edt_project_name(
-        &resolve_source_set_path(config, configuration_source_sets[0]),
+        &inventory.source_path(configuration_source_sets[0]),
         &format!(
             "configuration source-set '{}'",
             configuration_source_sets[0].name

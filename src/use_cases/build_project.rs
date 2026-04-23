@@ -6,10 +6,7 @@ use std::time::Instant;
 
 use crate::change_detection::analyzer::{self, AnalysisOutcome};
 use crate::change_detection::partial_load;
-use crate::change_detection::source_sets::SourceSetsService;
-use crate::config::model::{
-    AppConfig, BuilderBackend, SourceFormat, SourceSetConfig, SourceSetPurpose,
-};
+use crate::config::model::{AppConfig, BuilderBackend, SourceFormat, SourceSetConfig};
 use crate::domain::build::{BuildMode, BuildResult};
 use crate::domain::source_set::SourceSetContext;
 use crate::platform::edt::EdtDsl;
@@ -23,11 +20,11 @@ use crate::support::error::AppError;
 use crate::support::temp::{partial_list_file, reserved_source_set_dir};
 use crate::use_cases::context::{ExecutionContext, InterruptionSafetyClass};
 use crate::use_cases::external_artifacts::{
-    discover_designer_external_artifacts, prepare_edt_external_artifacts, resolve_source_set_path,
-    source_set_external_kind,
+    discover_designer_external_artifacts, prepare_edt_external_artifacts, source_set_external_kind,
 };
 use crate::use_cases::request::BuildRequest as BuildArgs;
 use crate::use_cases::result::{UseCaseFailure, UseCaseResult};
+use crate::use_cases::source_inventory::SourceSetInventory;
 use tracing::debug;
 
 mod coordinator;
@@ -172,35 +169,14 @@ fn run_build_edt(
 }
 
 fn analyze_contexts_by_name(
-    service: &SourceSetsService<'_>,
+    inventory: &SourceSetInventory<'_>,
     contexts: &[SourceSetContext],
 ) -> HashMap<String, Result<AnalysisOutcome, analyzer::ChangeDetectionError>> {
-    service
+    inventory
         .analyze_contexts(contexts)
         .into_iter()
         .map(|analysis| (analysis.context.name().to_owned(), analysis.outcome))
         .collect()
-}
-
-fn ordered_source_sets(config: &AppConfig) -> Vec<&SourceSetConfig> {
-    let mut configuration = Vec::new();
-    let mut extensions = Vec::new();
-    let mut external_processors = Vec::new();
-    let mut external_reports = Vec::new();
-
-    for source_set in &config.source_sets {
-        match source_set.purpose {
-            SourceSetPurpose::Configuration => configuration.push(source_set),
-            SourceSetPurpose::Extension => extensions.push(source_set),
-            SourceSetPurpose::ExternalDataProcessors => external_processors.push(source_set),
-            SourceSetPurpose::ExternalReports => external_reports.push(source_set),
-        }
-    }
-
-    configuration.extend(extensions);
-    configuration.extend(external_processors);
-    configuration.extend(external_reports);
-    configuration
 }
 
 fn execute_edt_export_step(

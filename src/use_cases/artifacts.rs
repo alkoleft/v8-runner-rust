@@ -1,11 +1,9 @@
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use tracing::debug;
 
-use crate::change_detection::source_sets::SourceSetsService;
 use crate::config::model::{
     AppConfig, BuilderBackend, SourceFormat, SourceSetConfig, SourceSetPurpose,
 };
@@ -34,8 +32,8 @@ use crate::use_cases::context::{ExecutionContext, InterruptionSafetyClass};
 use crate::use_cases::dump_config::run_external_dump_designer;
 use crate::use_cases::extension_identity::platform_extension_name;
 use crate::use_cases::external_artifacts::{
-    discover_designer_external_artifacts, prepare_edt_external_artifacts, resolve_source_set_path,
-    sanitize_file_stem, source_set_external_kind, ExternalArtifactDescriptor,
+    discover_designer_external_artifacts, prepare_edt_external_artifacts, sanitize_file_stem,
+    source_set_external_kind, ExternalArtifactDescriptor,
 };
 use crate::use_cases::interruption::{
     command_interruption_details, command_interruption_status,
@@ -45,6 +43,7 @@ use crate::use_cases::interruption::{
 use crate::use_cases::progress::log_live_stage;
 use crate::use_cases::request::{ArtifactsModeRequest, ArtifactsRequest};
 use crate::use_cases::result::{UseCaseFailure, UseCaseResult};
+use crate::use_cases::source_inventory::SourceSetInventory;
 
 use super::staged_publication::{interruption_before_publish, StagedPublication};
 
@@ -618,23 +617,13 @@ fn resolve_target(
     args: &ArtifactsRequest,
 ) -> Result<ResolvedArtifactsTarget, AppError> {
     let output_path = validate_output_path(args)?;
-    let service = SourceSetsService::new(config);
-    let contexts_by_name: HashMap<String, PathBuf> = service
-        .designer_contexts()
-        .into_iter()
-        .map(|context| (context.name().to_owned(), context.path().to_path_buf()))
-        .collect();
-    let config_by_name: HashMap<String, &SourceSetConfig> = config
-        .source_sets
-        .iter()
-        .map(|source_set| (source_set.name.clone(), source_set))
-        .collect();
+    let inventory = SourceSetInventory::new(config);
 
     let (source_set, extension) = match args.mode {
         ArtifactsModeRequest::ConfigurationCf => {
             let source_set = match args.source_set.as_deref() {
                 Some(name) => {
-                    let source_set = config_by_name.get(name).copied().ok_or_else(|| {
+                    let source_set = inventory.source_set(name).ok_or_else(|| {
                         AppError::Validation(format!("unknown source-set '{name}'"))
                     })?;
                     if source_set.purpose != SourceSetPurpose::Configuration {
@@ -644,7 +633,7 @@ fn resolve_target(
                     }
                     source_set
                 }
-                None => resolve_single_configuration_source_set(config)?,
+                None => resolve_single_configuration_source_set(&inventory)?,
             };
             (source_set, None)
         }
@@ -661,12 +650,9 @@ fn resolve_target(
                 })?;
 
             if let Some(source_set_name) = args.source_set.as_deref() {
-                let source_set = config_by_name
-                    .get(source_set_name)
-                    .copied()
-                    .ok_or_else(|| {
-                        AppError::Validation(format!("unknown source-set '{source_set_name}'"))
-                    })?;
+                let source_set = inventory.source_set(source_set_name).ok_or_else(|| {
+                    AppError::Validation(format!("unknown source-set '{source_set_name}'"))
+                })?;
                 if source_set.purpose != SourceSetPurpose::Extension {
                     return Err(AppError::Validation(format!(
                         "source-set '{source_set_name}' is not an extension source-set"
@@ -680,20 +666,18 @@ fn resolve_target(
                 }
                 (source_set, Some(requested_extension.to_owned()))
             } else {
-                let candidates = config
-                    .source_sets
-                    .iter()
-                    .filter(|source_set| source_set.purpose == SourceSetPurpose::Extension)
+                let candidates = inventory
+                    .source_sets_with_purpose(SourceSetPurpose::Extension)
+                    .into_iter()
                     .filter_map(|source_set| {
                         let resolved_name = platform_extension_name(source_set);
                         (resolved_name == requested_extension).then_some(source_set)
                     })
                     .collect::<Vec<_>>();
                 if candidates.is_empty() {
-                    let available = config
-                        .source_sets
-                        .iter()
-                        .filter(|source_set| source_set.purpose == SourceSetPurpose::Extension)
+                    let available = inventory
+                        .source_sets_with_purpose(SourceSetPurpose::Extension)
+                        .into_iter()
                         .map(|source_set| {
                             format!(
                                 "{}=>{}",
@@ -730,12 +714,9 @@ fn resolve_target(
             let source_set_name = args.source_set.as_deref().ok_or_else(|| {
                 AppError::Validation("external artifacts export requires --source-set".to_owned())
             })?;
-            let source_set = config_by_name
-                .get(source_set_name)
-                .copied()
-                .ok_or_else(|| {
-                    AppError::Validation(format!("unknown source-set '{source_set_name}'"))
-                })?;
+            let source_set = inventory.source_set(source_set_name).ok_or_else(|| {
+                AppError::Validation(format!("unknown source-set '{source_set_name}'"))
+            })?;
             let expected_purpose = match args.mode {
                 ArtifactsModeRequest::ExternalDataProcessorEpf => {
                     SourceSetPurpose::ExternalDataProcessors
@@ -752,12 +733,14 @@ fn resolve_target(
         }
     };
 
-    let _runtime_context = contexts_by_name.get(&source_set.name).ok_or_else(|| {
-        AppError::Runtime(format!(
-            "missing runtime context for source-set '{}'",
-            source_set.name
-        ))
-    })?;
+    let _runtime_context = inventory
+        .designer_context(&source_set.name)
+        .ok_or_else(|| {
+            AppError::Runtime(format!(
+                "missing runtime context for source-set '{}'",
+                source_set.name
+            ))
+        })?;
 
     let canonical_output_path = nearest_existing_canonical_path(&output_path).map_err(|error| {
         AppError::Runtime(format!("failed to canonicalize output path: {error}"))
@@ -776,7 +759,7 @@ fn resolve_target(
         source_set_name: source_set.name.clone(),
         extension,
         output_path,
-        source_path: resolve_source_set_path(config, source_set),
+        source_path: inventory.source_path(source_set),
         is_directory_output: matches!(
             args.mode,
             ArtifactsModeRequest::ExternalDataProcessorEpf
@@ -849,14 +832,11 @@ fn validate_output_path(args: &ArtifactsRequest) -> Result<PathBuf, AppError> {
     Ok(output_path)
 }
 
-fn resolve_single_configuration_source_set(
-    config: &AppConfig,
-) -> Result<&SourceSetConfig, AppError> {
-    let configuration_source_sets = config
-        .source_sets
-        .iter()
-        .filter(|source_set| source_set.purpose == SourceSetPurpose::Configuration)
-        .collect::<Vec<_>>();
+fn resolve_single_configuration_source_set<'a>(
+    inventory: &SourceSetInventory<'a>,
+) -> Result<&'a SourceSetConfig, AppError> {
+    let configuration_source_sets =
+        inventory.source_sets_with_purpose(SourceSetPurpose::Configuration);
     if configuration_source_sets.len() != 1 {
         let candidates = configuration_source_sets
             .iter()

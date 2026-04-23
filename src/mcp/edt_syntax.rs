@@ -4,7 +4,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tokio_util::sync::CancellationToken;
 
-use crate::change_detection::source_sets::SourceSetsService;
 use crate::config::model::{AppConfig, BuilderBackend, SourceFormat, SourceSetConfig};
 use crate::domain::issue::{EdtIssue, Issue, IssueSeverity};
 use crate::domain::syntax::{SyntaxCheckResult, SyntaxCheckStatus, SyntaxIssueSummary};
@@ -15,6 +14,7 @@ use crate::support::error::AppError;
 use crate::support::temp::platform_logs_dir;
 use crate::use_cases::request::{SyntaxRequest, SyntaxTargetRequest};
 use crate::use_cases::result::{UseCaseFailure, UseCaseResult};
+use crate::use_cases::source_inventory::SourceSetInventory;
 
 const SUPPORTED_EDT_SYNTAX_ERROR: &str =
     "syntax edt currently supports only builder=DESIGNER and format=EDT";
@@ -73,7 +73,8 @@ pub async fn execute(
         )));
     }
 
-    let source_sets = match resolve_edt_source_sets(config, projects) {
+    let inventory = SourceSetInventory::new(config);
+    let source_sets = match resolve_edt_source_sets(&inventory, projects) {
         Ok(source_sets) => source_sets,
         Err(error) => {
             let error_message = error.to_string();
@@ -127,7 +128,7 @@ pub async fn execute(
     let single_source_set = source_sets.len() == 1;
 
     for source_set in source_sets {
-        let source_path = resolve_source_set_path(config, source_set);
+        let source_path = inventory.source_path(source_set);
         let log_path = unique_log_path(
             &log_dir,
             &format!("edt_{}", source_set.name.replace(' ', "_")),
@@ -301,26 +302,24 @@ pub async fn execute(
 type SyntaxExecutionFailure = UseCaseFailure<SyntaxCheckResult>;
 
 fn resolve_edt_source_sets<'a>(
-    config: &'a AppConfig,
+    inventory: &SourceSetInventory<'a>,
     projects: &[String],
 ) -> Result<Vec<&'a SourceSetConfig>, AppError> {
-    let service = SourceSetsService::new(config);
-    let contexts = service.edt_contexts();
-    if contexts.is_empty() {
+    if !inventory.has_edt_contexts() {
         return Err(AppError::Validation(
             "syntax edt requires at least one source-set".to_owned(),
         ));
     }
 
     if projects.is_empty() {
-        return Ok(config.source_sets.iter().collect());
+        return Ok(inventory.source_sets());
     }
 
     let mut selected = Vec::new();
     let mut unknown = Vec::new();
 
     for project in projects {
-        if let Some(source_set) = config.source_sets.iter().find(|ss| ss.name == *project) {
+        if let Some(source_set) = inventory.source_set(project) {
             selected.push(source_set);
         } else {
             unknown.push(project.clone());
@@ -335,14 +334,6 @@ fn resolve_edt_source_sets<'a>(
     }
 
     Ok(selected)
-}
-
-fn resolve_source_set_path(config: &AppConfig, source_set: &SourceSetConfig) -> PathBuf {
-    if source_set.path.is_absolute() {
-        source_set.path.clone()
-    } else {
-        config.base_path.join(&source_set.path)
-    }
 }
 
 fn unique_log_path(dir: &Path, check_name: &str) -> PathBuf {

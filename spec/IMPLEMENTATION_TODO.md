@@ -232,8 +232,17 @@ Detailed ADR task decomposition remains in [ADR_DERIVED_BACKLOG.md](ADR_DERIVED_
   tests, CLI build tests, full locked test run, reviewer, separate Rust expert, and final
   completeness subagent gates passed.
 
-- [ ] `ADR-TASK-030`: Add a read-only source-set runtime inventory/index for use-case orchestration.
+- [x] `ADR-TASK-030`: Add a read-only source-set runtime inventory/index for use-case orchestration.
   `build`, `dump`, `artifacts`, and syntax paths still rebuild `SourceSetsService` contexts,
   `contexts_by_name`, `config_by_name`, and single-configuration/extension lookup rules locally.
   Provide a shared inventory helper that preserves source-set identity, validation-boundary
   responsibilities, and the current CLI/MCP public contracts.
+  Completed `2026-04-23`: read-only source-set runtime inventory now lives in
+  `src/use_cases/source_inventory.rs` and centralizes source-set name/purpose lookup, ordered
+  source-set traversal, source-path resolution, Designer runtime contexts, EDT runtime contexts,
+  and context analysis access. `build`, `dump`, `artifacts`, CLI EDT syntax, and MCP shared EDT
+  syntax use the inventory instead of rebuilding local `SourceSetsService` context maps and
+  `config_by_name` scaffolding, while preserving use-case-local validation/error wording and public
+  CLI/MCP contracts. Regression coverage includes inventory unit tests, targeted
+  build/dump/artifacts/syntax/MCP stdio checks, full `cargo test --locked --quiet`, reviewer gates,
+  and a separate Rust expert pass after fixing the borrowed-slice finding.

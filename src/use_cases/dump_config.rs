@@ -1,14 +1,9 @@
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::change_detection::source_sets::SourceSetsService;
-use crate::config::model::{
-    AppConfig, BuilderBackend, SourceFormat, SourceSetConfig, SourceSetPurpose,
-};
+use crate::config::model::{AppConfig, BuilderBackend, SourceFormat, SourceSetPurpose};
 use crate::domain::dump::{DumpMode, DumpResult};
-use crate::domain::source_set::SourceSetContext;
 use crate::platform::designer::DesignerDsl;
 use crate::platform::edt::EdtDsl;
 use crate::platform::edt_session::{EdtSessionHostOptions, EdtSessionManager};
@@ -40,15 +35,15 @@ use self::helpers::{
     build_designer_dsl, build_ibcmd_dsl, cleanup_orphan_dirs, cleanup_platform_orphan_dirs,
     create_dump_object_list_file, decorate_ibcmd_partial_error, dump_publication_warning,
     empty_result, ensure_platform_success, ibcmd_partial_warning, map_ibcmd_error,
-    merge_optional_messages, resolve_dump_edt_base_project_name, resolve_source_set_path,
-    validate_dump_objects, validate_platform_target, validate_publish_target,
-    validate_supported_matrix,
+    merge_optional_messages, resolve_dump_edt_base_project_name, validate_dump_objects,
+    validate_platform_target, validate_publish_target, validate_supported_matrix,
 };
 #[cfg(test)]
 use super::staged_publication::cleanup_staging_path;
 use super::staged_publication::{interruption_before_publish, StagedPublication};
 #[cfg(test)]
 use crate::support::fs::metadata_sidecar_path;
+use crate::use_cases::source_inventory::SourceSetInventory;
 
 #[cfg(test)]
 const DUMP_COMMAND: &str = crate::use_cases::context::CommandName::Dump.as_str();
@@ -831,26 +826,13 @@ fn cleanup_staging_on_interruption(staging_dir: &Path, error: AppError) -> AppEr
 }
 
 fn resolve_target(config: &AppConfig, args: &DumpArgs) -> Result<ResolvedDumpTarget, AppError> {
-    let service = SourceSetsService::new(config);
-    let designer_contexts_by_name: HashMap<String, SourceSetContext> = service
-        .designer_contexts()
-        .into_iter()
-        .map(|context| (context.name().to_owned(), context))
-        .collect();
-    let config_by_name: HashMap<String, &SourceSetConfig> = config
-        .source_sets
-        .iter()
-        .map(|source_set| (source_set.name.clone(), source_set))
-        .collect();
+    let inventory = SourceSetInventory::new(config);
 
     let (source_set, extension) = match (args.source_set.as_deref(), args.extension.as_deref()) {
         (Some(source_set_name), None) => {
-            let source_set = config_by_name
-                .get(source_set_name)
-                .copied()
-                .ok_or_else(|| {
-                    AppError::Validation(format!("unknown source-set '{source_set_name}'"))
-                })?;
+            let source_set = inventory.source_set(source_set_name).ok_or_else(|| {
+                AppError::Validation(format!("unknown source-set '{source_set_name}'"))
+            })?;
             if source_set.purpose != SourceSetPurpose::Configuration {
                 return Err(AppError::Validation(format!(
                     "source-set '{source_set_name}' is an extension and requires --extension"
@@ -859,7 +841,7 @@ fn resolve_target(config: &AppConfig, args: &DumpArgs) -> Result<ResolvedDumpTar
             (source_set, None)
         }
         (None, Some(extension_name)) => {
-            let source_set = config_by_name.get(extension_name).copied().ok_or_else(|| {
+            let source_set = inventory.source_set(extension_name).ok_or_else(|| {
                 AppError::Validation(format!("unknown extension '{extension_name}'"))
             })?;
             if source_set.purpose != SourceSetPurpose::Extension {
@@ -875,12 +857,9 @@ fn resolve_target(config: &AppConfig, args: &DumpArgs) -> Result<ResolvedDumpTar
                     "--source-set '{source_set_name}' does not match --extension '{extension_name}'"
                 )));
             }
-            let source_set = config_by_name
-                .get(source_set_name)
-                .copied()
-                .ok_or_else(|| {
-                    AppError::Validation(format!("unknown extension '{extension_name}'"))
-                })?;
+            let source_set = inventory.source_set(source_set_name).ok_or_else(|| {
+                AppError::Validation(format!("unknown extension '{extension_name}'"))
+            })?;
             if source_set.purpose != SourceSetPurpose::Extension {
                 return Err(AppError::Validation(format!(
                     "source-set '{source_set_name}' is not an extension source-set"
@@ -889,11 +868,8 @@ fn resolve_target(config: &AppConfig, args: &DumpArgs) -> Result<ResolvedDumpTar
             (source_set, Some(extension_name.to_owned()))
         }
         (None, None) => {
-            let configuration_source_sets = config
-                .source_sets
-                .iter()
-                .filter(|source_set| source_set.purpose == SourceSetPurpose::Configuration)
-                .collect::<Vec<_>>();
+            let configuration_source_sets =
+                inventory.source_sets_with_purpose(SourceSetPurpose::Configuration);
             if configuration_source_sets.len() != 1 {
                 let candidates = configuration_source_sets
                     .iter()
@@ -908,11 +884,10 @@ fn resolve_target(config: &AppConfig, args: &DumpArgs) -> Result<ResolvedDumpTar
         }
     };
 
-    let target_path = resolve_source_set_path(config, source_set);
+    let target_path = inventory.source_path(source_set);
     let platform_target_path = if config.format == SourceFormat::Edt {
-        designer_contexts_by_name
-            .get(&source_set.name)
-            .cloned()
+        inventory
+            .designer_context(&source_set.name)
             .ok_or_else(|| {
                 AppError::Runtime(format!(
                     "missing designer runtime context for source-set '{}'",
@@ -948,7 +923,7 @@ fn resolve_target(config: &AppConfig, args: &DumpArgs) -> Result<ResolvedDumpTar
     let edt_base_project_name = if config.format == SourceFormat::Edt
         && source_set.purpose == SourceSetPurpose::Extension
     {
-        Some(resolve_dump_edt_base_project_name(config)?)
+        Some(resolve_dump_edt_base_project_name(&inventory)?)
     } else {
         None
     };
