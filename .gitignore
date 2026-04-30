@@ -33,3 +33,5 @@ kotlin-example/
 1cv8/
 ai-artefacts/
 references/
+!SKILL/references/
+!SKILL/references/**
