@@ -861,6 +861,7 @@ mod tests {
                     command_timeout_ms: 200,
                     ..Default::default()
                 },
+                ..Default::default()
             },
             mcp: Default::default(),
             tests: TestsConfig::default(),

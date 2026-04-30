@@ -254,6 +254,12 @@ pub struct ToolsConfig {
 
     #[serde(rename = "edt_cli", alias = "edt-cli", default)]
     pub edt_cli: EdtCliConfig,
+
+    #[serde(default)]
+    pub client_mcp: ClientMcpToolConfig,
+
+    #[serde(default)]
+    pub va: VanessaToolConfig,
 }
 
 /// MCP transport-neutral runtime configuration.
@@ -265,9 +271,6 @@ pub struct McpConfig {
 
     /// Shared execution limits for MCP calls.
     pub execution: McpExecutionConfig,
-
-    /// Client-side MCP launcher settings.
-    pub client: McpClientConfig,
 }
 
 impl Default for McpConfig {
@@ -275,17 +278,22 @@ impl Default for McpConfig {
         Self {
             http: McpHttpConfig::default(),
             execution: McpExecutionConfig::default(),
-            client: McpClientConfig::default(),
         }
     }
 }
 
-/// Client-side MCP launcher configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default, rename_all = "snake_case")]
-pub struct McpClientConfig {
+pub struct ClientMcpToolConfig {
     /// Default port passed to onec-client-mcp-devkit via `/C"...;mcpPort=<PORT>"`.
     pub port: Option<u16>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default, rename_all = "snake_case")]
+pub struct VanessaToolConfig {
+    /// Path to the Vanessa Automation external data processor used by `test va` and `launch mcp va`.
+    pub epf_path: Option<PathBuf>,
 }
 
 /// HTTP-specific MCP configuration.
@@ -372,7 +380,6 @@ pub struct YaxunitTestConfig {
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default, rename_all = "snake_case")]
 pub struct VanessaTestConfig {
-    pub epf_path: Option<PathBuf>,
     pub params_path: Option<PathBuf>,
     pub profile: Option<String>,
     pub fail_fast: bool,
@@ -382,10 +389,7 @@ pub struct VanessaTestConfig {
 
 impl VanessaTestConfig {
     pub fn is_configured(&self) -> bool {
-        self.epf_path.is_some()
-            || self.params_path.is_some()
-            || self.profile.is_some()
-            || !self.profiles.is_empty()
+        self.params_path.is_some() || self.profile.is_some() || !self.profiles.is_empty()
     }
 }
 

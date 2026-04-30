@@ -973,6 +973,7 @@ mod tests {
                 },
                 enterprise: Default::default(),
                 edt_cli: Default::default(),
+                ..Default::default()
             },
             mcp: Default::default(),
             tests: TestsConfig::default(),

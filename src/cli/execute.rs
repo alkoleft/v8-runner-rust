@@ -805,10 +805,10 @@ fn build_vanessa_execution(
             format!("tests.va.profile contains unsafe path characters: {profile_id}"),
         ));
     }
-    if config.tests.va.epf_path.is_none() {
+    if config.tools.va.epf_path.is_none() {
         return Err(UseCaseError::new(
             UseCaseErrorKind::Validation,
-            "tests.va.epf_path is not configured",
+            "tools.va.epf_path is not configured",
         ));
     }
     if config.tests.va.params_path.is_none() {
@@ -2266,7 +2266,7 @@ mod tests {
 
         let mut config = sample_config(work.path());
         config.base_path = base;
-        config.tests.va.epf_path = Some(epf);
+        config.tools.va.epf_path = Some(epf);
         config.tests.va.params_path = Some(params);
         config.tests.va.profile = Some("smoke".to_owned());
         config.tests.va.profiles.insert(

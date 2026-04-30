@@ -1126,6 +1126,7 @@ mod tests {
                 },
                 enterprise: Default::default(),
                 edt_cli: Default::default(),
+                ..Default::default()
             },
             mcp: Default::default(),
             tests: TestsConfig::default(),
@@ -1161,6 +1162,7 @@ mod tests {
                     auto_start: false,
                     ..Default::default()
                 },
+                ..Default::default()
             },
             mcp: Default::default(),
             tests: TestsConfig::default(),

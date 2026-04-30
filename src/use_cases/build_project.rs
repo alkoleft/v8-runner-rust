@@ -879,6 +879,7 @@ mod tests {
                     auto_start: false,
                     ..Default::default()
                 },
+                ..Default::default()
             },
             mcp: Default::default(),
             tests: TestsConfig::default(),

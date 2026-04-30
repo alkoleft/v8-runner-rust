@@ -174,10 +174,10 @@ fn prepare_vanessa_run(
     artifacts: &mut RunArtifacts,
 ) -> Result<PreparedRun, AppError> {
     let va = &config.tests.va;
-    let epf_path = va
-        .epf_path
-        .clone()
-        .ok_or_else(|| AppError::Validation("tests.va.epf_path is not configured".to_owned()))?;
+    let epf_path =
+        config.tools.va.epf_path.clone().ok_or_else(|| {
+            AppError::Validation("tools.va.epf_path is not configured".to_owned())
+        })?;
     let params_path = va
         .params_path
         .as_ref()
@@ -748,7 +748,7 @@ mod tests {
         std::fs::write(&params, "{}").expect("params");
         std::fs::create_dir_all(&feature).expect("feature dir");
 
-        config.tests.va.epf_path = Some(epf);
+        config.tools.va.epf_path = Some(epf);
         config.tests.va.params_path = Some(params);
         config.tests.va.profile = Some("bad/name".to_owned());
         config.tests.va.profiles.insert(

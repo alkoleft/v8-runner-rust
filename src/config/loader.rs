@@ -30,7 +30,7 @@ pub fn load_config(
     let path = normalize_windows_verbatim_path(&std::fs::canonicalize(&path)?);
     let content = std::fs::read_to_string(&path)?;
     let root: serde_yaml::Value = serde_yaml::from_str(&content)?;
-    reject_legacy_top_level_keys(&root)?;
+    reject_legacy_config_keys(&root)?;
     let mut config: AppConfig = serde_yaml::from_str(&content)?;
     normalize_config_paths(&mut config, path.parent().unwrap_or_else(|| Path::new(".")));
 
@@ -51,10 +51,10 @@ fn normalize_config_paths(config: &mut AppConfig, config_dir: &Path) {
     config.infobase.connection =
         normalize_connection_string(&config.infobase.connection, config_dir);
 
-    let va = &mut config.tests.va;
-    if let Some(path) = va.epf_path.as_mut() {
+    if let Some(path) = config.tools.va.epf_path.as_mut() {
         *path = normalize_optional_path(path, config_dir);
     }
+    let va = &mut config.tests.va;
     if let Some(path) = va.params_path.as_mut() {
         *path = normalize_optional_path(path, config_dir);
     }
@@ -65,22 +65,46 @@ fn normalize_config_paths(config: &mut AppConfig, config_dir: &Path) {
     }
 }
 
-fn reject_legacy_top_level_keys(root: &serde_yaml::Value) -> Result<(), ConfigValidationError> {
+fn reject_legacy_config_keys(root: &serde_yaml::Value) -> Result<(), ConfigValidationError> {
     let Some(mapping) = root.as_mapping() else {
         return Err(ConfigValidationError::InvalidYamlRoot(
             "expected a YAML mapping at the document root".to_owned(),
         ));
     };
 
-    if mapping.contains_key(serde_yaml::Value::String("connection".to_owned())) {
+    if mapping_contains_key(mapping, "connection") {
         return Err(ConfigValidationError::LegacyTopLevelConnection);
     }
 
-    if mapping.contains_key(serde_yaml::Value::String("credentials".to_owned())) {
+    if mapping_contains_key(mapping, "credentials") {
         return Err(ConfigValidationError::LegacyTopLevelCredentials);
     }
 
+    if let Some(mcp) = mapping
+        .get(serde_yaml::Value::String("mcp".to_owned()))
+        .and_then(serde_yaml::Value::as_mapping)
+    {
+        if mapping_contains_key(mcp, "client") {
+            return Err(ConfigValidationError::LegacyMcpClientConfig);
+        }
+    }
+
+    if let Some(va) = mapping
+        .get(serde_yaml::Value::String("tests".to_owned()))
+        .and_then(serde_yaml::Value::as_mapping)
+        .and_then(|tests| tests.get(serde_yaml::Value::String("va".to_owned())))
+        .and_then(serde_yaml::Value::as_mapping)
+    {
+        if mapping_contains_key(va, "epf_path") {
+            return Err(ConfigValidationError::LegacyVanessaEpfPath);
+        }
+    }
+
     Ok(())
+}
+
+fn mapping_contains_key(mapping: &serde_yaml::Mapping, key: &str) -> bool {
+    mapping.contains_key(serde_yaml::Value::String(key.to_owned()))
 }
 
 fn normalize_optional_path(path: &Path, config_dir: &Path) -> PathBuf {
@@ -370,7 +394,7 @@ mod tests {
         std::fs::write(
             &config_path,
             format!(
-                "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: \"File=/tmp/ib\"\ntests:\n  va:\n    epf_path: va/runner.epf\n    params_path: va/params.json\n    profile: smoke\n    profiles:\n      smoke:\n        feature_path: features\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: src\n",
+                "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: \"File=/tmp/ib\"\ntools:\n  va:\n    epf_path: va/runner.epf\ntests:\n  va:\n    params_path: va/params.json\n    profile: smoke\n    profiles:\n      smoke:\n        feature_path: features\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: src\n",
                 base.display(),
                 work.display()
             ),
@@ -380,7 +404,7 @@ mod tests {
         let config = load_config(config_path.to_str(), None).expect("load config");
 
         assert_eq!(
-            config.tests.va.epf_path.expect("epf"),
+            config.tools.va.epf_path.expect("epf"),
             config_dir.join("va/runner.epf")
         );
         assert_eq!(
@@ -466,6 +490,52 @@ mod tests {
     }
 
     #[test]
+    fn load_config_rejects_legacy_mcp_client_section() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).expect("src dir");
+        let config_path = dir.path().join("v8project.yaml");
+        std::fs::write(
+            &config_path,
+            format!(
+                "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: \"File=/tmp/ib\"\nmcp:\n  client:\n    port: 9874\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: src\n",
+                base.display(),
+                work.display()
+            ),
+        )
+        .expect("write config");
+
+        let error = load_config(config_path.to_str(), None).expect_err("reject legacy mcp client");
+
+        assert!(error.to_string().contains("use tools.client_mcp"));
+    }
+
+    #[test]
+    fn load_config_rejects_legacy_tests_va_epf_path() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).expect("src dir");
+        let config_path = dir.path().join("v8project.yaml");
+        std::fs::write(
+            &config_path,
+            format!(
+                "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: \"File=/tmp/ib\"\ntests:\n  va:\n    epf_path: /tmp/vanessa.epf\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: src\n",
+                base.display(),
+                work.display()
+            ),
+        )
+        .expect("write config");
+
+        let error = load_config(config_path.to_str(), None).expect_err("reject legacy va epf");
+
+        assert!(error.to_string().contains("use tools.va.epf_path"));
+    }
+
+    #[test]
     fn load_config_rejects_mixed_new_and_legacy_infobase_keys() {
         let dir = tempdir().expect("tempdir");
         let base = dir.path().join("base");
@@ -522,7 +592,7 @@ mod tests {
         std::fs::write(
             &config_path,
             format!(
-                "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: \"File=/tmp/ib\"\nmcp:\n  http:\n    bind_address: 127.0.0.1:4000\n    path: /custom-mcp\n    stateful_sessions: false\n    max_sessions: 12\n    idle_ttl_secs: 45\n  execution:\n    max_concurrent_calls: 3\n    shutdown_grace_period_secs: 9\n  client:\n    port: 9874\ntools:\n  enterprise:\n    additional-launch-keys:\n      - /TESTMANAGER\n  edt_cli:\n    interactive-mode: true\n    startup_timeout_ms: 1234\n    command_timeout_ms: 5678\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: src\n",
+                "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: \"File=/tmp/ib\"\nmcp:\n  http:\n    bind_address: 127.0.0.1:4000\n    path: /custom-mcp\n    stateful_sessions: false\n    max_sessions: 12\n    idle_ttl_secs: 45\n  execution:\n    max_concurrent_calls: 3\n    shutdown_grace_period_secs: 9\ntools:\n  client_mcp:\n    port: 9874\n  enterprise:\n    additional-launch-keys:\n      - /TESTMANAGER\n  edt_cli:\n    interactive-mode: true\n    startup_timeout_ms: 1234\n    command_timeout_ms: 5678\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: src\n",
                 base.display(),
                 work.display()
             ),
@@ -538,7 +608,7 @@ mod tests {
         assert_eq!(config.mcp.http.idle_ttl_secs, 45);
         assert_eq!(config.mcp.execution.max_concurrent_calls, 3);
         assert_eq!(config.mcp.execution.shutdown_grace_period_secs, 9);
-        assert_eq!(config.mcp.client.port, Some(9874));
+        assert_eq!(config.tools.client_mcp.port, Some(9874));
         assert_eq!(
             config.tools.enterprise.additional_launch_keys,
             vec!["/TESTMANAGER".to_owned()]

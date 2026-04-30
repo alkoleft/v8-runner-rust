@@ -90,6 +90,10 @@ build:
   partialLoadThreshold: 20
 
 tools:
+  client_mcp:
+    port: 9874
+  va:
+    epf_path: /path/to/vanessa.epf
   platform:
     path: /opt/1cv8/x86_64
     version: 8.3.27.1859
@@ -114,8 +118,6 @@ mcp:
   execution:
     max_concurrent_calls: 1
     shutdown_grace_period_secs: 30
-  client:
-    port: 9874
 
 tests:
   execution_timeout_seconds: 300
@@ -123,7 +125,6 @@ tests:
     timeouts:
       total_ms: 300000
   va:
-    epf_path: /path/to/vanessa.epf
     params_path: /path/to/va-params.json
     profile: smoke
     fail_fast: true
@@ -290,7 +291,6 @@ runtime identity и не добавляет отдельное поле конф
 
 Поддержанные поля:
 
-- `epf_path`
 - `params_path`
 - `profile`
 - `fail_fast`
@@ -303,7 +303,7 @@ runtime identity и не добавляет отдельное поле конф
 
 Для Vanessa Automation обязательны:
 
-- `tests.va.epf_path`
+- `tools.va.epf_path`
 - `tests.va.params_path`
 - `tests.va.profile`
 - `tests.va.profiles.<name>.feature_path`
@@ -328,7 +328,7 @@ runtime identity и не добавляет отдельное поле конф
 - `max_concurrent_calls`, по умолчанию `1`
 - `shutdown_grace_period_secs`, по умолчанию `30`
 
-### `mcp.client`
+### `tools.client_mcp`
 
 Поддержанные поля:
 
@@ -336,6 +336,12 @@ runtime identity и не добавляет отдельное поле конф
 
 `launch mcp` передаёт это значение как `mcpPort` внутри `/C"runMcp..."`
 если CLI не указал `--mcp-port`.
+
+### `tools.va`
+
+Поддержанные поля:
+
+- `epf_path`, путь к внешней обработке Vanessa Automation.
 
 ## `tools.platform`
 

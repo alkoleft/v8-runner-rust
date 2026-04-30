@@ -225,11 +225,11 @@ v8-runner launch mcp [va] [--mode <thin|thick|ordinary>] [FLAGS]
 - `launch mcp` по умолчанию использует `--mode thin` и `1cv8c`.
 - `launch mcp --mode thick` использует `1cv8`; `launch mcp --mode ordinary` использует `1cv8`
   и добавляет `/RunModeOrdinaryApplication`.
-- `launch mcp va` дополнительно запускает Vanessa Automation из `tests.va` через `/Execute <epf>`
+- `launch mcp va` дополнительно запускает Vanessa Automation из `tools.va` через `/Execute <epf>`
   и `StartFeaturePlayer;VAParams=<runtime params>`.
 - Для `mcp` доступны typed flags `--mcp-config <FILE>` и `--mcp-port <PORT>`;
   итоговый payload: `/C"runMcp[=<FILE>][;mcpPort=<PORT>]"`.
-- Если `--mcp-port` не указан, используется `mcp.client.port` из `v8project.yaml`.
+- Если `--mcp-port` не указан, используется `tools.client_mcp.port` из `v8project.yaml`.
 - `--mcp-config` не должен содержать `;`, потому что `/C` payload разделяется точкой с запятой.
 - `launch mcp` не принимает `--c` и `--execute`, потому что `/C` управляется командой.
 - `launch mcp` принимает общие launch flags `--use-privileged-mode`, `--output` и `--raw-key`, но

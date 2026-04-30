@@ -59,6 +59,12 @@ pub enum ConfigValidationError {
     #[error("legacy top-level key 'credentials' is not supported; use infobase.user/password")]
     LegacyTopLevelCredentials,
 
+    #[error("legacy key 'mcp.client' is not supported; use tools.client_mcp")]
+    LegacyMcpClientConfig,
+
+    #[error("legacy key 'tests.va.epf_path' is not supported; use tools.va.epf_path")]
+    LegacyVanessaEpfPath,
+
     #[error("infobase.dbms is not allowed for file-based infobase.connection")]
     DbmsNotAllowedForFileConnection,
 
@@ -101,7 +107,7 @@ pub enum ConfigValidationError {
     #[error("tests.yaxunit.timeouts.{0} must be greater than or equal to 1")]
     InvalidYaxunitTimeout(&'static str),
 
-    #[error("tests.va.epf_path is required when Vanessa Automation is configured")]
+    #[error("tools.va.epf_path is required when Vanessa Automation is configured")]
     MissingVanessaEpfPath,
 
     #[error("tests.va.params_path is required when Vanessa Automation is configured")]
@@ -113,7 +119,7 @@ pub enum ConfigValidationError {
     #[error("tests.va.profile references unknown profile '{0}'")]
     UnknownVanessaProfile(String),
 
-    #[error("tests.va.epf_path does not exist: {0}")]
+    #[error("tools.va.epf_path does not exist: {0}")]
     VanessaEpfPathInvalid(String),
 
     #[error("tests.va.params_path does not exist: {0}")]
@@ -146,7 +152,7 @@ pub enum ConfigValidationError {
     #[error("mcp.execution.shutdown_grace_period_secs must be greater than or equal to 1")]
     InvalidMcpShutdownGracePeriodSecs,
 
-    #[error("mcp.client.port must be greater than or equal to 1")]
+    #[error("tools.client_mcp.port must be greater than or equal to 1")]
     InvalidMcpClientPort,
 
     #[error("tools.edt_cli.startup_timeout_ms must be greater than or equal to 1")]
@@ -662,7 +668,9 @@ fn validate_test_config(config: &AppConfig) -> Result<(), ConfigValidationError>
         return Ok(());
     }
 
-    let epf_path = va
+    let epf_path = config
+        .tools
+        .va
         .epf_path
         .as_ref()
         .ok_or(ConfigValidationError::MissingVanessaEpfPath)?;
@@ -776,7 +784,7 @@ fn validate_mcp_config(config: &AppConfig) -> Result<(), ConfigValidationError> 
         return Err(ConfigValidationError::InvalidMcpShutdownGracePeriodSecs);
     }
 
-    if config.mcp.client.port == Some(0) {
+    if config.tools.client_mcp.port == Some(0) {
         return Err(ConfigValidationError::InvalidMcpClientPort);
     }
 
@@ -2221,7 +2229,7 @@ mod tests {
         ));
 
         config.mcp.execution.max_concurrent_calls = 1;
-        config.mcp.client.port = Some(0);
+        config.tools.client_mcp.port = Some(0);
         let err = validate(&config).expect_err("expected invalid MCP client port");
         assert!(matches!(err, ConfigValidationError::InvalidMcpClientPort));
     }
@@ -2301,7 +2309,7 @@ mod tests {
             mcp: Default::default(),
             tests: TestsConfig::default(),
         };
-        config.tests.va.epf_path = Some(epf);
+        config.tools.va.epf_path = Some(epf);
         config.tests.va.params_path = Some(params);
         config.tests.va.profile = Some("smoke".to_owned());
 
@@ -2345,7 +2353,7 @@ mod tests {
             mcp: Default::default(),
             tests: TestsConfig::default(),
         };
-        config.tests.va.epf_path = Some(epf);
+        config.tools.va.epf_path = Some(epf);
         config.tests.va.params_path = Some(params);
         config.tests.va.profile = Some("bad/name".to_owned());
         config.tests.va.profiles.insert(
@@ -2396,7 +2404,7 @@ mod tests {
             mcp: Default::default(),
             tests: TestsConfig::default(),
         };
-        config.tests.va.epf_path = Some(epf);
+        config.tools.va.epf_path = Some(epf);
         config.tests.va.params_path = Some(params);
         config.tests.va.profile = Some("smoke".to_owned());
         config.tests.va.timeouts.total_ms = Some(0);

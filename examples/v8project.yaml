@@ -60,6 +60,10 @@ tools:
   enterprise:
     additional-launch-keys:
       - /TESTMANAGER
+  client_mcp:
+    port: 9874
+  va:
+    epf_path: /path/to/vanessa.epf
 
 tests:
   execution_timeout_seconds: 300
@@ -67,7 +71,6 @@ tests:
     timeouts:
       total_ms: 300000
   va:
-    epf_path: /path/to/vanessa.epf
     params_path: /path/to/va-params.json
     profile: smoke
     fail_fast: true

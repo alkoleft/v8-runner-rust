@@ -11,7 +11,6 @@ infobase:
 tests:
   execution_timeout_seconds: 300
   va:
-    epf_path: __VANESSA_EPF__
     params_path: __VANESSA_PARAMS_TEMPLATE__
     profile: smoke
     fail_fast: true
@@ -39,5 +38,7 @@ source-set:
     path: external/report
 
 tools:
+  va:
+    epf_path: __VANESSA_EPF__
   platform:
     version: 8.3.27

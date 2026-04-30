@@ -1529,6 +1529,7 @@ mod tests {
                     command_timeout_ms: edt_timeout_ms,
                     ..Default::default()
                 },
+                ..Default::default()
             },
             mcp: McpConfig {
                 http: McpHttpConfig::default(),
@@ -1536,7 +1537,6 @@ mod tests {
                     max_concurrent_calls,
                     shutdown_grace_period_secs,
                 },
-                client: Default::default(),
             },
             tests: TestsConfig::default(),
         }

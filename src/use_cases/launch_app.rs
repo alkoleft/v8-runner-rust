@@ -168,7 +168,7 @@ fn effective_launch_options(
     }
 
     let mut launch = args.launch.clone();
-    let mut payload = build_client_mcp_payload(client_mcp, config.mcp.client.port);
+    let mut payload = build_client_mcp_payload(client_mcp, config.tools.client_mcp.port);
     if matches!(
         client_mcp.addon,
         Some(ClientMcpAddonRequest::VanessaAutomation)
@@ -205,10 +205,10 @@ fn build_client_mcp_payload(
 
 fn prepare_vanessa_mcp_launch(config: &AppConfig) -> Result<(PathBuf, PathBuf), AppError> {
     let va = &config.tests.va;
-    let epf_path = va
-        .epf_path
-        .clone()
-        .ok_or_else(|| AppError::Validation("tests.va.epf_path is not configured".to_owned()))?;
+    let epf_path =
+        config.tools.va.epf_path.clone().ok_or_else(|| {
+            AppError::Validation("tools.va.epf_path is not configured".to_owned())
+        })?;
     let params_path = va
         .params_path
         .as_ref()
@@ -385,6 +385,7 @@ mod tests {
                 },
                 enterprise: EnterpriseToolConfig::default(),
                 edt_cli: Default::default(),
+                ..Default::default()
             },
             mcp: Default::default(),
             tests: TestsConfig::default(),
