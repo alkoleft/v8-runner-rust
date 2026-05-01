@@ -2027,7 +2027,7 @@ dependencies = [
 
 [[package]]
 name = "v8-runner"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
