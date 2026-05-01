@@ -226,10 +226,13 @@ pub(super) fn run_tests(
     log_live_stage("test: enterprise run", "[Enterprise] running test runner");
     let run_started = Instant::now();
     let enterprise_runner = crate::platform::process::ProcessExecutor;
+    let platform_launch = build_platform_launch(&args.execution.launch, &prepared_run, &artifacts);
     let enterprise = match build_enterprise_dsl(
         context,
         config,
         &artifacts,
+        &prepared_run,
+        &platform_launch,
         &enterprise_runner,
         args.execution
             .client_mode
@@ -272,8 +275,6 @@ pub(super) fn run_tests(
             return Err(TestExecutionFailure::with_payload(error, result));
         }
     };
-
-    let platform_launch = build_platform_launch(&args.execution.launch, &prepared_run, &artifacts);
 
     if let Some(failure) =
         interrupted_test_failure(context, &target, &mode, &warnings, &steps, started)

@@ -18,6 +18,7 @@ use crate::platform::utilities::PlatformUtilities;
 use crate::support::error::AppError;
 use crate::support::path::is_safe_path_segment;
 use crate::use_cases::context::{ExecutionContext, ExecutionInterruption};
+use crate::use_cases::launch_keys::vanessa_enterprise_launch_keys;
 use crate::use_cases::progress::log_live_stage;
 use crate::use_cases::request::{
     ClientMcpAddonRequest, ClientMcpMode, ClientMcpOptionsRequest, EnterpriseLaunchTarget,
@@ -71,6 +72,7 @@ pub fn execute(
 
     let launch = effective_launch_options(config, args)
         .map_err(|error| UseCaseFailure::without_payload(error))?;
+    let additional_launch_keys = effective_enterprise_launch_keys(config, args, &launch);
     let mut utilities = PlatformUtilities::from_config(config);
     let location = utilities
         .locate(utility)
@@ -78,7 +80,7 @@ pub fn execute(
     let process_args = build_launch_args(
         client_mode,
         &config.v8_connection(),
-        &config.tools.enterprise.additional_launch_keys,
+        &additional_launch_keys,
         &launch,
     );
 
@@ -109,6 +111,29 @@ pub fn execute(
         )),
     };
     Ok(result)
+}
+
+fn effective_enterprise_launch_keys(
+    config: &AppConfig,
+    args: &LaunchArgs,
+    launch: &LaunchOptions,
+) -> Vec<String> {
+    if is_client_mcp_va_launch(args) {
+        return vanessa_enterprise_launch_keys(
+            &config.tools.enterprise.additional_launch_keys,
+            launch,
+        );
+    }
+    config.tools.enterprise.additional_launch_keys.clone()
+}
+
+fn is_client_mcp_va_launch(args: &LaunchArgs) -> bool {
+    args.client_mcp.as_ref().is_some_and(|client_mcp| {
+        matches!(
+            client_mcp.addon,
+            Some(ClientMcpAddonRequest::VanessaAutomation)
+        )
+    })
 }
 
 fn interruption_message(interruption: ExecutionInterruption) -> &'static str {

@@ -18,6 +18,7 @@ use crate::use_cases::interruption::{
     command_interruption_details, command_interruption_message, command_interruption_status,
     process_interruption_details,
 };
+use crate::use_cases::launch_keys::vanessa_enterprise_launch_keys;
 use crate::use_cases::request::{TestRequest as TestArgs, TestScopeRequest as TestScope};
 
 use super::{build_yaxunit_config, prepare_vanessa_run, PreparedRun, RunArtifacts};
@@ -329,6 +330,8 @@ pub(super) fn build_enterprise_dsl<'a>(
     context: &ExecutionContext,
     config: &AppConfig,
     artifacts: &'a RunArtifacts,
+    prepared_run: &PreparedRun,
+    launch: &LaunchOptions,
     runner: &'a dyn crate::platform::process::ProcessRunner,
     client_mode: LaunchClientModeRequest,
     timeout_override_ms: Option<u64>,
@@ -344,10 +347,11 @@ pub(super) fn build_enterprise_dsl<'a>(
         additional_launch_keys = ?config.tools.enterprise.additional_launch_keys,
         "resolved enterprise additional launch keys"
     );
+    let additional_launch_keys = effective_enterprise_launch_keys(config, prepared_run, launch);
     Ok(EnterpriseDsl::new(
         location.path,
         config.v8_connection(),
-        config.tools.enterprise.additional_launch_keys.clone(),
+        additional_launch_keys,
         client_mode.into(),
         runner,
         artifacts.platform_log.clone(),
@@ -365,6 +369,20 @@ pub(super) fn build_enterprise_dsl<'a>(
             ),
         ),
     ))
+}
+
+fn effective_enterprise_launch_keys(
+    config: &AppConfig,
+    prepared_run: &PreparedRun,
+    launch: &LaunchOptions,
+) -> Vec<String> {
+    if matches!(prepared_run, PreparedRun::Vanessa { .. }) {
+        return vanessa_enterprise_launch_keys(
+            &config.tools.enterprise.additional_launch_keys,
+            launch,
+        );
+    }
+    config.tools.enterprise.additional_launch_keys.clone()
 }
 
 pub(super) fn build_platform_launch(

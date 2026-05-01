@@ -26,6 +26,8 @@ pub mod init_project;
 mod interruption;
 /// Launch orchestration use case.
 pub mod launch_app;
+/// Shared launch key policy for Enterprise-backed use cases.
+mod launch_keys;
 /// Load packaged artifacts into infobase.
 pub mod load_artifact;
 /// Text-mode live progress events shared by CLI-facing use cases.

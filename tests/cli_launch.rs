@@ -86,6 +86,13 @@ fn setup_mcp_va_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
 fn setup_mcp_va_project_with_work_name(
     work_name: &str,
 ) -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
+    setup_mcp_va_project_with_options(work_name, &[])
+}
+
+fn setup_mcp_va_project_with_options(
+    work_name: &str,
+    additional_launch_keys: &[&str],
+) -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
     let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join(work_name);
@@ -107,14 +114,26 @@ fn setup_mcp_va_project_with_work_name(
     write_script(&install_dir.join("bin").join("1cv8c"));
     write_logging_script(&install_dir.join("bin").join("1cv8"), &args_log);
 
+    let additional_launch_keys_block = if additional_launch_keys.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "  enterprise:\n    additional-launch-keys:\n{}",
+            additional_launch_keys
+                .iter()
+                .map(|key| format!("      - '{}'\n", key))
+                .collect::<String>()
+        )
+    };
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\ntests:\n  va:\n    params_path: '{}'\n    profile: smoke\n    fail_fast: true\n    profiles:\n      smoke:\n        feature_path: '{}'\n        features_to_run:\n          - login\n        filter_tags:\n          - '@smoke'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\ntools:\n  client_mcp:\n    port: 9874\n  va:\n    epf_path: '{}'\n  platform:\n    path: '{}'\n",
+        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\ntests:\n  va:\n    params_path: '{}'\n    profile: smoke\n    fail_fast: true\n    profiles:\n      smoke:\n        feature_path: '{}'\n        features_to_run:\n          - login\n        filter_tags:\n          - '@smoke'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\ntools:\n  client_mcp:\n    port: 9874\n  va:\n    epf_path: '{}'\n  platform:\n    path: '{}'\n{}",
         base_path.display(),
         work_path.display(),
         va_params.display(),
         features_dir.display(),
         va_epf.display(),
         install_dir.display(),
+        additional_launch_keys_block,
     );
     fs::write(&config_path, config).expect("config");
 
@@ -392,6 +411,7 @@ fn launch_mcp_va_builds_payload_from_configured_port_and_ordinary_mode() {
     assert!(args.contains("vanessa-automation.epf"));
     assert!(args.contains("/C"));
     assert!(args.contains("runMcp=/tmp/mcp conf.json;mcpPort=9874;StartFeaturePlayer;VAParams="));
+    assert!(args.contains("/TESTMANAGER"));
     assert!(args.contains("/WA-"));
     let params_arg = args
         .lines()
@@ -421,6 +441,77 @@ fn launch_mcp_va_builds_payload_from_configured_port_and_ordinary_mode() {
             & 0o777,
         0o700
     );
+}
+
+#[test]
+fn launch_mcp_va_does_not_duplicate_explicit_testmanager_raw_key() {
+    let (_dir, config_path, _install_dir, args_log) =
+        setup_mcp_va_project_with_options("work", &["/TESTMANAGER"]);
+    let output = v8_runner_command()
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "launch",
+            "mcp",
+            "va",
+            "--mode",
+            "ordinary",
+            "--raw-key",
+            "/TESTMANAGER",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(
+        output.status.success(),
+        "status={:?}\nstdout={}\nstderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let args = fs::read_to_string(args_log).expect("args log");
+    let test_manager_count = args
+        .split_whitespace()
+        .filter(|arg| arg.eq_ignore_ascii_case("/TESTMANAGER"))
+        .count();
+    assert_eq!(test_manager_count, 1);
+}
+
+#[test]
+fn launch_mcp_va_adds_testmanager_when_raw_value_matches_name() {
+    let (_dir, config_path, _install_dir, args_log) = setup_mcp_va_project();
+    let output = v8_runner_command()
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "launch",
+            "mcp",
+            "va",
+            "--mode",
+            "ordinary",
+            "--raw-key",
+            "/VAUser",
+            "--raw-key",
+            "TESTMANAGER",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(
+        output.status.success(),
+        "status={:?}\nstdout={}\nstderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let args = fs::read_to_string(args_log).expect("args log");
+    assert!(args.contains("/VAUser"));
+    assert!(args.contains("TESTMANAGER"));
+    assert!(args
+        .split_whitespace()
+        .any(|arg| arg.eq_ignore_ascii_case("/TESTMANAGER")));
 }
 
 #[test]

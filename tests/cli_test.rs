@@ -687,10 +687,8 @@ fn test_rejects_c_and_execute_on_test_surface() {
 
 #[test]
 fn test_va_builds_vanessa_command_and_overlay() {
-    let (_dir, config_path, build_calls, test_calls, captured_params) = setup_va_project(
-        JUNIT_SMOKE_REPORT_FIXTURE,
-        &["/TESTMANAGER", "/VAUSER", "ci-user"],
-    );
+    let (_dir, config_path, build_calls, test_calls, captured_params) =
+        setup_va_project(JUNIT_SMOKE_REPORT_FIXTURE, &["/VAUSER", "ci-user"]);
 
     let output = v8_runner_command()
         .args([
@@ -743,6 +741,74 @@ fn test_va_builds_vanessa_command_and_overlay() {
     let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
     assert_eq!(payload["ok"], true);
     assert_eq!(payload["data"]["report"]["summary"]["total"], 1);
+}
+
+#[test]
+fn test_va_does_not_duplicate_explicit_testmanager_raw_key() {
+    let (_dir, config_path, _build_calls, test_calls, _captured_params) =
+        setup_va_project(JUNIT_SMOKE_REPORT_FIXTURE, &["/TESTMANAGER"]);
+
+    let output = v8_runner_command()
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "test",
+            "--raw-key",
+            "/TESTMANAGER",
+            "va",
+        ])
+        .output()
+        .expect("run");
+
+    assert!(
+        output.status.success(),
+        "status={:?}\nstdout={}\nstderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let calls = fs::read_to_string(test_calls).expect("test calls");
+    let test_manager_count = calls
+        .split_whitespace()
+        .filter(|arg| arg.eq_ignore_ascii_case("/TESTMANAGER"))
+        .count();
+    assert_eq!(test_manager_count, 1);
+}
+
+#[test]
+fn test_va_adds_testmanager_when_raw_value_matches_name() {
+    let (_dir, config_path, _build_calls, test_calls, _captured_params) =
+        setup_va_project(JUNIT_SMOKE_REPORT_FIXTURE, &[]);
+
+    let output = v8_runner_command()
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "test",
+            "--raw-key",
+            "/VAUser",
+            "--raw-key",
+            "TESTMANAGER",
+            "va",
+        ])
+        .output()
+        .expect("run");
+
+    assert!(
+        output.status.success(),
+        "status={:?}\nstdout={}\nstderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let calls = fs::read_to_string(test_calls).expect("test calls");
+    assert!(calls.contains("/VAUser"));
+    assert!(calls.contains("TESTMANAGER"));
+    assert!(calls
+        .split_whitespace()
+        .any(|arg| arg.eq_ignore_ascii_case("/TESTMANAGER")));
 }
 
 #[test]
