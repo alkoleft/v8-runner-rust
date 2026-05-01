@@ -41,6 +41,7 @@ pub(crate) fn prepare_test_launch(
     let object = payload
         .as_object_mut()
         .ok_or_else(|| AppError::Runtime("Vanessa params JSON must be an object".to_owned()))?;
+    apply_workspace_root_overlay(object, &config.base_path);
     apply_profile_overlay(object, profile, va.fail_fast);
     apply_test_overlay(object, artifacts);
     write_params_file(&runtime_params_path, &payload)
@@ -88,6 +89,7 @@ pub(crate) fn prepare_client_mcp_launch(config: &AppConfig) -> Result<VanessaLau
     let object = payload
         .as_object_mut()
         .ok_or_else(|| AppError::Runtime("Vanessa params JSON must be an object".to_owned()))?;
+    apply_workspace_root_overlay(object, &config.base_path);
     apply_profile_overlay(object, profile, va.fail_fast);
     apply_logging_overlay(
         object,
@@ -196,6 +198,19 @@ fn apply_profile_overlay(
         object,
         "СписокСценариевДляВыполнения",
         &profile.scenario_filter,
+    );
+}
+
+fn apply_workspace_root_overlay(object: &mut Map<String, Value>, base_path: &Path) {
+    if object
+        .get("WorkspaceRoot")
+        .is_some_and(|value| !value.is_null())
+    {
+        return;
+    }
+    object.insert(
+        "WorkspaceRoot".to_owned(),
+        Value::String(base_path.display().to_string()),
     );
 }
 

@@ -121,11 +121,14 @@ v8-runner build [--source-set <NAME>] [--full-rebuild]
 v8-runner test yaxunit [--full] all
 v8-runner test yaxunit [--full] module <NAME>
 v8-runner test va
+v8-runner test va --feature login --filter-tag @smoke
 ```
 
 - Всегда сначала запускает `build`.
 - `test yaxunit module <NAME>` требует непустое имя модуля.
-- `test va` использует только профиль из `tests.va.profile`.
+- `test va` использует профиль из `tests.va.profile`; `--feature`, `--filter-tag`,
+  `--ignore-tag` и `--scenario-filter` переопределяют соответствующие списки выбранного профиля
+  только для текущего запуска.
 - `--full` включает полный вывод успешных кейсов и расширенные stack traces.
 - `tests.*.timeouts.total_ms` остаётся активным пользовательским контрактом таймаутов.
 

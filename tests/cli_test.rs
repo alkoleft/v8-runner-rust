@@ -755,6 +755,10 @@ fn test_va_builds_vanessa_command_and_overlay() {
     let params: Value =
         serde_json::from_slice(&fs::read(captured_params).expect("params")).expect("params json");
     assert_eq!(params["existing"], true);
+    assert!(params["WorkspaceRoot"]
+        .as_str()
+        .expect("WorkspaceRoot")
+        .contains("/project"));
     assert_eq!(params["ОстановкаПриВозникновенииОшибки"], true);
     assert_eq!(params["ВыполнитьСценарии"], true);
     assert_eq!(params["ЗавершитьРаботуСистемы"], true);
@@ -791,6 +795,83 @@ fn test_va_builds_vanessa_command_and_overlay() {
         payload["data"]["report"]["extracted_errors"][0],
         "Ошибка VA из текстового лога"
     );
+}
+
+#[test]
+fn test_va_cli_filter_options_override_configured_profile_lists() {
+    let (_dir, config_path, _build_calls, _test_calls, captured_params) =
+        setup_va_project(JUNIT_SMOKE_REPORT_FIXTURE, &[]);
+
+    let output = v8_runner_command()
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--json-message",
+            "test",
+            "va",
+            "--feature",
+            "checkout",
+            "--filter-tag",
+            "@critical",
+            "--ignore-tag",
+            "@flaky",
+            "--scenario-filter",
+            "Проверка оформления",
+        ])
+        .output()
+        .expect("run");
+
+    assert!(
+        output.status.success(),
+        "status={:?}\nstdout={}\nstderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let params: Value =
+        serde_json::from_slice(&fs::read(captured_params).expect("params")).expect("params json");
+    assert_eq!(params["СписокФичДляВыполнения"][0], "checkout");
+    assert_eq!(params["СписокТеговОтбор"][0], "@critical");
+    assert_eq!(params["СписокТеговИсключение"][0], "@flaky");
+    assert_eq!(
+        params["СписокСценариевДляВыполнения"][0],
+        "Проверка оформления"
+    );
+}
+
+#[test]
+fn test_va_preserves_workspace_root_from_params_template() {
+    let (dir, config_path, _build_calls, _test_calls, captured_params) =
+        setup_va_project(JUNIT_SMOKE_REPORT_FIXTURE, &[]);
+    fs::write(
+        dir.path().join("cfg").join("va-base.json"),
+        "{\n  \"existing\": true,\n  \"WorkspaceRoot\": \"/configured/workspace\"\n}\n",
+    )
+    .expect("params template");
+
+    let output = v8_runner_command()
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--json-message",
+            "test",
+            "va",
+        ])
+        .output()
+        .expect("run");
+
+    assert!(
+        output.status.success(),
+        "status={:?}\nstdout={}\nstderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let params: Value =
+        serde_json::from_slice(&fs::read(captured_params).expect("params")).expect("params json");
+    assert_eq!(params["WorkspaceRoot"], "/configured/workspace");
 }
 
 #[test]

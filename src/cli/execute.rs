@@ -8,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 use crate::cli::args::{
     ArtifactsArgs, BuildArgs, Command, ConvertArgs, DesignerConfigSyntaxArgs,
     DesignerModulesSyntaxArgs, DumpArgs, ExtensionsArgs, LaunchArgs, LaunchOptionsArgs, LoadArgs,
-    SyntaxArgs, SyntaxTarget, TestArgs, TestRunner, TestScope, TestYaxunitArgs,
+    SyntaxArgs, SyntaxTarget, TestArgs, TestRunner, TestScope, TestVaArgs, TestYaxunitArgs,
 };
 use crate::cli::output::{
     failure_envelope, pre_dispatch_error_envelope, print_command_use_case_error, with_cli_error,
@@ -325,13 +325,15 @@ fn execute_test(
 ) -> Result<(), UseCaseError> {
     let request = map_test_request(config, args)
         .map_err(|error| render_pre_dispatch_error(presenter, CommandName::Test, error))?;
-    let context = cli_context(config, CommandName::Test, cancellation);
+    let effective_config = effective_test_config(config, args)
+        .map_err(|error| render_pre_dispatch_error(presenter, CommandName::Test, error))?;
+    let context = cli_context(&effective_config, CommandName::Test, cancellation);
     with_cli_workspace_lock(
-        config,
+        &effective_config,
         presenter,
         CommandName::Test,
         clean_before_execution,
-        || match run_tests::execute(&context, config, &request) {
+        || match run_tests::execute(&context, &effective_config, &request) {
             Ok(result) => {
                 if presenter.is_json() {
                     let envelope = test_envelope(&result);
@@ -720,12 +722,59 @@ fn map_test_request(config: &AppConfig, args: &TestArgs) -> Result<TestRequest, 
                 scope,
             })
         }
-        TestRunner::Va => Ok(TestRequest {
+        TestRunner::Va(_) => Ok(TestRequest {
             execution: build_vanessa_execution(config, &args.launch, client_mode)?,
             full: args.full,
             scope: TestScopeRequest::All,
         }),
     }
+}
+
+fn effective_test_config(config: &AppConfig, args: &TestArgs) -> Result<AppConfig, UseCaseError> {
+    let mut config = config.clone();
+    if let TestRunner::Va(va_args) = &args.runner {
+        apply_vanessa_cli_profile_overrides(&mut config, va_args)?;
+    }
+    Ok(config)
+}
+
+fn apply_vanessa_cli_profile_overrides(
+    config: &mut AppConfig,
+    args: &TestVaArgs,
+) -> Result<(), UseCaseError> {
+    if !args.has_profile_overrides() {
+        return Ok(());
+    }
+    let profile_id = config.tests.va.profile.clone().ok_or_else(|| {
+        UseCaseError::new(
+            UseCaseErrorKind::Validation,
+            "tests.va.profile is not configured",
+        )
+    })?;
+    let profile = config
+        .tests
+        .va
+        .profiles
+        .get_mut(&profile_id)
+        .ok_or_else(|| {
+            UseCaseError::new(
+                UseCaseErrorKind::Validation,
+                format!("unknown Vanessa Automation profile '{profile_id}'"),
+            )
+        })?;
+    if !args.features_to_run.is_empty() {
+        profile.features_to_run.clone_from(&args.features_to_run);
+    }
+    if !args.filter_tags.is_empty() {
+        profile.filter_tags.clone_from(&args.filter_tags);
+    }
+    if !args.ignore_tags.is_empty() {
+        profile.ignore_tags.clone_from(&args.ignore_tags);
+    }
+    if !args.scenario_filter.is_empty() {
+        profile.scenario_filter.clone_from(&args.scenario_filter);
+    }
+    Ok(())
 }
 
 fn map_test_client_mode(
@@ -2296,7 +2345,7 @@ mod tests {
                 full: false,
                 client_mode: None,
                 launch: LaunchOptionsArgs::default(),
-                runner: TestRunner::Va,
+                runner: TestRunner::Va(TestVaArgs::default()),
             },
         )
         .expect("request");

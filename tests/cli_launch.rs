@@ -425,6 +425,10 @@ fn launch_mcp_va_builds_payload_from_configured_port_and_ordinary_mode() {
     let params = fs::read_to_string(params_path).expect("runtime params");
     let params_json: Value = serde_json::from_str(&params).expect("runtime params JSON");
     assert_eq!(params_json["existing"], true);
+    assert!(params_json["WorkspaceRoot"]
+        .as_str()
+        .expect("WorkspaceRoot")
+        .contains("/project"));
     assert_eq!(params_json["ОстановкаПриВозникновенииОшибки"], true);
     assert_eq!(params_json["СписокФичДляВыполнения"][0], "login");
     assert_eq!(params_json["СписокТеговОтбор"][0], "@smoke");

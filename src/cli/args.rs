@@ -168,7 +168,7 @@ pub enum TestRunner {
     /// Run YaXUnit tests
     Yaxunit(TestYaxunitArgs),
     /// Run Vanessa Automation feature scenarios
-    Va,
+    Va(TestVaArgs),
 }
 
 #[derive(Args, Debug)]
@@ -176,6 +176,35 @@ pub enum TestRunner {
 pub struct TestYaxunitArgs {
     #[command(subcommand)]
     pub scope: TestScope,
+}
+
+#[derive(Args, Debug, Default)]
+#[command(next_help_heading = "Vanessa Automation options")]
+pub struct TestVaArgs {
+    /// Feature name from the selected Vanessa profile to run. Repeat to run multiple features.
+    #[arg(long = "feature")]
+    pub features_to_run: Vec<String>,
+
+    /// Tag expression to include. Repeat to pass multiple include tags.
+    #[arg(long = "filter-tag")]
+    pub filter_tags: Vec<String>,
+
+    /// Tag expression to exclude. Repeat to pass multiple exclude tags.
+    #[arg(long = "ignore-tag")]
+    pub ignore_tags: Vec<String>,
+
+    /// Scenario name filter. Repeat to pass multiple scenario filters.
+    #[arg(long = "scenario-filter")]
+    pub scenario_filter: Vec<String>,
+}
+
+impl TestVaArgs {
+    pub fn has_profile_overrides(&self) -> bool {
+        !self.features_to_run.is_empty()
+            || !self.filter_tags.is_empty()
+            || !self.ignore_tags.is_empty()
+            || !self.scenario_filter.is_empty()
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -553,9 +582,40 @@ mod tests {
 
         match cli.command {
             Command::Test(args) => {
-                assert!(matches!(args.runner, TestRunner::Va));
+                assert!(matches!(args.runner, TestRunner::Va(_)));
                 assert_eq!(args.launch, LaunchOptionsArgs::default());
             }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn parses_test_va_filter_options() {
+        let cli = Cli::try_parse_from([
+            "v8-runner",
+            "test",
+            "va",
+            "--feature",
+            "login",
+            "--filter-tag",
+            "@smoke",
+            "--ignore-tag",
+            "@draft",
+            "--scenario-filter",
+            "Проверка логина",
+        ])
+        .expect("parse test va filters");
+
+        match cli.command {
+            Command::Test(args) => match args.runner {
+                TestRunner::Va(va) => {
+                    assert_eq!(va.features_to_run, ["login"]);
+                    assert_eq!(va.filter_tags, ["@smoke"]);
+                    assert_eq!(va.ignore_tags, ["@draft"]);
+                    assert_eq!(va.scenario_filter, ["Проверка логина"]);
+                }
+                _ => panic!("unexpected test runner"),
+            },
             _ => panic!("unexpected command"),
         }
     }

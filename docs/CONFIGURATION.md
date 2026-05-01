@@ -300,6 +300,12 @@ runtime identity и не добавляет отдельное поле конф
 - `profiles.<name>.ignore_tags`
 - `profiles.<name>.scenario_filter`
 
+`v8-runner test va --feature`, `--filter-tag`, `--ignore-tag` и `--scenario-filter`
+переопределяют соответствующие списки выбранного профиля только для текущего CLI-запуска.
+
+При генерации runtime `VAParams` runner добавляет `WorkspaceRoot` со значением `basePath`,
+если это поле отсутствует или равно `null` в `tests.va.params_path`.
+
 Для Vanessa Automation обязательны:
 
 - `tools.va.epf_path`
