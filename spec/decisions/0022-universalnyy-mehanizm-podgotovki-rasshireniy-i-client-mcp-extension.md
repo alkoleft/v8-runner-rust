@@ -2,7 +2,7 @@
 
 - Статус: `accepted`
 - Дата: `2026-05-02`
-- Связанные решения: [ADR-0002](0002-izolirovat-runtime-state-po-source-set-pod-workpath.md), [ADR-0005](0005-razdelit-cli-i-mcp-publichnye-poverhnosti.md), [ADR-0006](0006-sohranyat-transportno-neytralnyy-use-case-sloy.md), [ADR-0015](0015-atomarnaya-publikatsiya-dump-artifacts-cherez-staging-backup.md), [ADR-0017](0017-v8project-yaml-source-set-kak-glavnyy-konfiguratsionnyy-kontrakt.md), [ADR-0021](0021-lokalnyy-overlay-config.md)
+- Связанные решения: [ADR-0002](0002-izolirovat-runtime-state-po-source-set-pod-workpath.md), [ADR-0005](0005-razdelit-cli-i-mcp-publichnye-poverhnosti.md), [ADR-0006](0006-sohranyat-transportno-neytralnyy-use-case-sloy.md), [ADR-0012](0012-on-demand-change-detection-i-faylovaya-partial-load-strategiya.md), [ADR-0015](0015-atomarnaya-publikatsiya-dump-artifacts-cherez-staging-backup.md), [ADR-0017](0017-v8project-yaml-source-set-kak-glavnyy-konfiguratsionnyy-kontrakt.md), [ADR-0021](0021-lokalnyy-overlay-config.md)
 
 ## Контекст
 
@@ -20,6 +20,13 @@ orchestration и runtime identity.
 
 Нужно не делать частный path только для `client_mcp`, а заложить общий механизм подготовки
 расширений в ИБ и использовать `client_mcp` как первый tool-extension consumer.
+
+Уточнение `2026-05-02`: если tool extension задан через `source.path`, этот путь является
+исходниками расширения и должен получать тот же on-demand change-detection подход, что и project
+`source-set` path. Повторный `test -> build` не должен заново выполнять EDT export для неизменённого
+tool-extension source; текущий воспроизводимый симптом зафиксирован в проекте `rat`, где
+`v8project.local.yaml` указывает `tools.client_mcp.extension.source.path` на внешний EDT-каталог, а
+каждый запуск тестов до доработки доходит до `build: tool extension edt export`.
 
 ## Решение
 
@@ -76,7 +83,9 @@ Rules:
 
 1. строит configured project source-set по текущей build semantics;
 2. после project build вызывает общий механизм подготовки extension для `tools.client_mcp.extension`, если он задан;
-3. для `source` строит/экспортирует/загружает extension из исходников;
+3. для `source` анализирует source path через stable tool-extension change-detection context и
+   строит/экспортирует/загружает extension из исходников только если источник изменился, включён
+   `--full-rebuild` или analysis дал conservative full-execution fallback;
 4. для `artifact.path` загружает `.cfe` как extension с именем `tools.client_mcp.extension.name`;
 5. не вводит отдельный `install` flag: подготовка extension является частью стадии `build`.
 
@@ -123,6 +132,9 @@ validation error, а не поздний platform failure.
 3. Новый общий internal use case/helper:
    - принять normalized extension preparation request;
    - поддержать source-based extension preparation;
+   - использовать on-demand change detection для source-backed tool extensions без превращения их в
+     project `source-set`;
+   - коммитить prepared tool-extension snapshot только после successful export/load step;
    - поддержать `.cfe` artifact loading through existing load semantics;
    - вернуть structured outcome/diagnostics без отдельного public CLI surface.
 4. `src/use_cases/init_project.rs`:
@@ -135,7 +147,9 @@ validation error, а не поздний platform failure.
    - добавить понятный hint на `v8-runner build`, если client MCP launch зависит от неподготовленной ИБ.
 7. Docs/tests:
    - обновить `docs/CONFIGURATION.md`, `docs/CAPABILITIES.md` and examples;
-   - добавить targeted tests для source/artifact validation, EDT workspace init, build preparation and no-install launch behavior.
+   - после реализации обновить `SKILL/SKILL.md`, чтобы repo-local skill описывал shipped behavior;
+   - добавить targeted tests для source/artifact validation, EDT workspace init, build preparation,
+     source-backed no-change skip, full-rebuild refresh and no-install launch behavior.
 
 ## Верификация
 
@@ -143,4 +157,7 @@ validation error, а не поздний platform failure.
 - [ ] `.cfe` artifact загружается на стадии `build`, а не на стадии `launch mcp`.
 - [ ] EDT source tool extension добавляется в EDT workspace на стадии `init`.
 - [ ] `client_mcp` extension не появляется в project `source-set` и не выбирается через `--source-set`.
+- [ ] Неизменённый source-backed tool extension пропускает EDT export/load при повторном `build` и
+  nested `test -> build`.
+- [ ] Изменение в source-backed tool extension или `--full-rebuild` приводит к refresh.
 - [ ] `launch mcp` / `launch mcp va` не выполняют install/update extension и дают понятный hint при неподготовленной ИБ.
