@@ -18,6 +18,9 @@ use crate::platform::utilities::PlatformUtilities;
 use crate::support::edt_project;
 use crate::support::error::AppError;
 use crate::support::temp::{partial_list_file, platform_logs_dir, reserved_source_set_dir};
+use crate::use_cases::build_progress::{
+    build_mode_label, log_build_step_timeline, log_timeline_stage, TimelineStageStatus,
+};
 use crate::use_cases::context::{ExecutionContext, InterruptionSafetyClass};
 use crate::use_cases::external_artifacts::{
     discover_designer_external_artifacts, prepare_edt_external_artifacts, source_set_external_kind,
@@ -33,11 +36,10 @@ mod helpers;
 
 pub(crate) use self::helpers::ensure_platform_success;
 use self::helpers::{
-    build_designer_dsl, build_ibcmd_dsl, build_mode_label, commit_step_state,
-    deferred_interruption_warning, extension_name, fail_from_source_set_index,
-    interruption_before_safe_point, log_timeline_stage, map_ibcmd_error, merge_step_message,
-    plan_configurator_load_step, plan_edt_export_step, plan_generated_designer_load_step,
-    push_build_step, remove_storage_path, StepCommit, StepPlan,
+    build_designer_dsl, build_ibcmd_dsl, commit_step_state, deferred_interruption_warning,
+    extension_name, fail_from_source_set_index, interruption_before_safe_point, map_ibcmd_error,
+    merge_step_message, plan_configurator_load_step, plan_edt_export_step,
+    plan_generated_designer_load_step, push_build_step, remove_storage_path, StepCommit, StepPlan,
 };
 
 #[cfg(test)]
@@ -61,25 +63,6 @@ pub fn execute(
 }
 
 pub(crate) type BuildExecutionFailure = UseCaseFailure<BuildResult>;
-
-#[derive(Clone, Copy)]
-enum TimelineStageStatus {
-    Running,
-    Succeeded,
-    Failed,
-    Skipped,
-}
-
-impl TimelineStageStatus {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Running => "running",
-            Self::Succeeded => "succeeded",
-            Self::Failed => "failed",
-            Self::Skipped => "skipped",
-        }
-    }
-}
 
 #[cfg(test)]
 pub(crate) fn run_build(config: &AppConfig, args: &BuildArgs) -> UseCaseResult<BuildResult> {
@@ -187,6 +170,7 @@ fn append_client_mcp_extension_step(
 ) -> Result<(), BuildExecutionFailure> {
     match tool_extension::prepare_client_mcp_extension(context, config, args.full_rebuild) {
         Ok(Some(step)) => {
+            log_build_step_timeline(&step);
             result.steps.push(step);
             result.duration_ms = started.elapsed().as_millis() as u64;
             Ok(())
@@ -194,6 +178,7 @@ fn append_client_mcp_extension_step(
         Ok(None) => Ok(()),
         Err(failure) => {
             result.ok = false;
+            log_build_step_timeline(&failure.step);
             result.steps.push(failure.step);
             result.duration_ms = started.elapsed().as_millis() as u64;
             Err(BuildExecutionFailure::with_payload(

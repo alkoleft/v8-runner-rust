@@ -21,10 +21,10 @@ use crate::platform::utilities::PlatformUtilities;
 use crate::support::edt_project;
 use crate::support::error::AppError;
 use crate::support::temp::platform_logs_dir;
+use crate::use_cases::build_progress::{log_timeline_stage, TimelineStageStatus};
 use crate::use_cases::context::{ExecutionContext, InterruptionSafetyClass};
 use crate::use_cases::ibcmd_diagnostics::format_ibcmd_failure_details;
 use crate::use_cases::interruption;
-use crate::use_cases::progress::log_live_stage;
 
 #[derive(Debug)]
 pub(crate) struct ToolExtensionFailure {
@@ -213,6 +213,15 @@ fn absolutize_path(path: &Path) -> Result<PathBuf, AppError> {
         .map_err(|error| AppError::Runtime(format!("failed to resolve current directory: {error}")))
 }
 
+fn log_tool_extension_stage(extension: &ToolExtensionConfig, stage: &str, detail: &str) {
+    log_timeline_stage(
+        &format!("tool:{}", extension.name),
+        stage,
+        detail,
+        TimelineStageStatus::Running,
+    );
+}
+
 fn commit_tool_extension_full_rescan(
     context: &SourceSetContext,
     work_path: &Path,
@@ -280,10 +289,7 @@ fn prepare_designer_source_extension(
                 extension,
                 "load",
             )?;
-            log_live_stage(
-                "build: tool extension load",
-                "[Конфигуратор] Загрузка tool extension",
-            );
+            log_tool_extension_stage(extension, "load", "[Конфигуратор] Загрузка tool extension");
             let load = dsl
                 .load_config_from_files_full(source_path, Some(&extension.name))
                 .map_err(AppError::from)?;
@@ -302,8 +308,9 @@ fn prepare_designer_source_extension(
                 extension,
                 "update",
             )?;
-            log_live_stage(
-                "build: tool extension update",
+            log_tool_extension_stage(
+                extension,
+                "update",
                 "[Конфигуратор] Применение tool extension",
             );
             let update = dsl
@@ -322,10 +329,7 @@ fn prepare_designer_source_extension(
                 &binary,
                 utilities.runner_for(UtilityType::Ibcmd),
             )?;
-            log_live_stage(
-                "build: tool extension import",
-                "[ibcmd] Загрузка tool extension",
-            );
+            log_tool_extension_stage(extension, "ibcmd_import", "[ibcmd] Загрузка tool extension");
             let import = dsl
                 .config_import_full(source_path, Some(&extension.name))
                 .map_err(AppError::from)?;
@@ -342,8 +346,9 @@ fn prepare_designer_source_extension(
                 &binary,
                 utilities.runner_for(UtilityType::Ibcmd),
             )?;
-            log_live_stage(
-                "build: tool extension apply",
+            log_tool_extension_stage(
+                extension,
+                "ibcmd_apply",
                 "[ibcmd] Применение tool extension",
             );
             let apply = dsl
@@ -373,8 +378,9 @@ fn prepare_artifact_extension(
         extension,
         "load-artifact",
     )?;
-    log_live_stage(
-        "build: tool extension artifact",
+    log_tool_extension_stage(
+        extension,
+        "load_artifact",
         "[Конфигуратор] Загрузка .cfe tool extension",
     );
     let load = dsl
@@ -431,10 +437,7 @@ fn export_edt_source_extension(
         .path;
     let dsl = build_edt_dsl(context, config, &binary, utilities)?;
     let project_name = resolve_edt_project_name(extension, source_path)?;
-    log_live_stage(
-        "build: tool extension edt export",
-        "[EDT] Экспорт tool extension",
-    );
+    log_tool_extension_stage(extension, "edt_export", "[EDT] Экспорт tool extension");
     let result = dsl
         .export_project(&project_name, &target)
         .map_err(AppError::from)?;

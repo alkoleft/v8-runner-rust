@@ -685,6 +685,70 @@ fn build_edt_text_interleaves_export_stage_after_edt_log() {
 }
 
 #[test]
+fn build_text_groups_tool_extension_stages_under_single_build_node() {
+    let dir = temp_workspace();
+    let base_path = dir.path().join("project");
+    let work_path = dir.path().join("work");
+    let config_path = dir.path().join("v8project.yaml");
+    let platform_path = dir.path().join("platform").join("bin").join("1cv8");
+    let edt_cli_path = dir.path().join("edt").join("1cedtcli");
+    let edt_calls_log = dir.path().join("edt-calls.log");
+    let tool_source = base_path.join("tools").join("client-mcp");
+
+    fs::create_dir_all(&work_path).expect("work");
+    write_native_edt_project(
+        &base_path.join("configuration"),
+        "configuration",
+        V8_CONFIGURATION_NATURE,
+        None,
+    );
+    write_native_edt_project(
+        &tool_source,
+        "client-mcp-project",
+        V8_EXTENSION_NATURE,
+        Some("configuration"),
+    );
+    write_build_script(&platform_path, None);
+    write_edt_script(&edt_cli_path, &edt_calls_log);
+
+    let config = format!(
+        "basePath: '{}'\nworkPath: '{}'\nformat: EDT\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: configuration\n    type: CONFIGURATION\n    path: configuration\ntools:\n  platform:\n    path: '{}'\n  edt_cli:\n    path: '{}'\n  client_mcp:\n    extension:\n      name: client_mcp\n      source:\n        path: '{}'\n        format: EDT\n",
+        base_path.display(),
+        work_path.display(),
+        platform_path.display(),
+        edt_cli_path.display(),
+        tool_source.display(),
+    );
+    fs::write(&config_path, config).expect("config");
+
+    let output = v8_runner_command()
+        .args([
+            "--no-color",
+            "--config",
+            &config_path.display().to_string(),
+            "build",
+            "--full-rebuild",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(
+        output.status.success(),
+        "status={:?}\nstdout={}\nstderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.matches("● tool:client_mcp:").count(), 1);
+    assert!(stdout.contains("│   [EDT] Экспорт tool extension"));
+    assert!(stdout.contains("│   [Конфигуратор] Загрузка tool extension"));
+    assert!(stdout.contains("│   [Конфигуратор] Применение tool extension"));
+    assert!(stdout.contains("│   ✓ prepared tool extension 'client_mcp' from sources"));
+    assert!(!stdout.contains("build: tool extension"));
+}
+
+#[test]
 fn build_json_writes_action_log_file_without_polluting_stdout() {
     let (_dir, config_path, _binary_path, work_path) = setup_project();
 

@@ -1,5 +1,7 @@
 /// Artifact export orchestration use case.
 pub mod artifacts;
+/// Shared build timeline progress vocabulary.
+mod build_progress;
 /// Build orchestration use case.
 pub mod build_project;
 /// Syntax-check orchestration use case.
