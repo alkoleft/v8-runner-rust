@@ -5,26 +5,9 @@ This file tracks open implementation work only.
 ## Current Status
 
 - Open tasks as of `2026-05-02`:
-  - `T21`: implement local config overlay from [ADR-0021](decisions/0021-lokalnyy-overlay-config.md).
   - `T23`: add YAML schema support for VS Code config editing.
 
 ## Open Tasks
-
-### T21: Implement local config overlay
-
-Status: planned
-
-Scope:
-
-- Add automatic `v8project.local.yaml` overlay loading next to the primary `v8project.yaml`.
-- Make `basePath` optional at YAML boundary with default equal to the primary config directory.
-- Forbid local overlay from changing `source-set`, `format`, or `builder`.
-- Keep precedence `project config -> local overlay -> CLI overrides`.
-
-Acceptance:
-
-- `cargo test --locked config` covers overlay merge, forbidden local keys and `basePath` default.
-- `docs/CONFIGURATION.md`, examples and architecture invariants are synchronized with ADR-0021.
 
 ### T23: Add YAML schemas for config editing
 
@@ -63,3 +46,5 @@ Acceptance:
   closed MCP rollout history.
 - [spec/archive/completed-tasks-t22.md](archive/completed-tasks-t22.md):
   closed universal tool extension preparation task.
+- [spec/archive/completed-tasks-t21.md](archive/completed-tasks-t21.md):
+  closed local config overlay task.

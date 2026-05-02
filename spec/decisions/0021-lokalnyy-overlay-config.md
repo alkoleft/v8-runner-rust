@@ -99,7 +99,7 @@ Local overlay не должен менять project identity:
 
 ## Верификация
 
-- [ ] `v8-runner build` автоматически применяет `v8project.local.yaml` без дополнительных CLI-флагов.
-- [ ] `source-set`, `format` и `builder` в `v8project.local.yaml` отклоняются как unsupported local overlay keys.
-- [ ] Отсутствующий `basePath` резолвится в каталог основного `v8project.yaml`.
-- [ ] `--workdir` остаётся сильнее local overlay.
+- [x] `v8-runner build` автоматически применяет `v8project.local.yaml` без дополнительных CLI-флагов.
+- [x] `source-set`, `format` и `builder` в `v8project.local.yaml` отклоняются как unsupported local overlay keys.
+- [x] Отсутствующий `basePath` резолвится в каталог основного `v8project.yaml`.
+- [x] `--workdir` остаётся сильнее local overlay.

@@ -1,0 +1,19 @@
+# Example local overlay for v8-runner
+# Keep this file out of Git. The repository .gitignore excludes v8project.local.yaml.
+
+workPath: build-local
+
+infobase:
+  connection: "File=local/ib"
+  user: Admin
+  password: secret
+
+tools:
+  platform:
+    path: /opt/1cv8/x86_64
+  va:
+    epf_path: /home/user/tools/vanessa.epf
+
+tests:
+  va:
+    params_path: /home/user/project/.local/va-params.json

@@ -1,14 +1,16 @@
 # Config And Backends
 
 Inspect `v8project.yaml` before diagnosing build, syntax, dump, test, and launch behavior.
+If a sibling `v8project.local.yaml` exists, inspect it too because it overrides machine-local
+settings before CLI overrides.
 
 ## Fields To Check First
 
-- `basePath`: root of 1C source files.
+- `basePath`: root of 1C source files; defaults to the directory containing the primary config when omitted.
 - `workPath`: generated state, temp files, and workspace location.
 - `format`: `DESIGNER` or `EDT`.
 - `builder`: `DESIGNER` or `IBCMD`.
-- `connection`: often `File=build/ib` for local automation.
+- `infobase.connection`: often `File=build/ib` for local automation.
 - `source-set`: ordered configuration and extension sources.
 - `tools.platform.path` or `tools.platform.version`: 1C platform discovery hints.
 - `tools.edt_cli.path`, `version`, and `interactive-mode`: EDT CLI discovery and execution mode.
@@ -47,3 +49,7 @@ Prefer `--source-set <NAME>` for narrow build, dump, convert, and artifact flows
 ## Config Path
 
 `v8project.yaml` is the default config filename. Use `--config <path>` only when the active project config is not at the default path or the user explicitly asks for that command form.
+
+`v8project.local.yaml` is an automatic local overlay only. It may override only `workPath`,
+`infobase.*`, `tools.*`, `tests.*`, and `mcp.*`; it must not define `source-set`, `format`, or
+`builder`, and it must not be used as `--config`. `--workdir` wins over both config files.

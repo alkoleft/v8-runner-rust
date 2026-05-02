@@ -83,6 +83,30 @@ fn default_config_path_uses_v8project_yaml_from_current_dir() {
 }
 
 #[test]
+fn default_config_path_applies_sibling_local_overlay() {
+    let dir = temp_workspace();
+    let _config_path = write_minimal_config(dir.path());
+    let local_work_path = dir.path().join("local-work");
+    fs::write(
+        dir.path().join("v8project.local.yaml"),
+        "workPath: local-work\n",
+    )
+    .expect("local overlay");
+
+    let output = v8_runner_command()
+        .current_dir(dir.path())
+        .args(["--json-message", "build"])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["command"], "build");
+    assert!(local_work_path.exists());
+}
+
+#[test]
 fn action_logging_failure_in_json_mode_keeps_command_identity() {
     let dir = temp_workspace();
     let config_path = write_minimal_config(dir.path());

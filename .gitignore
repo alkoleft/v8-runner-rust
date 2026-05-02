@@ -13,6 +13,8 @@
 .env
 .env.*
 !.env.example
+**/v8project.local.yaml
+!examples/v8project.local.yaml
 .direnv/
 claude-set-api.sh
 

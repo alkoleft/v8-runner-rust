@@ -20,7 +20,7 @@ Keep this file as the decision entrypoint. Load only the reference file that mat
 
 Use the available `v8-runner` binary directly. If it is not on `PATH`, ask for the binary path or use a project-provided wrapper script.
 
-`v8project.yaml` is the default project config name. Do not pass `--config v8project.yaml` unless the user explicitly wants a non-default command shape or the active config path differs from the default.
+`v8project.yaml` is the default project config name. A sibling `v8project.local.yaml` is loaded automatically for machine-local paths, credentials, tools, tests, and MCP settings. Do not pass `--config v8project.yaml` unless the user explicitly wants a non-default command shape or the active config path differs from the default; never pass `v8project.local.yaml` as `--config`.
 
 Use JSON output only when another tool, script, or final answer needs structured results:
 
@@ -34,7 +34,7 @@ Useful global flags:
 
 - `--config <CONFIG>` when the active config is not `./v8project.yaml`.
 - `--json-message` for machine-readable CLI envelopes.
-- `--workdir <WORKDIR>` to override `workPath`.
+- `--workdir <WORKDIR>` to override `workPath`; it wins over `v8project.local.yaml`.
 - `--clean-before-execution` to clear logs before execution.
 - `--log-level <error|warn|info|debug|trace>` for diagnostics.
 - `--no-color` for plain text output.

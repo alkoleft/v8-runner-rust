@@ -6,6 +6,7 @@ use crate::config::validate::{validate, ConfigValidationError};
 use crate::support::path::normalize_windows_verbatim_path;
 
 const DEFAULT_CONFIG_FILE_NAME: &str = "v8project.yaml";
+const LOCAL_CONFIG_FILE_NAME: &str = "v8project.local.yaml";
 
 #[derive(Debug, Error)]
 pub enum ConfigLoadError {
@@ -20,6 +21,15 @@ pub enum ConfigLoadError {
 
     #[error("config validation failed: {0}")]
     ValidationError(#[from] ConfigValidationError),
+
+    #[error("{0} is a local overlay and cannot be used as --config")]
+    LocalOverlayAsPrimaryConfig(String),
+
+    #[error("local config overlay cannot override project identity key '{0}'")]
+    LocalOverlayForbiddenKey(&'static str),
+
+    #[error("local config overlay does not support top-level key '{0}'")]
+    LocalOverlayUnsupportedKey(String),
 }
 
 pub fn load_config(
@@ -27,22 +37,119 @@ pub fn load_config(
     workdir_override: Option<&str>,
 ) -> Result<AppConfig, ConfigLoadError> {
     let path = resolve_config_path(config_path)?;
+    reject_local_overlay_as_primary_config(&path)?;
     let path = normalize_windows_verbatim_path(&std::fs::canonicalize(&path)?);
-    let content = std::fs::read_to_string(&path)?;
-    let root: serde_yaml::Value = serde_yaml::from_str(&content)?;
+    let config_dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut root = read_yaml_file(&path)?;
     reject_legacy_config_keys(&root)?;
-    let mut config: AppConfig = serde_yaml::from_str(&content)?;
-    normalize_config_paths(&mut config, path.parent().unwrap_or_else(|| Path::new(".")));
+
+    let local_path = path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(LOCAL_CONFIG_FILE_NAME);
+    if local_path.exists() {
+        let overlay = read_yaml_file(&local_path)?;
+        reject_legacy_config_keys(&overlay)?;
+        reject_local_overlay_keys(&overlay)?;
+        merge_yaml_values(&mut root, overlay);
+    }
+
+    default_base_path_to_config_dir(&mut root, config_dir)?;
+    reject_legacy_config_keys(&root)?;
+
+    let mut config: AppConfig = serde_yaml::from_value(root)?;
+    normalize_config_paths(&mut config, config_dir);
 
     if let Some(wd) = workdir_override {
-        config.work_path = normalize_optional_path(
-            Path::new(wd),
-            path.parent().unwrap_or_else(|| Path::new(".")),
-        );
+        config.work_path = normalize_optional_path(Path::new(wd), config_dir);
     }
 
     validate(&config)?;
     Ok(config)
+}
+
+fn read_yaml_file(path: &Path) -> Result<serde_yaml::Value, ConfigLoadError> {
+    let content = std::fs::read_to_string(path)?;
+    Ok(serde_yaml::from_str(&content)?)
+}
+
+fn reject_local_overlay_as_primary_config(path: &Path) -> Result<(), ConfigLoadError> {
+    if path.file_name().and_then(|name| name.to_str()) == Some(LOCAL_CONFIG_FILE_NAME) {
+        return Err(ConfigLoadError::LocalOverlayAsPrimaryConfig(
+            path.display().to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn reject_local_overlay_keys(root: &serde_yaml::Value) -> Result<(), ConfigLoadError> {
+    let Some(mapping) = root.as_mapping() else {
+        return Err(ConfigLoadError::ValidationError(
+            ConfigValidationError::InvalidYamlRoot(
+                "expected a YAML mapping at the document root".to_owned(),
+            ),
+        ));
+    };
+
+    for key in mapping.keys() {
+        let Some(key) = key.as_str() else {
+            return Err(ConfigLoadError::LocalOverlayUnsupportedKey(
+                "<non-string>".to_owned(),
+            ));
+        };
+        match key {
+            "source-set" => return Err(ConfigLoadError::LocalOverlayForbiddenKey("source-set")),
+            "format" => return Err(ConfigLoadError::LocalOverlayForbiddenKey("format")),
+            "builder" => return Err(ConfigLoadError::LocalOverlayForbiddenKey("builder")),
+            "workPath" | "infobase" | "tools" | "tests" | "mcp" => {}
+            unsupported => {
+                return Err(ConfigLoadError::LocalOverlayUnsupportedKey(
+                    unsupported.to_owned(),
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn default_base_path_to_config_dir(
+    root: &mut serde_yaml::Value,
+    config_dir: &Path,
+) -> Result<(), ConfigLoadError> {
+    let Some(mapping) = root.as_mapping_mut() else {
+        return Err(ConfigLoadError::ValidationError(
+            ConfigValidationError::InvalidYamlRoot(
+                "expected a YAML mapping at the document root".to_owned(),
+            ),
+        ));
+    };
+
+    let key = serde_yaml::Value::String("basePath".to_owned());
+    if !mapping.contains_key(&key) {
+        mapping.insert(
+            key,
+            serde_yaml::Value::String(config_dir.display().to_string()),
+        );
+    }
+
+    Ok(())
+}
+
+fn merge_yaml_values(base: &mut serde_yaml::Value, overlay: serde_yaml::Value) {
+    match (base, overlay) {
+        (serde_yaml::Value::Mapping(base), serde_yaml::Value::Mapping(overlay)) => {
+            for (key, overlay_value) in overlay {
+                match base.get_mut(&key) {
+                    Some(base_value) => merge_yaml_values(base_value, overlay_value),
+                    None => {
+                        base.insert(key, overlay_value);
+                    }
+                }
+            }
+        }
+        (base, overlay) => *base = overlay,
+    }
 }
 
 fn normalize_config_paths(config: &mut AppConfig, config_dir: &Path) {
@@ -265,10 +372,221 @@ fn resolve_config_path(config_path: Option<&str>) -> Result<PathBuf, ConfigLoadE
 
 #[cfg(test)]
 mod tests {
-    use super::{load_config, ConfigLoadError};
+    use super::{load_config, ConfigLoadError, LOCAL_CONFIG_FILE_NAME};
     use crate::change_detection::partial_load::DEFAULT_PARTIAL_LOAD_THRESHOLD;
     use crate::config::validate::ConfigValidationError;
+    use std::path::Path;
     use tempfile::tempdir;
+
+    fn write_minimal_project_config(config_dir: &Path, body: &str) -> std::path::PathBuf {
+        std::fs::create_dir_all(config_dir.join("src")).expect("src dir");
+        let config_path = config_dir.join("v8project.yaml");
+        std::fs::write(&config_path, body).expect("write config");
+        config_path
+    }
+
+    fn minimal_config_without_base_path(extra: &str) -> String {
+        format!(
+            "workPath: work\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: \"File=build/ib\"\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: src\n{extra}"
+        )
+    }
+
+    #[test]
+    fn load_config_defaults_missing_base_path_to_primary_config_dir() {
+        let dir = tempdir().expect("tempdir");
+        let config_dir = dir.path().join("project");
+        let config_path =
+            write_minimal_project_config(&config_dir, &minimal_config_without_base_path(""));
+
+        let config = load_config(config_path.to_str(), None).expect("load config");
+
+        assert_eq!(config.base_path, config_dir);
+        assert_eq!(config.work_path, config.base_path.join("work"));
+        assert_eq!(
+            config.infobase.connection,
+            format!("File={}", config.base_path.join("build/ib").display())
+        );
+    }
+
+    #[test]
+    fn load_config_applies_local_overlay_next_to_primary_config() {
+        let dir = tempdir().expect("tempdir");
+        let config_dir = dir.path().join("nested").join("project");
+        let config_path = write_minimal_project_config(
+            &config_dir,
+            "workPath: work\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: \"File=build/ib\"\n  user: ProjectUser\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: src\ntools:\n  client_mcp:\n    port: 1111\n  enterprise:\n    additional-launch-keys:\n      - /PROJECT\nmcp:\n  http:\n    path: /project-mcp\n",
+        );
+        std::fs::write(
+            config_dir.join(LOCAL_CONFIG_FILE_NAME),
+            "workPath: local-work\ninfobase:\n  user: LocalUser\n  password: secret\ntools:\n  client_mcp:\n    port: 9874\n  enterprise:\n    additional-launch-keys:\n      - /LOCAL\nmcp:\n  http:\n    path: /local-mcp\n",
+        )
+        .expect("write local overlay");
+
+        let config = load_config(config_path.to_str(), None).expect("load config");
+
+        assert_eq!(config.base_path, config_dir);
+        assert_eq!(config.work_path, config.base_path.join("local-work"));
+        assert_eq!(config.infobase.user.as_deref(), Some("LocalUser"));
+        assert_eq!(config.infobase.password.as_deref(), Some("secret"));
+        assert_eq!(config.tools.client_mcp.port, Some(9874));
+        assert_eq!(
+            config.tools.enterprise.additional_launch_keys,
+            vec!["/LOCAL".to_owned()]
+        );
+        assert_eq!(config.mcp.http.path, "/local-mcp");
+    }
+
+    #[test]
+    fn load_config_discovers_local_overlay_next_to_explicit_config() {
+        let dir = tempdir().expect("tempdir");
+        let config_dir = dir.path().join("subproject");
+        let config_path =
+            write_minimal_project_config(&config_dir, &minimal_config_without_base_path(""));
+        std::fs::write(config_dir.join(LOCAL_CONFIG_FILE_NAME), "workPath: right\n")
+            .expect("local overlay");
+
+        let config = load_config(config_path.to_str(), None).expect("load config");
+
+        assert_eq!(config.work_path, config.base_path.join("right"));
+    }
+
+    #[test]
+    fn load_config_cli_workdir_override_wins_over_local_overlay() {
+        let dir = tempdir().expect("tempdir");
+        let config_dir = dir.path().join("project");
+        let config_path =
+            write_minimal_project_config(&config_dir, &minimal_config_without_base_path(""));
+        std::fs::write(
+            config_dir.join(LOCAL_CONFIG_FILE_NAME),
+            "workPath: local-work\n",
+        )
+        .expect("local overlay");
+
+        let config = load_config(config_path.to_str(), Some("cli-work")).expect("load config");
+
+        assert_eq!(config.work_path, config_dir.join("cli-work"));
+    }
+
+    #[test]
+    fn load_config_rejects_project_identity_keys_in_local_overlay() {
+        for key in ["source-set", "format", "builder"] {
+            let dir = tempdir().expect("tempdir");
+            let config_dir = dir.path().join("project");
+            let config_path =
+                write_minimal_project_config(&config_dir, &minimal_config_without_base_path(""));
+            let value = if key == "source-set" {
+                "[]".to_owned()
+            } else {
+                "DESIGNER".to_owned()
+            };
+            std::fs::write(
+                config_dir.join(LOCAL_CONFIG_FILE_NAME),
+                format!("{key}: {value}\n"),
+            )
+            .expect("local overlay");
+
+            let error =
+                load_config(config_path.to_str(), None).expect_err("forbidden local overlay key");
+
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("cannot override project identity key '{key}'")),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn load_config_rejects_unsupported_top_level_keys_in_local_overlay() {
+        for key in ["basePath", "build", "execution_timeout", "unknown"] {
+            let dir = tempdir().expect("tempdir");
+            let config_dir = dir.path().join("project");
+            let config_path =
+                write_minimal_project_config(&config_dir, &minimal_config_without_base_path(""));
+            std::fs::write(
+                config_dir.join(LOCAL_CONFIG_FILE_NAME),
+                format!("{key}: value\n"),
+            )
+            .expect("local overlay");
+
+            let error =
+                load_config(config_path.to_str(), None).expect_err("unsupported local overlay key");
+
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("does not support top-level key '{key}'")),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn load_config_rejects_local_overlay_as_primary_config() {
+        let dir = tempdir().expect("tempdir");
+        let local_path = dir.path().join(LOCAL_CONFIG_FILE_NAME);
+        std::fs::write(&local_path, "workPath: local\n").expect("local overlay");
+
+        let error =
+            load_config(local_path.to_str(), None).expect_err("local overlay cannot be primary");
+
+        assert!(error.to_string().contains("cannot be used as --config"));
+    }
+
+    #[test]
+    fn load_config_rejects_legacy_keys_from_local_overlay() {
+        let dir = tempdir().expect("tempdir");
+        let config_dir = dir.path().join("project");
+        let config_path =
+            write_minimal_project_config(&config_dir, &minimal_config_without_base_path(""));
+        std::fs::write(
+            config_dir.join(LOCAL_CONFIG_FILE_NAME),
+            "credentials:\n  user: Admin\n",
+        )
+        .expect("local overlay");
+
+        let error = load_config(config_path.to_str(), None).expect_err("reject legacy local key");
+
+        assert!(matches!(
+            error,
+            ConfigLoadError::ValidationError(ConfigValidationError::LegacyTopLevelCredentials)
+        ));
+    }
+
+    #[test]
+    fn load_config_allows_local_null_for_optional_fields_only() {
+        let dir = tempdir().expect("tempdir");
+        let config_dir = dir.path().join("project");
+        let config_path = write_minimal_project_config(
+            &config_dir,
+            "workPath: work\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: \"File=build/ib\"\n  user: Admin\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: src\n",
+        );
+        std::fs::write(
+            config_dir.join(LOCAL_CONFIG_FILE_NAME),
+            "infobase:\n  user: null\n",
+        )
+        .expect("local overlay");
+
+        let config = load_config(config_path.to_str(), None).expect("load config");
+
+        assert_eq!(config.infobase.user, None);
+    }
+
+    #[test]
+    fn load_config_rejects_local_null_for_required_fields() {
+        let dir = tempdir().expect("tempdir");
+        let config_dir = dir.path().join("project");
+        let config_path =
+            write_minimal_project_config(&config_dir, &minimal_config_without_base_path(""));
+        std::fs::write(config_dir.join(LOCAL_CONFIG_FILE_NAME), "workPath: null\n")
+            .expect("local overlay");
+
+        let error = load_config(config_path.to_str(), None)
+            .expect_err("required field cannot be reset to null");
+
+        assert!(error.to_string().contains("failed to parse YAML config"));
+    }
 
     #[test]
     fn load_config_uses_default_build_settings_when_section_is_omitted() {

@@ -11,6 +11,7 @@ nuances вынесены в [DEEP_DIVE.md](DEEP_DIVE.md).
 - [Как получить стартовый конфиг](#как-получить-стартовый-конфиг)
 - [Именование ключей](#именование-ключей)
 - [Канонический пример](#канонический-пример)
+- [Локальный overlay](#локальный-overlay)
 - [Обязательный контракт](#обязательный-контракт)
 - [Опциональные секции](#опциональные-секции)
 - [`tools.platform`](#toolsplatform)
@@ -47,6 +48,10 @@ v8-runner config init
 После загрузки конфига относительные пути резолвятся относительно каталога, где лежит
 `v8project.yaml`.
 
+Если рядом с основным конфигом есть `v8project.local.yaml`, он применяется автоматически после
+`v8project.yaml` и до CLI overrides. Локальный файл предназначен для machine-local путей,
+credentials и runtime настроек; его следует держать вне Git.
+
 ## Именование ключей
 
 `v8project.yaml` использует не один стиль на весь документ. Это текущий loader contract, и docs
@@ -67,6 +72,7 @@ v8-runner config init
 ## Канонический пример
 
 ```yaml
+# basePath можно опустить, тогда он равен каталогу v8project.yaml.
 basePath: /path/to/project
 workPath: build
 execution_timeout: 300000
@@ -140,12 +146,69 @@ tests:
         feature_path: /path/to/features
 ```
 
+## Локальный overlay
+
+`v8project.local.yaml` расположен рядом с выбранным primary config и применяется автоматически.
+Файл не является самостоятельным config entrypoint: передавать его через `--config` нельзя.
+
+Precedence:
+
+1. `v8project.yaml`;
+2. `v8project.local.yaml`, если существует;
+3. CLI overrides, например `--workdir`.
+
+Merge rules:
+
+- object/map значения merge-ятся рекурсивно;
+- scalar значения из local overlay заменяют project значения;
+- list значения заменяются целиком;
+- `null` работает как обычное YAML-значение и допустим только для optional typed fields;
+- относительные пути local overlay резолвятся относительно каталога primary config.
+
+Local overlay может задавать machine-local секции:
+
+- `workPath`;
+- `infobase.*`, включая `user`/`password`;
+- `tools.*`;
+- `tests.*`;
+- `mcp.*`.
+
+Другие top-level ключи в local overlay отклоняются.
+
+Local overlay не может менять project identity:
+
+- `source-set`;
+- `format`;
+- `builder`.
+
+Пример:
+
+```yaml
+workPath: build-local
+
+infobase:
+  connection: "File=local/ib"
+  user: Admin
+  password: secret
+
+tools:
+  platform:
+    path: /opt/1cv8/x86_64
+  va:
+    epf_path: /home/user/tools/vanessa.epf
+
+tests:
+  va:
+    params_path: /home/user/project/.local/va-params.json
+```
+
 ## Обязательный контракт
 
 ### `basePath`
 
 - Тип: путь
-- Обязателен: да
+- Обязателен: нет
+- По умолчанию: каталог primary `v8project.yaml`
 
 Корень исходников проекта. Должен существовать и быть каталогом.
 
