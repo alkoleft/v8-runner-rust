@@ -24,6 +24,8 @@
 - [ADR-0018: Перенести контракт информационной базы в `infobase`](0018-perenesti-kontrakt-informatsionnoy-bazy-v-infobase.md) — `accepted`, `2026-04-21`
 - [ADR-0019: Обеспечивать наличие серверной ИБ через `ibcmd` в `init`](0019-sozdavat-servernuyu-infobazu-cherez-ibcmd-pri-init-pri-otsutstvii.md) — `accepted`, `2026-04-22`
 - [ADR-0020: Упростить CLI-only `convert` до repo-aware конвертации текущих исходников проекта](0020-dobavit-cli-only-convert-dlya-dvustoronney-konvertatsii-edt-i-designer.md) — `accepted`, `2026-04-22`
+- [ADR-0021: Ввести локальный overlay для `v8project.yaml`](0021-lokalnyy-overlay-config.md) — `accepted`, `2026-05-02`
+- [ADR-0022: Ввести общий механизм подготовки расширений и использовать его для `client_mcp`](0022-universalnyy-mehanizm-podgotovki-rasshireniy-i-client-mcp-extension.md) — `accepted`, `2026-05-02`
 
 ## Правила обновления
 
