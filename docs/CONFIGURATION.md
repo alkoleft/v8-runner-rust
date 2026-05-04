@@ -57,6 +57,9 @@ credentials и runtime настроек; его следует держать в
 
 ## YAML Schema и VS Code
 
+Начиная с `a1db1f8f422ca1bf71a04c1b4793d27eb8c6d0b4`, в репозитории есть
+schema artifacts для редактирования `v8project.yaml` и `v8project.local.yaml` в IDE.
+
 В репозитории публикуются две JSON Schema:
 
 - `docs/schemas/v8project.schema.json` для основного `v8project.yaml`;
@@ -68,11 +71,12 @@ credentials и runtime настроек; его следует держать в
 # yaml-language-server: $schema=https://raw.githubusercontent.com/alkoleft/v8-runner-rust/refs/tags/v0.4.2/docs/schemas/v8project.schema.json
 ```
 
-VS Code использует эту строку через расширение `redhat.vscode-yaml`; отдельная настройка
-workspace для основного файла не нужна.
+В VS Code установите расширение `redhat.vscode-yaml`. Оно использует эту строку
+автоматически; отдельная настройка workspace для основного файла не нужна.
 
 Для `v8project.local.yaml` schema подключается вручную через настройки VS Code, потому что local
-overlay обычно не генерируется командой:
+overlay обычно не генерируется командой. Добавьте это в `.vscode/settings.json` проекта или в
+user settings:
 
 ```json
 {
