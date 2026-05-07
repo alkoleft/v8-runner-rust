@@ -10,6 +10,7 @@ Use this skill to operate `v8-runner` as the automation layer for local 1C devel
 Keep this file as the decision entrypoint. Load only the reference file that matches the task:
 
 - `references/command-selection.md` for choosing the right command sequence.
+- `references/bootstrap.md` for generating `v8project.yaml` from an existing repository — what to detect yourself and what to ask the user (decision tree for `format`, `builder`, `connection`).
 - `references/config-and-backends.md` for `v8project.yaml`, source sets, formats, builders, and backend limits.
 - `references/project-workflows.md` for common build, syntax, dump, launch, and source sync workflows across Designer and EDT projects.
 - `references/file-and-artifact-workflows.md` for dump, convert, load, make/artifacts, and staged publication.
