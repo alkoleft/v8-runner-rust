@@ -33,11 +33,41 @@
           ],
           "description": "Optional tool extension prepared by `build` for client MCP launches."
         },
+        "log_level": {
+          "description": "Default `mcp_log_level` value forwarded into the `/C` payload.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "manager_url": {
+          "description": "Default WS endpoint for the session-manager.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "port": {
           "description": "Default port passed to onec-client-mcp-devkit.",
           "format": "uint16",
           "maximum": 65535,
           "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "transport": {
+          "description": "Default transport for the MCP client side: `ws`, `legacy` or `auto`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ws_timeout_ms": {
+          "description": "Default `mcp_ws_timeout_ms` value forwarded into the `/C` payload.",
+          "format": "uint64",
+          "minimum": 0,
           "type": [
             "integer",
             "null"

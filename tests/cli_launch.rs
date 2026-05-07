@@ -383,6 +383,8 @@ fn launch_mcp_va_builds_payload_from_configured_port_and_ordinary_mode() {
             "ordinary",
             "--mcp-config",
             "/tmp/mcp conf.json",
+            "--mcp-transport",
+            "legacy",
             "--raw-key",
             "/WA-",
         ])
@@ -398,6 +400,8 @@ fn launch_mcp_va_builds_payload_from_configured_port_and_ordinary_mode() {
     );
     let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
     assert_eq!(payload["data"]["mode"], "mcp");
+    assert_eq!(payload["data"]["transport"], "legacy");
+    assert_eq!(payload["data"]["mcp_port"], 9874);
     assert_eq!(
         payload["data"]["binary"].as_str().expect("binary"),
         install_dir.join("bin").join("1cv8").to_string_lossy()

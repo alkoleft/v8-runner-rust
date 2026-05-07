@@ -534,7 +534,12 @@ mod tests {
                 target: LaunchTargetRequest::client_mcp_with_mode(ClientMcpMode::Thin),
                 launch: Default::default(),
                 client_mcp: Some(ClientMcpOptionsRequest::default()),
-                mcp_ws: crate::use_cases::request::McpClientWsRequest::default(),
+                mcp_ws: crate::use_cases::request::McpClientWsRequest {
+                    transport: Some(
+                        crate::use_cases::request::McpClientTransportRequest::Legacy,
+                    ),
+                    ..Default::default()
+                },
             },
         )
         .expect("launch succeeds");
@@ -545,6 +550,8 @@ mod tests {
             .as_deref()
             .expect("message")
             .contains("v8-runner build"));
+        assert_eq!(result.transport.as_deref(), Some("legacy"));
+        assert_eq!(result.mcp_port, Some(9874));
         let args = fs::read_to_string(args_log).expect("args log");
         assert!(args.contains("ENTERPRISE"));
         assert!(args.contains("/C\"runMcp;mcpPort=9874\""));
