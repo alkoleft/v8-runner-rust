@@ -163,6 +163,20 @@ pub enum ConfigValidationError {
     #[error("tools.client_mcp.port must be greater than or equal to 1")]
     InvalidMcpClientPort,
 
+    #[error("tools.client_mcp.transport must be one of: ws, legacy, auto (got: {0})")]
+    InvalidMcpClientTransport(String),
+
+    #[error(
+        "tools.client_mcp.log_level must be one of: off, error, warn, info, debug, trace (got: {0})"
+    )]
+    InvalidMcpClientLogLevel(String),
+
+    #[error("tools.client_mcp.ws_timeout_ms must be greater than or equal to 1")]
+    InvalidMcpClientWsTimeoutMs,
+
+    #[error("tools.client_mcp.manager_url must include host:port (got: {0})")]
+    InvalidMcpClientManagerUrl(String),
+
     #[error("tools.client_mcp.extension.name must be a safe non-empty extension name: {0}")]
     InvalidToolExtensionName(String),
 
@@ -813,6 +827,34 @@ fn validate_mcp_config(config: &AppConfig) -> Result<(), ConfigValidationError> 
 
     if config.tools.client_mcp.port == Some(0) {
         return Err(ConfigValidationError::InvalidMcpClientPort);
+    }
+
+    if let Some(transport) = config.tools.client_mcp.transport.as_deref() {
+        if crate::use_cases::mcp_ws::McpClientTransport::from_str_value(transport).is_none() {
+            return Err(ConfigValidationError::InvalidMcpClientTransport(
+                transport.to_owned(),
+            ));
+        }
+    }
+
+    if let Some(level) = config.tools.client_mcp.log_level.as_deref() {
+        if !crate::use_cases::mcp_ws::is_supported_log_level(level) {
+            return Err(ConfigValidationError::InvalidMcpClientLogLevel(
+                level.to_owned(),
+            ));
+        }
+    }
+
+    if config.tools.client_mcp.ws_timeout_ms == Some(0) {
+        return Err(ConfigValidationError::InvalidMcpClientWsTimeoutMs);
+    }
+
+    if let Some(url) = config.tools.client_mcp.manager_url.as_deref() {
+        if crate::use_cases::mcp_ws::parse_manager_addr(url).is_err() {
+            return Err(ConfigValidationError::InvalidMcpClientManagerUrl(
+                url.to_owned(),
+            ));
+        }
     }
 
     Ok(())

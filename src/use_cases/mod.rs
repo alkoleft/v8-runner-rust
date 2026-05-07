@@ -32,6 +32,8 @@ pub mod launch_app;
 mod launch_keys;
 /// Load packaged artifacts into infobase.
 pub mod load_artifact;
+/// Shared helpers for the WS-mode (`mcpMode=ws`) `/C` payload.
+pub mod mcp_ws;
 /// Text-mode live progress events shared by CLI-facing use cases.
 mod progress;
 /// Transport-neutral request DTOs consumed by use cases.

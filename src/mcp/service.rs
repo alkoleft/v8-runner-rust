@@ -87,6 +87,7 @@ where
             execution: TestRequest::default_execution(),
             full: request.full.unwrap_or(false),
             scope: TestScopeRequest::All,
+            mcp_ws: crate::use_cases::request::McpClientWsRequest::default(),
         };
 
         match self
@@ -131,6 +132,7 @@ where
             execution: TestRequest::default_execution(),
             full: request.full.unwrap_or(false),
             scope: TestScopeRequest::Module { name: module_name },
+            mcp_ws: crate::use_cases::request::McpClientWsRequest::default(),
         };
 
         match self
@@ -237,6 +239,7 @@ where
             })?,
             launch: LaunchOptions::default(),
             client_mcp: None,
+            mcp_ws: crate::use_cases::request::McpClientWsRequest::default(),
         };
         let started = Instant::now();
 
@@ -1358,6 +1361,12 @@ mod tests {
                 pid: Some(42),
                 binary: PathBuf::from("/opt/1cv8"),
                 message: None,
+                transport: None,
+                client_uid: None,
+                kind: None,
+                manager_url: None,
+                corr_id: None,
+                mcp_port: None,
             }));
             let config = sample_config();
             let service = McpService::with_port(&config, port);
@@ -1389,6 +1398,12 @@ mod tests {
                 pid: None,
                 binary: PathBuf::from("/opt/1cv8"),
                 message: None,
+                transport: None,
+                client_uid: None,
+                kind: None,
+                manager_url: None,
+                corr_id: None,
+                mcp_port: None,
             })),
         );
 
@@ -1426,6 +1441,12 @@ mod tests {
                 pid: None,
                 binary: PathBuf::from("/opt/1cv8"),
                 message: None,
+                transport: None,
+                client_uid: None,
+                kind: None,
+                manager_url: None,
+                corr_id: None,
+                mcp_port: None,
             })),
         );
 

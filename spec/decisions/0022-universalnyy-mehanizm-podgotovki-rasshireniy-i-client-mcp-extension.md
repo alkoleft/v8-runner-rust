@@ -147,7 +147,7 @@ validation error, а не поздний platform failure.
    - добавить понятный hint на `v8-runner build`, если client MCP launch зависит от неподготовленной ИБ.
 7. Docs/tests:
    - обновить `docs/CONFIGURATION.md`, `docs/CAPABILITIES.md` and examples;
-   - после реализации обновить `SKILL/SKILL.md`, чтобы repo-local skill описывал shipped behavior;
+   - после реализации обновить `v8-runner/SKILL.md`, чтобы repo-local skill описывал shipped behavior;
    - добавить targeted tests для source/artifact validation, EDT workspace init, build preparation,
      source-backed no-change skip, full-rebuild refresh and no-install launch behavior.
 

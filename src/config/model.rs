@@ -286,6 +286,21 @@ pub struct ClientMcpToolConfig {
 
     /// Optional tool extension prepared by `build` for client MCP launches.
     pub extension: Option<ToolExtensionConfig>,
+
+    /// Default transport for the MCP client side: `ws`, `legacy` or `auto`.
+    /// When omitted, runtime treats it as `auto` (probe manager, fall back
+    /// to legacy local HTTP MCP).
+    pub transport: Option<String>,
+
+    /// Default WS endpoint for the session-manager
+    /// (e.g. `ws://127.0.0.1:4000/sessions`).
+    pub manager_url: Option<String>,
+
+    /// Default `mcp_log_level` value forwarded into the `/C` payload.
+    pub log_level: Option<String>,
+
+    /// Default `mcp_ws_timeout_ms` value forwarded into the `/C` payload.
+    pub ws_timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone)]

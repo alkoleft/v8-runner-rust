@@ -13,10 +13,14 @@ use crate::platform::utilities::PlatformUtilities;
 use crate::support::error::AppError;
 use crate::use_cases::context::{ExecutionContext, ExecutionInterruption};
 use crate::use_cases::launch_keys::vanessa_enterprise_launch_keys;
+use crate::use_cases::mcp_ws::{
+    self, ClientKind, McpClientTransport, TransportDecision, WsLaunchParams, WsResolveInputs,
+};
 use crate::use_cases::progress::log_live_stage;
 use crate::use_cases::request::{
     ClientMcpAddonRequest, ClientMcpMode, ClientMcpOptionsRequest, EnterpriseLaunchTarget,
-    LaunchRequest as LaunchArgs, LaunchTargetRequest,
+    LaunchRequest as LaunchArgs, LaunchTargetRequest, McpClientTransportRequest,
+    McpClientWsRequest,
 };
 use crate::use_cases::result::{UseCaseFailure, UseCaseResult};
 use crate::use_cases::tool_extension;
@@ -65,7 +69,7 @@ pub fn execute(
         ))));
     }
 
-    let launch = effective_launch_options(config, args)
+    let (launch, mcp_resolution) = effective_launch_options(config, args)
         .map_err(|error| UseCaseFailure::without_payload(error))?;
     let additional_launch_keys = effective_enterprise_launch_keys(config, args, &launch);
     let mut utilities = PlatformUtilities::from_config(config);
@@ -93,14 +97,45 @@ pub fn execute(
         })
         .map_err(|error| UseCaseFailure::without_payload(AppError::from(error)))?;
 
-    let result = LaunchResult {
+    let mut result = LaunchResult {
         ok: true,
         mode,
         pid: Some(spawned.pid),
         binary: spawned.binary.clone(),
         message: Some(launch_message(config, args, &spawned.binary, spawned.pid)),
+        transport: None,
+        client_uid: None,
+        kind: None,
+        manager_url: None,
+        corr_id: None,
+        mcp_port: None,
     };
+    if let Some(meta) = mcp_resolution {
+        apply_mcp_resolution_to_result(&mut result, meta);
+    }
     Ok(result)
+}
+
+fn apply_mcp_resolution_to_result(result: &mut LaunchResult, meta: McpResolutionMeta) {
+    match meta {
+        McpResolutionMeta::Ws(params) => {
+            result.transport = Some("ws".to_owned());
+            result.client_uid = Some(params.client_uid);
+            result.kind = Some(params.kind.as_str().to_owned());
+            result.manager_url = Some(params.manager_url);
+            result.corr_id = Some(params.corr_id);
+        }
+        McpResolutionMeta::Legacy { port } => {
+            result.transport = Some("legacy".to_owned());
+            result.mcp_port = port;
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum McpResolutionMeta {
+    Ws(WsLaunchParams),
+    Legacy { port: Option<u16> },
 }
 
 fn launch_message(config: &AppConfig, args: &LaunchArgs, binary: &Path, pid: u32) -> String {
@@ -185,7 +220,7 @@ fn client_mcp_launch_shape(mode: ClientMcpMode) -> (LaunchMode, UtilityType, Lau
 fn effective_launch_options(
     config: &AppConfig,
     args: &LaunchArgs,
-) -> Result<LaunchOptions, AppError> {
+) -> Result<(LaunchOptions, Option<McpResolutionMeta>), AppError> {
     let is_client_mcp = matches!(
         args.target,
         LaunchTargetRequest::Enterprise(EnterpriseLaunchTarget::ClientMcp { .. })
@@ -196,7 +231,7 @@ fn effective_launch_options(
                 "launch mcp requires client_mcp options".to_owned(),
             ))
         } else {
-            Ok(args.launch.clone())
+            Ok((args.launch.clone(), None))
         };
     };
     if !is_client_mcp {
@@ -205,8 +240,21 @@ fn effective_launch_options(
         ));
     }
 
+    let kind = launch_mcp_client_kind(client_mcp);
+    let decision = decide_mcp_transport(config, &args.mcp_ws)?;
     let mut launch = args.launch.clone();
-    let mut payload = build_client_mcp_payload(client_mcp, config.tools.client_mcp.port);
+    let (mut payload, meta) = match decision {
+        TransportDecision::Ws => {
+            let params = resolve_ws_launch_params(config, &args.mcp_ws, kind);
+            let snippet = params.payload_snippet();
+            (snippet, McpResolutionMeta::Ws(params))
+        }
+        TransportDecision::Legacy => {
+            let payload = build_legacy_client_mcp_payload(client_mcp, config.tools.client_mcp.port);
+            let port = client_mcp.port.or(config.tools.client_mcp.port);
+            (payload, McpResolutionMeta::Legacy { port })
+        }
+    };
     if matches!(
         client_mcp.addon,
         Some(ClientMcpAddonRequest::VanessaAutomation)
@@ -215,10 +263,17 @@ fn effective_launch_options(
         crate::use_cases::vanessa::apply_client_mcp_launch(&mut launch, &mut payload, &va_launch);
     }
     launch.c = Some(payload);
-    Ok(launch)
+    Ok((launch, Some(meta)))
 }
 
-fn build_client_mcp_payload(
+fn launch_mcp_client_kind(client_mcp: &ClientMcpOptionsRequest) -> ClientKind {
+    match client_mcp.addon {
+        Some(ClientMcpAddonRequest::VanessaAutomation) => ClientKind::VanessaTestClient,
+        None => ClientKind::V8RunnerClient,
+    }
+}
+
+fn build_legacy_client_mcp_payload(
     options: &ClientMcpOptionsRequest,
     configured_port: Option<u16>,
 ) -> String {
@@ -230,6 +285,65 @@ fn build_client_mcp_payload(
         payload.push_str(&format!(";mcpPort={port}"));
     }
     payload
+}
+
+/// Resolves the effective transport for an MCP-bearing launch given CLI/config
+/// inputs and a TCP probe of the manager.
+pub(crate) fn decide_mcp_transport(
+    config: &AppConfig,
+    cli: &McpClientWsRequest,
+) -> Result<TransportDecision, AppError> {
+    let requested = effective_transport(config, cli);
+    let manager_url = effective_manager_url(config, cli);
+    mcp_ws::select_transport(requested, &manager_url, |addr| {
+        mcp_ws::probe_tcp(addr, Duration::from_millis(mcp_ws::PROBE_TIMEOUT_MS))
+    })
+    .map_err(|err| AppError::Validation(err.to_string()))
+}
+
+pub(crate) fn effective_transport(
+    config: &AppConfig,
+    cli: &McpClientWsRequest,
+) -> McpClientTransport {
+    if let Some(t) = cli.transport {
+        return match t {
+            McpClientTransportRequest::Ws => McpClientTransport::Ws,
+            McpClientTransportRequest::Legacy => McpClientTransport::Legacy,
+            McpClientTransportRequest::Auto => McpClientTransport::Auto,
+        };
+    }
+    config
+        .tools
+        .client_mcp
+        .transport
+        .as_deref()
+        .and_then(McpClientTransport::from_str_value)
+        .unwrap_or_default()
+}
+
+pub(crate) fn effective_manager_url(config: &AppConfig, cli: &McpClientWsRequest) -> String {
+    cli.manager_url
+        .clone()
+        .or_else(|| config.tools.client_mcp.manager_url.clone())
+        .unwrap_or_else(|| mcp_ws::DEFAULT_MANAGER_URL.to_owned())
+}
+
+pub(crate) fn resolve_ws_launch_params(
+    config: &AppConfig,
+    cli: &McpClientWsRequest,
+    kind: ClientKind,
+) -> WsLaunchParams {
+    let inputs = WsResolveInputs {
+        manager_url: Some(effective_manager_url(config, cli)),
+        client_uid: cli.client_uid.clone(),
+        corr_id: cli.corr_id.clone(),
+        log_level: cli
+            .log_level
+            .clone()
+            .or_else(|| config.tools.client_mcp.log_level.clone()),
+        ws_timeout_ms: cli.ws_timeout_ms.or(config.tools.client_mcp.ws_timeout_ms),
+    };
+    mcp_ws::resolve_ws_params(kind, inputs)
 }
 
 #[cfg(test)]
@@ -315,6 +429,7 @@ mod tests {
                 target: LaunchTargetRequest::thin_client(),
                 launch: Default::default(),
                 client_mcp: None,
+                mcp_ws: crate::use_cases::request::McpClientWsRequest::default(),
             },
         )
         .expect("launch succeeds");
@@ -346,6 +461,7 @@ mod tests {
                 target: LaunchTargetRequest::designer(),
                 launch: Default::default(),
                 client_mcp: None,
+                mcp_ws: crate::use_cases::request::McpClientWsRequest::default(),
             },
         )
         .expect("launch succeeds");
@@ -377,6 +493,7 @@ mod tests {
                 target: LaunchTargetRequest::ordinary_application(),
                 launch: Default::default(),
                 client_mcp: None,
+                mcp_ws: crate::use_cases::request::McpClientWsRequest::default(),
             },
         )
         .expect("launch succeeds");
@@ -415,6 +532,10 @@ mod tests {
                 target: LaunchTargetRequest::client_mcp_with_mode(ClientMcpMode::Thin),
                 launch: Default::default(),
                 client_mcp: Some(ClientMcpOptionsRequest::default()),
+                mcp_ws: crate::use_cases::request::McpClientWsRequest {
+                    transport: Some(crate::use_cases::request::McpClientTransportRequest::Legacy),
+                    ..Default::default()
+                },
             },
         )
         .expect("launch succeeds");
@@ -425,6 +546,8 @@ mod tests {
             .as_deref()
             .expect("message")
             .contains("v8-runner build"));
+        assert_eq!(result.transport.as_deref(), Some("legacy"));
+        assert_eq!(result.mcp_port, Some(9874));
         let args = fs::read_to_string(args_log).expect("args log");
         assert!(args.contains("ENTERPRISE"));
         assert!(args.contains("/C\"runMcp;mcpPort=9874\""));
@@ -446,6 +569,7 @@ mod tests {
                 target: LaunchTargetRequest::client_mcp_with_mode(ClientMcpMode::Thin),
                 launch: Default::default(),
                 client_mcp: None,
+                mcp_ws: crate::use_cases::request::McpClientWsRequest::default(),
             },
         )
         .expect_err("client_mcp options are required");
@@ -464,6 +588,7 @@ mod tests {
                 target: LaunchTargetRequest::thin_client(),
                 launch: Default::default(),
                 client_mcp: Some(ClientMcpOptionsRequest::default()),
+                mcp_ws: crate::use_cases::request::McpClientWsRequest::default(),
             },
         )
         .expect_err("client_mcp options are rejected for non-mcp launch");

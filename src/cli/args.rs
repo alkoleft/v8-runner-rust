@@ -159,6 +159,9 @@ pub struct TestArgs {
     #[command(flatten)]
     pub launch: LaunchOptionsArgs,
 
+    #[command(flatten)]
+    pub mcp_ws: McpClientWsArgs,
+
     #[command(subcommand)]
     pub runner: TestRunner,
 }
@@ -311,6 +314,44 @@ pub struct LaunchArgs {
     /// Port override for onec-client-mcp-devkit `/C"...;mcpPort=<PORT>"`
     #[arg(long = "mcp-port")]
     pub mcp_port: Option<u16>,
+
+    #[command(flatten)]
+    pub mcp_ws: McpClientWsArgs,
+}
+
+/// Shared WS-mode (`mcpMode=ws`) options for `launch mcp`, `launch mcp va`,
+/// `test yaxunit`, and `test va`. All flags are optional; values fall back to
+/// the project config (`tools.client_mcp.*`) and finally to internal defaults.
+#[derive(Args, Debug, Clone, Default, PartialEq, Eq)]
+#[command(next_help_heading = "MCP client WS options")]
+pub struct McpClientWsArgs {
+    /// Override the transport selection: `ws` forces WS, `legacy` forces local
+    /// HTTP MCP, `auto` probes the manager and falls back to legacy.
+    #[arg(long = "mcp-transport", value_parser = ["ws", "legacy", "auto"])]
+    pub mcp_transport: Option<String>,
+
+    /// Override the session-manager WS endpoint
+    /// (default `ws://127.0.0.1:4000/sessions`).
+    #[arg(long = "manager-url")]
+    pub manager_url: Option<String>,
+
+    /// Use a fixed `client_uid` instead of generating a fresh UUIDv4
+    /// per launch.
+    #[arg(long = "client-uid")]
+    pub client_uid: Option<String>,
+
+    /// Override the `corr_id` used for trace correlation in manager logs.
+    #[arg(long = "corr-id")]
+    pub corr_id: Option<String>,
+
+    /// Override the `mcp_log_level` value passed to the BSL devkit.
+    #[arg(long = "mcp-log-level", value_parser = ["off", "error", "warn", "info", "debug", "trace"])]
+    pub mcp_log_level: Option<String>,
+
+    /// Override the `mcp_ws_timeout_ms` value passed to the BSL devkit
+    /// (WS-handshake timeout used by `auto` fallback).
+    #[arg(long = "mcp-ws-timeout-ms")]
+    pub mcp_ws_timeout_ms: Option<u64>,
 }
 
 #[derive(Args, Debug, Clone, Default, PartialEq, Eq)]
@@ -680,6 +721,7 @@ mod tests {
                 mcp_mode,
                 mcp_config,
                 mcp_port,
+                mcp_ws: _,
             }) => {
                 assert_eq!(target, "ordinary");
                 assert_eq!(launch.c.as_deref(), Some("DoWork"));
@@ -729,6 +771,7 @@ mod tests {
                 mcp_mode,
                 mcp_config,
                 mcp_port,
+                mcp_ws: _,
             }) => {
                 assert_eq!(target, "designer");
                 assert_eq!(launch, LaunchOptionsArgs::default());
@@ -765,6 +808,7 @@ mod tests {
                 mcp_mode,
                 mcp_config,
                 mcp_port,
+                mcp_ws: _,
             }) => {
                 assert_eq!(target, "mcp");
                 assert_eq!(launch, LaunchOptionsArgs::default());

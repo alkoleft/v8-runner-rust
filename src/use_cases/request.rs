@@ -39,6 +39,8 @@ pub struct TestRequest {
     pub full: bool,
     /// Selected test scope. Module targets require a non-empty module name.
     pub scope: TestScopeRequest,
+    /// Optional WS-mode (session-manager) overrides shared with `launch mcp`.
+    pub mcp_ws: McpClientWsRequest,
 }
 
 impl TestRequest {
@@ -608,6 +610,30 @@ pub struct LaunchRequest {
     pub launch: LaunchOptions,
     /// Client-side MCP launch options. Present only for `LaunchTargetRequest::client_mcp*`.
     pub client_mcp: Option<ClientMcpOptionsRequest>,
+    /// Optional WS-mode (session-manager) overrides shared between
+    /// `launch mcp` and `test` flows.
+    pub mcp_ws: McpClientWsRequest,
+}
+
+/// Transport-neutral selector for MCP client transport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpClientTransportRequest {
+    Ws,
+    Legacy,
+    Auto,
+}
+
+/// Transport-neutral overrides for the WS-mode `/C` snippet. All fields are
+/// optional; the use case fills missing values from project config and
+/// internal defaults at execution time.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct McpClientWsRequest {
+    pub transport: Option<McpClientTransportRequest>,
+    pub manager_url: Option<String>,
+    pub client_uid: Option<String>,
+    pub corr_id: Option<String>,
+    pub log_level: Option<String>,
+    pub ws_timeout_ms: Option<u64>,
 }
 
 /// Transport-neutral request for the `init` use case.

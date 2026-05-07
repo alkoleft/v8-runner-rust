@@ -90,6 +90,15 @@ v8-runner test va
 v8-runner launch mcp va
 ```
 
+### Подключение к session-manager (WS-режим)
+
+`launch mcp`, `launch mcp va`, `test yaxunit ...` и `test va ...` поддерживают подключение
+1С-клиента к [`v8-client-session-manager`](../v8-client-session-manager/) вместо запуска
+локального HTTP MCP. По умолчанию — `auto`: TCP-probe адреса менеджера, при успехе
+собирается `/C"mcpMode=ws;manager_url=...;client_uid=...;kind=...;..."`, иначе используется
+legacy `/C"runMcp;..."`. Полный список ключей `/C` и CLI-флагов см. в
+[docs/CONFIGURATION.md](docs/CONFIGURATION.md#tools-client_mcp).
+
 ### Поднимите MCP transport (MCP-транспорт) для AI-агентов:
 
 ```bash

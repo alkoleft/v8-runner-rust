@@ -705,6 +705,18 @@ struct ClientMcpToolSchema {
     /// Optional tool extension prepared by `build` for client MCP launches.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     extension: Option<ToolExtensionSchema>,
+    /// Default transport for the MCP client side: `ws`, `legacy` or `auto`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    transport: Option<String>,
+    /// Default WS endpoint for the session-manager.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    manager_url: Option<String>,
+    /// Default `mcp_log_level` value forwarded into the `/C` payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    log_level: Option<String>,
+    /// Default `mcp_ws_timeout_ms` value forwarded into the `/C` payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ws_timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -717,6 +729,38 @@ struct PartialClientMcpToolSchema {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "PartialToolExtensionSchema")]
     extension: Option<PartialToolExtensionSchema>,
+    /// Machine-local override of the default MCP client transport.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_non_null_optional",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "String")]
+    transport: Option<String>,
+    /// Machine-local override of the default session-manager WS endpoint.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_non_null_optional",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "String")]
+    manager_url: Option<String>,
+    /// Machine-local override of the default `mcp_log_level`.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_non_null_optional",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "String")]
+    log_level: Option<String>,
+    /// Machine-local override of the default `mcp_ws_timeout_ms`.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_non_null_optional",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "u64")]
+    ws_timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]

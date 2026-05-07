@@ -226,7 +226,9 @@ pub(super) fn run_tests(
     log_live_stage("test: enterprise run", "[Enterprise] running test runner");
     let run_started = Instant::now();
     let enterprise_runner = crate::platform::process::ProcessExecutor;
-    let platform_launch = build_platform_launch(&args.execution.launch, &prepared_run, &artifacts);
+    let mut platform_launch =
+        build_platform_launch(&args.execution.launch, &prepared_run, &artifacts);
+    apply_test_mcp_ws_payload(config, &args.mcp_ws, &prepared_run, &mut platform_launch);
     let enterprise = match build_enterprise_dsl(
         context,
         config,

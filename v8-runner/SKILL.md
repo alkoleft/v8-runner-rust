@@ -10,6 +10,7 @@ Use this skill to operate `v8-runner` as the automation layer for local 1C devel
 Keep this file as the decision entrypoint. Load only the reference file that matches the task:
 
 - `references/command-selection.md` for choosing the right command sequence.
+- `references/bootstrap.md` for generating `v8project.yaml` from an existing repository — what to detect yourself and what to ask the user (decision tree for `format`, `builder`, `connection`).
 - `references/config-and-backends.md` for `v8project.yaml`, source sets, formats, builders, and backend limits.
 - `references/project-workflows.md` for common build, syntax, dump, launch, and source sync workflows across Designer and EDT projects.
 - `references/file-and-artifact-workflows.md` for dump, convert, load, make/artifacts, and staged publication.
@@ -74,6 +75,7 @@ v8-runner init
 - Release artifacts need to be exported or external artifacts published: use `v8-runner make ...` or the `artifacts` alias.
 - Need a 1C UI session: use `v8-runner launch designer`, `launch thin`, `launch thick`, or `launch ordinary`.
 - Need onec-client-mcp-devkit launched inside 1C without VA authoring: use `v8-runner launch mcp ...`.
+- Pair the launched 1С-client with a running [v8-client-session-manager](https://github.com/SteelMorgan/v8-client-session-manager) over WebSocket: rely on `--mcp-transport=auto` (default — TCP-probes `manager_url` for 200 ms). Force WS with `--mcp-transport=ws` (fails if manager is down) or skip WS entirely with `--mcp-transport=legacy`. WS-only flags: `--manager-url`, `--client-uid`, `--corr-id`, `--mcp-log-level`, `--mcp-ws-timeout-ms`. The internal `kind` mapping (`v8_runner_client` / `vanessa_test_client` / `yaxunit_runner` / `vanessa_test_client`) is fixed by entry-point and **not** overridable from CLI. Read `references/project-workflows.md` (section «WS-режим к session-manager») for the full payload, defaults, and `--json-message` shape.
 
 ## Guardrails
 

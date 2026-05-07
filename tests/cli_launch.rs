@@ -383,6 +383,8 @@ fn launch_mcp_va_builds_payload_from_configured_port_and_ordinary_mode() {
             "ordinary",
             "--mcp-config",
             "/tmp/mcp conf.json",
+            "--mcp-transport",
+            "legacy",
             "--raw-key",
             "/WA-",
         ])
@@ -398,6 +400,8 @@ fn launch_mcp_va_builds_payload_from_configured_port_and_ordinary_mode() {
     );
     let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
     assert_eq!(payload["data"]["mode"], "mcp");
+    assert_eq!(payload["data"]["transport"], "legacy");
+    assert_eq!(payload["data"]["mcp_port"], 9874);
     assert_eq!(
         payload["data"]["binary"].as_str().expect("binary"),
         install_dir.join("bin").join("1cv8").to_string_lossy()
@@ -681,4 +685,214 @@ fn launch_non_mcp_rejects_mcp_options() {
     assert!(String::from_utf8_lossy(&output.stderr).contains(
         "--mcp-config, --mcp-port, --mode, and MCP_SCENARIO are supported only for `launch mcp`"
     ));
+}
+
+// ----------------------------------------------------------------------------
+// MCP WS-mode (mcpMode=ws) integration tests
+// ----------------------------------------------------------------------------
+
+fn setup_mcp_project_with_logging_thin() -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let dir = temp_workspace();
+    let base_path = dir.path().join("project");
+    let work_path = dir.path().join("work");
+    let install_dir = dir.path().join("platform");
+    let config_path = dir.path().join("v8project.yaml");
+    let args_log = install_dir.join("mcp.args.log");
+
+    fs::create_dir_all(&base_path).expect("base");
+    fs::create_dir_all(&work_path).expect("work");
+    write_logging_script(&install_dir.join("bin").join("1cv8c"), &args_log);
+    write_script(&install_dir.join("bin").join("1cv8"));
+    write_config(&config_path, &base_path, &work_path, &install_dir, None);
+
+    (dir, config_path, args_log)
+}
+
+#[test]
+fn launch_mcp_legacy_transport_emits_runmcp_payload_and_legacy_envelope() {
+    let (_dir, config_path, args_log) = setup_mcp_project_with_logging_thin();
+    let output = v8_runner_command()
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--json-message",
+            "launch",
+            "mcp",
+            "--mcp-transport",
+            "legacy",
+            "--mcp-port",
+            "9999",
+        ])
+        .output()
+        .expect("run command");
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(payload["data"]["transport"], "legacy");
+    assert_eq!(payload["data"]["mcp_port"], 9999);
+    assert!(payload["data"]["client_uid"].is_null());
+
+    let args = fs::read_to_string(args_log).expect("args log");
+    assert!(args.contains("/C\"runMcp;mcpPort=9999\""));
+    assert!(!args.contains("mcpMode=ws"));
+}
+
+#[test]
+fn launch_mcp_ws_transport_with_listener_emits_ws_payload_and_ws_envelope() {
+    let (_dir, config_path, args_log) = setup_mcp_project_with_logging_thin();
+    // Spawn an ephemeral listener; the manager_url points at it so the probe
+    // succeeds and v8-runner picks the WS branch.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let manager_url = format!(
+        "ws://127.0.0.1:{}/sessions",
+        listener.local_addr().expect("addr").port()
+    );
+    let output = v8_runner_command()
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--json-message",
+            "launch",
+            "mcp",
+            "--mcp-transport",
+            "ws",
+            "--manager-url",
+            &manager_url,
+            "--mcp-log-level",
+            "debug",
+            "--mcp-ws-timeout-ms",
+            "2500",
+            "--client-uid",
+            "00000000-0000-0000-0000-000000000abc",
+            "--corr-id",
+            "vr-deadbeef",
+        ])
+        .output()
+        .expect("run command");
+    drop(listener);
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(payload["data"]["transport"], "ws");
+    assert_eq!(
+        payload["data"]["client_uid"],
+        "00000000-0000-0000-0000-000000000abc"
+    );
+    assert_eq!(payload["data"]["kind"], "v8_runner_client");
+    assert_eq!(payload["data"]["manager_url"], manager_url);
+    assert_eq!(payload["data"]["corr_id"], "vr-deadbeef");
+
+    let args = fs::read_to_string(args_log).expect("args log");
+    assert!(args.contains("mcpMode=ws"));
+    assert!(args.contains("client_uid=00000000-0000-0000-0000-000000000abc"));
+    assert!(args.contains("kind=v8_runner_client"));
+    assert!(args.contains(&format!("manager_url={manager_url}")));
+    assert!(args.contains("corr_id=vr-deadbeef"));
+    assert!(args.contains("mcp_log_level=debug"));
+    assert!(args.contains("mcp_ws_timeout_ms=2500"));
+    assert!(!args.contains("runMcp"));
+}
+
+#[test]
+fn launch_mcp_ws_required_fails_when_manager_unreachable() {
+    let (_dir, config_path, _args_log) = setup_mcp_project_with_logging_thin();
+    // Bind & immediately drop to grab a guaranteed-free port.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    drop(listener);
+    let manager_url = format!("ws://127.0.0.1:{port}/sessions");
+    let output = v8_runner_command()
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--json-message",
+            "launch",
+            "mcp",
+            "--mcp-transport",
+            "ws",
+            "--manager-url",
+            &manager_url,
+        ])
+        .output()
+        .expect("run command");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{stderr}\n{stdout}");
+    assert!(
+        combined.contains("session-manager unreachable") || combined.contains("unreachable"),
+        "expected 'unreachable' diagnostic, got stderr={stderr}, stdout={stdout}"
+    );
+}
+
+#[test]
+fn launch_mcp_auto_falls_back_to_legacy_when_manager_unreachable() {
+    let (_dir, config_path, args_log) = setup_mcp_project_with_logging_thin();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    drop(listener);
+    let manager_url = format!("ws://127.0.0.1:{port}/sessions");
+    let output = v8_runner_command()
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--json-message",
+            "launch",
+            "mcp",
+            "--mcp-transport",
+            "auto",
+            "--manager-url",
+            &manager_url,
+        ])
+        .output()
+        .expect("run command");
+    assert!(output.status.success());
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(payload["data"]["transport"], "legacy");
+    let args = fs::read_to_string(args_log).expect("args log");
+    assert!(args.contains("/C\"runMcp\""));
+    assert!(!args.contains("mcpMode=ws"));
+}
+
+#[test]
+fn launch_mcp_rejects_invalid_manager_url() {
+    let (_dir, config_path, _args_log) = setup_mcp_project_with_logging_thin();
+    let output = v8_runner_command()
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "launch",
+            "mcp",
+            "--manager-url",
+            "ws://bare-host-no-port/sessions",
+        ])
+        .output()
+        .expect("run command");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--manager-url"));
+}
+
+#[test]
+fn launch_mcp_rejects_zero_ws_timeout() {
+    let (_dir, config_path, _args_log) = setup_mcp_project_with_logging_thin();
+    let output = v8_runner_command()
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "launch",
+            "mcp",
+            "--mcp-ws-timeout-ms",
+            "0",
+        ])
+        .output()
+        .expect("run command");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .contains("--mcp-ws-timeout-ms must be greater than or equal to 1"));
 }

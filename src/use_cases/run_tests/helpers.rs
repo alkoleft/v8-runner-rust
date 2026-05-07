@@ -415,6 +415,50 @@ pub(super) fn build_platform_launch(
     launch
 }
 
+/// Appends the `mcpMode=ws;...` snippet to an existing `/C` payload, joining
+/// with `;` and preserving the leading payload (e.g. `RunUnitTests=...` or
+/// the Vanessa player payload). When the `/C` value is absent, the snippet
+/// becomes the entire `/C`.
+pub(super) fn append_mcp_ws_snippet(launch: &mut LaunchOptions, snippet: &str) {
+    let combined = match launch.c.take() {
+        Some(existing) if !existing.is_empty() => format!("{existing};{snippet}"),
+        _ => snippet.to_owned(),
+    };
+    launch.c = Some(combined);
+}
+
+/// If the WS-mode resolution succeeds for this test run, append the
+/// `mcpMode=ws;...` snippet to the platform `/C` so the BSL devkit registers
+/// with `v8-client-session-manager` instead of starting a local HTTP MCP.
+///
+/// Errors from the resolution layer (e.g. invalid `manager_url`) are logged
+/// and treated as "no WS snippet"; the test run still proceeds with its
+/// regular `/C` payload. This preserves the previous behavior when the
+/// session-manager is not used.
+pub(super) fn apply_test_mcp_ws_payload(
+    config: &AppConfig,
+    mcp_ws: &crate::use_cases::request::McpClientWsRequest,
+    prepared_run: &PreparedRun,
+    launch: &mut LaunchOptions,
+) {
+    let kind = match prepared_run {
+        PreparedRun::YaXUnit => crate::use_cases::mcp_ws::ClientKind::YaxunitRunner,
+        PreparedRun::Vanessa { .. } => crate::use_cases::mcp_ws::ClientKind::VanessaTestClient,
+    };
+    let decision = match crate::use_cases::launch_app::decide_mcp_transport(config, mcp_ws) {
+        Ok(d) => d,
+        Err(err) => {
+            tracing::warn!(error = %err, "failed to resolve MCP client transport for test run");
+            return;
+        }
+    };
+    if !matches!(decision, crate::use_cases::mcp_ws::TransportDecision::Ws) {
+        return;
+    }
+    let params = crate::use_cases::launch_app::resolve_ws_launch_params(config, mcp_ws, kind);
+    append_mcp_ws_snippet(launch, &params.payload_snippet());
+}
+
 pub(super) fn collect_diagnostics(
     platform_result: &crate::platform::result::PlatformCommandResult,
     mut diagnostics: Vec<String>,
@@ -496,5 +540,41 @@ pub(super) fn enterprise_error_kind(
             None,
             ExecutionStatus::Failed,
         ),
+    }
+}
+
+#[cfg(test)]
+mod append_ws_tests {
+    use super::append_mcp_ws_snippet;
+    use crate::domain::runner::LaunchOptions;
+
+    #[test]
+    fn append_appends_after_existing_payload() {
+        let mut launch = LaunchOptions {
+            c: Some("RunUnitTests=/tmp/cfg.json".to_owned()),
+            ..Default::default()
+        };
+        append_mcp_ws_snippet(&mut launch, "mcpMode=ws;manager_url=ws://m:1/s");
+        assert_eq!(
+            launch.c.as_deref(),
+            Some("RunUnitTests=/tmp/cfg.json;mcpMode=ws;manager_url=ws://m:1/s")
+        );
+    }
+
+    #[test]
+    fn append_uses_snippet_alone_when_c_missing() {
+        let mut launch = LaunchOptions::default();
+        append_mcp_ws_snippet(&mut launch, "mcpMode=ws");
+        assert_eq!(launch.c.as_deref(), Some("mcpMode=ws"));
+    }
+
+    #[test]
+    fn append_replaces_empty_c() {
+        let mut launch = LaunchOptions {
+            c: Some(String::new()),
+            ..Default::default()
+        };
+        append_mcp_ws_snippet(&mut launch, "mcpMode=ws");
+        assert_eq!(launch.c.as_deref(), Some("mcpMode=ws"));
     }
 }

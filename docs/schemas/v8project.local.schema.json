@@ -204,6 +204,14 @@
           ],
           "description": "Machine-local override or reset for the client MCP tool extension."
         },
+        "log_level": {
+          "description": "Machine-local override of the default `mcp_log_level`.",
+          "type": "string"
+        },
+        "manager_url": {
+          "description": "Machine-local override of the default session-manager WS endpoint.",
+          "type": "string"
+        },
         "port": {
           "description": "Machine-local default port passed to onec-client-mcp-devkit.",
           "format": "uint16",
@@ -213,6 +221,16 @@
             "integer",
             "null"
           ]
+        },
+        "transport": {
+          "description": "Machine-local override of the default MCP client transport.",
+          "type": "string"
+        },
+        "ws_timeout_ms": {
+          "description": "Machine-local override of the default `mcp_ws_timeout_ms`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
         }
       },
       "type": "object"
