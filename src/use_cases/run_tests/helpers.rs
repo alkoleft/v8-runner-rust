@@ -545,3 +545,39 @@ pub(super) fn enterprise_error_kind(
         ),
     }
 }
+
+#[cfg(test)]
+mod append_ws_tests {
+    use super::append_mcp_ws_snippet;
+    use crate::domain::runner::LaunchOptions;
+
+    #[test]
+    fn append_appends_after_existing_payload() {
+        let mut launch = LaunchOptions {
+            c: Some("RunUnitTests=/tmp/cfg.json".to_owned()),
+            ..Default::default()
+        };
+        append_mcp_ws_snippet(&mut launch, "mcpMode=ws;manager_url=ws://m:1/s");
+        assert_eq!(
+            launch.c.as_deref(),
+            Some("RunUnitTests=/tmp/cfg.json;mcpMode=ws;manager_url=ws://m:1/s")
+        );
+    }
+
+    #[test]
+    fn append_uses_snippet_alone_when_c_missing() {
+        let mut launch = LaunchOptions::default();
+        append_mcp_ws_snippet(&mut launch, "mcpMode=ws");
+        assert_eq!(launch.c.as_deref(), Some("mcpMode=ws"));
+    }
+
+    #[test]
+    fn append_replaces_empty_c() {
+        let mut launch = LaunchOptions {
+            c: Some(String::new()),
+            ..Default::default()
+        };
+        append_mcp_ws_snippet(&mut launch, "mcpMode=ws");
+        assert_eq!(launch.c.as_deref(), Some("mcpMode=ws"));
+    }
+}
