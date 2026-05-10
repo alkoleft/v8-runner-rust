@@ -428,7 +428,22 @@ pub(super) fn run_build_edt(
     let mut ibcmd_binary: Option<PathBuf> = None;
     let mut edt_binary: Option<PathBuf> = None;
     let mut interactive_edt = None;
+    let mut interactive_build_export_edt = None;
     let mut steps = Vec::new();
+    let edt_build_export_workspace = config.work_path.join("edt-build-workspace");
+    if let Err(error) = remove_storage_path(&edt_build_export_workspace) {
+        return Err(BuildExecutionFailure::with_payload(
+            AppError::Runtime(format!(
+                "failed to clean EDT build export workspace '{}': {error}",
+                edt_build_export_workspace.display()
+            )),
+            BuildResult {
+                ok: false,
+                steps,
+                duration_ms: started.elapsed().as_millis() as u64,
+            },
+        ));
+    }
 
     for (index, source_set) in ordered_source_sets.iter().enumerate() {
         let Some(edt_context) = inventory.edt_context(&source_set.name).cloned() else {
@@ -686,15 +701,15 @@ pub(super) fn run_build_edt(
                     TimelineStageStatus::Running,
                 );
                 let export_result = if config.tools.edt_cli.interactive_mode {
-                    if interactive_edt.is_none() {
-                        interactive_edt = Some(
+                    if interactive_build_export_edt.is_none() {
+                        interactive_build_export_edt = Some(
                             match EdtSessionManager::for_config(
                                 config,
                                 EdtSessionHostOptions::for_cli_command(config),
                             ) {
                                 Ok(manager) => match EdtDsl::new_shared_session(
                                     edt.clone(),
-                                    config.work_path.join("edt-workspace"),
+                                    edt_build_export_workspace.clone(),
                                     Arc::new(manager),
                                     Duration::from_millis(config.tools.edt_cli.startup_timeout_ms),
                                     Duration::from_millis(config.tools.edt_cli.command_timeout_ms),
@@ -740,7 +755,9 @@ pub(super) fn run_build_edt(
                     execute_edt_export_step(
                         context,
                         config,
-                        interactive_edt.as_ref().expect("interactive edt dsl"),
+                        interactive_build_export_edt
+                            .as_ref()
+                            .expect("interactive edt build export dsl"),
                         source_set,
                         &edt_context,
                         &designer_context,
@@ -749,7 +766,7 @@ pub(super) fn run_build_edt(
                 } else {
                     let one_shot_edt = EdtDsl::new(
                         edt.clone(),
-                        config.work_path.join("edt-workspace"),
+                        edt_build_export_workspace.clone(),
                         utilities.runner_for(UtilityType::EdtCli),
                     )
                     .with_execution_policy(
