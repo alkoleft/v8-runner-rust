@@ -252,6 +252,40 @@ fn init_designer_non_zero_create_exit_stays_fatal_even_when_marker_appears() {
 }
 
 #[test]
+fn init_text_reports_infobase_failure_before_continuing_edt_import() {
+    let (_dir, config_path, _work_path, _base_path, platform_path, edt_calls_log) =
+        setup_edt_init_project("EDT", "DESIGNER", "__AUTO_FILE__");
+    write_script(
+        &platform_path,
+        "printf 'designer create failed\\n' >&2\nexit 1",
+    );
+
+    let output = v8_runner_command()
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--no-color",
+            "init",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let failed_step = stdout
+        .find("✗ infobase: create")
+        .expect("live failed infobase status");
+    let edt_import = stdout
+        .find("importing source-set project")
+        .expect("continued edt import");
+    let final_summary = stdout.find("Init failed").expect("final summary");
+    assert!(failed_step < edt_import);
+    assert!(failed_step < final_summary);
+    assert!(stdout.contains("✓ edt_workspace: import"));
+    assert!(edt_calls_log.exists());
+}
+
+#[test]
 fn init_ibcmd_creates_infobase_and_imports_edt_projects_in_order() {
     let (_dir, config_path, work_path, _base_path, _platform_path, edt_calls_log) =
         setup_edt_init_project("DESIGNER", "IBCMD", "__AUTO_FILE__");
