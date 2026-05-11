@@ -50,7 +50,7 @@ jobs:
           - ubuntu-latest
           - windows-latest
     env:
-      V8TR_CI_TARGET_OS: ${{ runner.os }}
+      V8TR_CI_TARGET_OS: ${{ matrix.os }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
