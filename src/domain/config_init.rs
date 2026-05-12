@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 pub struct ConfigInitResult {
     pub ok: bool,
     pub path: String,
+    pub local_path: String,
+    pub gitignore_path: String,
     pub format: String,
     pub builder: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

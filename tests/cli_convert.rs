@@ -261,7 +261,7 @@ exit 0"#,
 
 fn write_config(
     path: &Path,
-    base_path: &Path,
+    _base_path: &Path,
     work_path: &Path,
     edt_path: &Path,
     format: &str,
@@ -269,8 +269,7 @@ fn write_config(
     platform_version: Option<&str>,
 ) {
     let mut config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: {format}\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n",
-        base_path.display(),
+        "workPath: '{}'\nformat: {format}\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n",
         work_path.display(),
     );
     for source_set in source_sets {
@@ -331,7 +330,7 @@ fn setup_project() -> (
     let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
-    let config_path = dir.path().join("v8project.yaml");
+    let config_path = base_path.join("v8project.yaml");
     let edt_cli_path = dir.path().join("edt").join("1cedtcli");
     let calls_log = dir.path().join("edt-calls.log");
 
@@ -863,7 +862,7 @@ fn convert_output_root_mirrors_source_set_layout_and_stabilizes_edt_project_name
     let base_path = dir.path().join("designer");
     let work_path = dir.path().join("work");
     let output_root = dir.path().join("edt");
-    let config_path = dir.path().join("v8project.yaml");
+    let config_path = base_path.join("v8project.yaml");
     let edt_cli_path = dir.path().join("edt-cli").join("1cedtcli");
     let calls_log = dir.path().join("edt-calls.log");
 
@@ -1099,7 +1098,7 @@ fn convert_output_root_rejects_base_path_child_before_workspace_lock() {
     assert!(payload["data"]["message"]
         .as_str()
         .expect("message")
-        .contains("must not be inside basePath"));
+        .contains("must not be inside project base path"));
 }
 
 #[test]

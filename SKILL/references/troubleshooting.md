@@ -14,7 +14,7 @@ Inspect `v8project.yaml` fields that affect the failing command:
 - `format`
 - `builder`
 - `connection`
-- `basePath`
+- primary config directory
 - `workPath`
 - `source-set`
 - `tools.platform`
@@ -24,6 +24,8 @@ Inspect `v8project.yaml` fields that affect the failing command:
 ## Common Situations
 
 Missing 1C platform, EDT CLI, IBCMD, or test runner utilities are environment/setup issues. Report the missing utility and the config fields used for discovery.
+
+`tools download` errors that mention the maximum download size mean the selected GitHub release asset or source archive exceeded the 512 MiB response-body limit. Do not retry with `--force`; pick a smaller artifact or install the tool manually and point `v8project.local.yaml` to that local path.
 
 Stale incremental state after branch switches, rebases, or large source moves usually calls for:
 

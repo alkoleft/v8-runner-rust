@@ -17,10 +17,9 @@ fn write_designer_script(path: &Path, fail: bool) {
     );
 }
 
-fn write_config(path: &Path, base_path: &Path, work_path: &Path, platform_path: &Path) {
+fn write_config(path: &Path, work_path: &Path, platform_path: &Path) {
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n",
-        base_path.display(),
+        "workPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: project/main\ntools:\n  platform:\n    path: '{}'\n",
         work_path.display(),
         platform_path.display(),
     );
@@ -37,7 +36,7 @@ fn setup_project(fail: bool) -> (tempfile::TempDir, PathBuf, PathBuf) {
     fs::create_dir_all(base_path.join("main")).expect("main");
     fs::create_dir_all(&work_path).expect("work");
     write_designer_script(&binary_path, fail);
-    write_config(&config_path, &base_path, &work_path, &binary_path);
+    write_config(&config_path, &work_path, &binary_path);
 
     (dir, config_path, base_path)
 }

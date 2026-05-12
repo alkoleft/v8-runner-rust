@@ -22,14 +22,13 @@ fn write_logging_script(path: &Path, args_log: &Path) {
 
 fn write_config(
     path: &Path,
-    base_path: &Path,
+    _base_path: &Path,
     work_path: &Path,
     platform_path: &Path,
     platform_version: Option<&str>,
 ) {
     let mut config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\ntools:\n  platform:\n    path: '{}'\n",
-        base_path.display(),
+        "workPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: project\ntools:\n  platform:\n    path: '{}'\n",
         work_path.display(),
         platform_path.display(),
     );
@@ -126,8 +125,7 @@ fn setup_mcp_va_project_with_options(
         )
     };
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\ntests:\n  va:\n    params_path: '{}'\n    profile: smoke\n    profiles:\n      smoke:\n        feature_path: '{}'\n        features_to_run:\n          - login\n        filter_tags:\n          - '@smoke'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\ntools:\n  client_mcp:\n    port: 9874\n  va:\n    epf_path: '{}'\n  platform:\n    path: '{}'\n{}",
-        base_path.display(),
+        "workPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\ntests:\n  va:\n    params_path: '{}'\n    profile: smoke\n    profiles:\n      smoke:\n        feature_path: '{}'\n        features_to_run:\n          - login\n        filter_tags:\n          - '@smoke'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: project\ntools:\n  client_mcp:\n    port: 9874\n  va:\n    epf_path: '{}'\n  platform:\n    path: '{}'\n{}",
         work_path.display(),
         va_params.display(),
         features_dir.display(),
@@ -428,7 +426,14 @@ fn launch_mcp_va_builds_payload_from_configured_port_and_ordinary_mode() {
     assert!(params_json["WorkspaceRoot"]
         .as_str()
         .expect("WorkspaceRoot")
-        .contains("/project"));
+        .contains(
+            config_path
+                .parent()
+                .expect("config dir")
+                .display()
+                .to_string()
+                .as_str()
+        ));
     assert_eq!(params_json["ОстановкаПриВозникновенииОшибки"], false);
     assert_eq!(params_json["СписокФичДляВыполнения"][0], "login");
     assert_eq!(params_json["СписокТеговОтбор"][0], "smoke");

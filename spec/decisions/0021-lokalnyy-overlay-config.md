@@ -45,7 +45,7 @@ Loader строит итоговую конфигурацию так:
 3. List значения заменяются целиком.
 4. `null` разрешён только для optional fields и означает явный сброс значения.
 5. Относительные пути из local overlay резолвятся относительно каталога основного `v8project.yaml`.
-6. Если `basePath` не задан в итоговом config, он считается равным каталогу основного `v8project.yaml`.
+6. Внутренний project base path считается равным каталогу основного `v8project.yaml`; YAML-ключ `basePath` не является public contract.
 
 ### Supported local overlay scope
 
@@ -74,13 +74,13 @@ Local overlay не должен менять project identity:
 
 1. Типовой запуск остаётся коротким и не требует локальных флагов.
 2. Общий `v8project.yaml` остаётся project truth, а локальные пути и credentials уходят в gitignored `v8project.local.yaml`.
-3. `basePath` перестаёт быть обязательным в типовом config и по умолчанию совпадает с каталогом основного config.
+3. `basePath` удалён из public config surface; внутренний `AppConfig.base_path` по умолчанию совпадает с каталогом основного config.
 4. Реализация должна синхронизировать typed config model, loader, validation, docs, examples and tests.
 
 ## План реализации
 
 1. `src/config/model.rs`:
-   - сделать `basePath` optional на YAML boundary или ввести raw config model;
+   - удалить `basePath` с YAML boundary;
    - сохранить итоговый `AppConfig.base_path` как resolved `PathBuf`.
 2. `src/config/loader.rs`:
    - читать `v8project.local.yaml` рядом с primary config, если файл существует;
@@ -88,18 +88,18 @@ Local overlay не должен менять project identity:
    - отклонять local overlay keys `source-set`, `format`, `builder`;
    - резолвить overlay paths относительно primary config directory.
 3. `docs/CONFIGURATION.md`, examples:
-   - описать local overlay и default `basePath`;
+   - описать local overlay и project root от каталога primary config;
    - указать, что `v8project.local.yaml` должен быть gitignored.
 4. Tests:
    - покрыть automatic overlay discovery;
    - overlay merge rules;
    - forbidden local keys;
-   - `basePath` default;
+   - default внутреннего `AppConfig.base_path`;
    - precedence `project -> local -> CLI override`.
 
 ## Верификация
 
 - [x] `v8-runner build` автоматически применяет `v8project.local.yaml` без дополнительных CLI-флагов.
 - [x] `source-set`, `format` и `builder` в `v8project.local.yaml` отклоняются как unsupported local overlay keys.
-- [x] Отсутствующий `basePath` резолвится в каталог основного `v8project.yaml`.
+- [x] Внутренний `AppConfig.base_path` резолвится в каталог основного `v8project.yaml`.
 - [x] `--workdir` остаётся сильнее local overlay.

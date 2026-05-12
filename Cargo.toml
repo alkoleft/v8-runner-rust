@@ -1,6 +1,6 @@
 [package]
 name = "v8-runner"
-version = "0.4.2"
+version = "0.5.0"
 edition = "2021"
 
 [[bin]]
@@ -28,9 +28,11 @@ chrono = { version = "0.4", features = ["serde"] }
 libc = "0.2"
 regex = "1"
 uuid = { version = "1", features = ["v4"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 rmcp = { version = "1.2.0", default-features = false, features = ["client", "macros", "server", "transport-child-process", "transport-io", "transport-streamable-http-server"] }
 tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = "0.7"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 
 [dev-dependencies]
 assert_cmd = "2"
@@ -38,7 +40,6 @@ jsonschema = "0.33"
 predicates = "3"
 insta = "1"
 quote = "1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 syn = { version = "2", features = ["full"] }
 
 [profile.release]

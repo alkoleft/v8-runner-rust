@@ -39,7 +39,7 @@
 12. Unsupported или unsafe config combinations должны отклоняться на validation boundary до вызова platform DSL.
 13. Новый public config field, `source-set` type или `infobase` subtree требует typed model, validation, `config init`/examples/docs sync и regression tests по checklist из `spec/architecture/change-checklist.md`.
 14. `v8project.local.yaml` является optional local overlay рядом с primary config, применяется после `v8project.yaml` и до CLI overrides, не является самостоятельным `--config` entrypoint и не должен менять `source-set`, `format` или `builder`.
-15. Если `basePath` отсутствует в итоговом YAML после overlay merge, он считается равным каталогу primary config.
+15. `basePath` не является public key в `v8project.yaml`; внутренний project base path считается равным каталогу primary config.
 16. Tool extensions, включая `tools.client_mcp.extension`, не являются project `source-set`; их подготовка выполняется через общий механизм подготовки расширений на стадии `build`, а не на стадии `launch`.
 
 См. [ADR-0017](../decisions/0017-v8project-yaml-source-set-kak-glavnyy-konfiguratsionnyy-kontrakt.md), [ADR-0018](../decisions/0018-perenesti-kontrakt-informatsionnoy-bazy-v-infobase.md), [ADR-0019](../decisions/0019-sozdavat-servernuyu-infobazu-cherez-ibcmd-pri-init-pri-otsutstvii.md), [ADR-0021](../decisions/0021-lokalnyy-overlay-config.md) и [ADR-0022](../decisions/0022-universalnyy-mehanizm-podgotovki-rasshireniy-i-client-mcp-extension.md).

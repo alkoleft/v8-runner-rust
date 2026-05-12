@@ -46,6 +46,8 @@ pub(crate) mod source_inventory;
 mod staged_publication;
 /// Shared internal preparation for tool extensions.
 pub(crate) mod tool_extension;
+/// Supported external tool download use case.
+pub mod tools_download;
 /// Shared transport-neutral adapter helpers used by CLI and MCP boundaries.
 pub mod transport;
 /// Shared Vanessa Automation launch and runtime params helpers.

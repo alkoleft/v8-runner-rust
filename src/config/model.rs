@@ -202,7 +202,7 @@ pub struct SourceSetConfig {
     #[serde(rename = "type")]
     pub purpose: SourceSetPurpose,
 
-    /// Path relative to basePath (for DESIGNER) or EDT project path
+    /// Path relative to the project base path (for DESIGNER) or EDT project path.
     pub path: PathBuf,
 }
 

@@ -317,7 +317,7 @@
           "type": "string"
         },
         "path": {
-          "description": "Source path relative to `basePath` or an EDT project path.",
+          "description": "Source path relative to the primary config directory or an EDT project path.",
           "type": "string"
         },
         "type": {
@@ -593,14 +593,10 @@
       "type": "object"
     }
   },
-  "$id": "https://raw.githubusercontent.com/alkoleft/v8-runner-rust/refs/tags/v0.4.2/docs/schemas/v8project.schema.json",
+  "$id": "https://raw.githubusercontent.com/alkoleft/v8-runner-rust/master/docs/schemas/v8project.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
-    "basePath": {
-      "description": "Root directory for project sources; defaults to the directory containing `v8project.yaml`.",
-      "type": "string"
-    },
     "build": {
       "$ref": "#/$defs/BuildSchema",
       "description": "Build pipeline settings."

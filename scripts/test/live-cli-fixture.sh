@@ -360,17 +360,6 @@ replacements = {
 for needle, replacement in replacements.items():
     text = text.replace(needle, replacement)
 
-if re.search(r"^\s*basePath:\s*.*$", text, re.MULTILINE):
-    text = re.sub(
-        r"^\s*basePath:\s*.*$",
-        f"basePath: {work_base_path.as_posix()}",
-        text,
-        count=1,
-        flags=re.MULTILINE,
-    )
-else:
-    raise SystemExit("live config must define basePath")
-
 target.write_text(text, encoding="utf-8")
 PY
 }
@@ -547,8 +536,8 @@ EXTERNAL_PROCESSOR_SOURCE_SET_PATH="${SOURCE_SET_PATH_BY_TYPE[EXTERNAL_DATA_PROC
 EXTERNAL_REPORT_SOURCE_SET_NAME="${SOURCE_SET_NAME_BY_TYPE[EXTERNAL_REPORTS]:-}"
 EXTERNAL_REPORT_SOURCE_SET_PATH="${SOURCE_SET_PATH_BY_TYPE[EXTERNAL_REPORTS]:-}"
 
-WORK_BASE_PATH="$OUTPUT_ROOT/workspace/basePath"
-WORK_CONFIG_PATH="$OUTPUT_ROOT/json/live-designer.config.yaml"
+WORK_BASE_PATH="$OUTPUT_ROOT/workspace/project-root"
+WORK_CONFIG_PATH="$WORK_BASE_PATH/v8project.yaml"
 
 if [[ ! -d "$FIXTURE_BASE_PATH" ]]; then
     die "Fixture source directory not found: $FIXTURE_BASE_PATH"
@@ -564,7 +553,6 @@ mkdir -p \
     "$WORK_BASE_PATH" \
     "$OUTPUT_ROOT/artifacts/external-processor" \
     "$OUTPUT_ROOT/artifacts/external-report" \
-    "$OUTPUT_ROOT/json" \
     "$OUTPUT_ROOT/launch"
 
 cp -R "$FIXTURE_BASE_PATH/." "$WORK_BASE_PATH/"
@@ -575,7 +563,7 @@ DESIGNER_CONFIG_PATH="$WORK_CONFIG_PATH"
 for source_set_type in "${required_types[@]}"; do
     source_set_path="${SOURCE_SET_PATH_BY_TYPE[$source_set_type]}"
     if [[ ! -d "$WORK_BASE_PATH/$source_set_path" ]]; then
-        die "Configured source-set path does not exist under fixture basePath: $source_set_path"
+        die "Configured source-set path does not exist under fixture project root: $source_set_path"
     fi
 done
 

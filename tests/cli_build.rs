@@ -124,15 +124,14 @@ fn write_config_with_builder(
 
 fn write_config_with_builder_and_infobase(
     path: &Path,
-    base_path: &Path,
+    _base_path: &Path,
     work_path: &Path,
     platform_path: &Path,
     builder: &str,
     infobase_yaml: &str,
 ) {
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: {}\ninfobase:\n{}build:\n  partialLoadThreshold: 20\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\n  - name: ext\n    type: EXTENSION\n    path: ext\ntools:\n  platform:\n    path: '{}'\n",
-        base_path.display(),
+        "workPath: '{}'\nformat: DESIGNER\nbuilder: {}\ninfobase:\n{}build:\n  partialLoadThreshold: 20\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: project/main\n  - name: ext\n    type: EXTENSION\n    path: project/ext\ntools:\n  platform:\n    path: '{}'\n",
         work_path.display(),
         builder,
         infobase_yaml,
@@ -307,8 +306,7 @@ fn setup_edt_ibcmd_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
     write_edt_script(&edt_cli_path, &edt_calls_log);
 
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: EDT\nbuilder: IBCMD\ninfobase:\n  connection: 'File=/tmp/ib'\nbuild:\n  partialLoadThreshold: 20\nsource-set:\n  - name: configuration\n    type: CONFIGURATION\n    path: configuration\ntools:\n  platform:\n    path: '{}'\n  edt_cli:\n    path: '{}'\n",
-        base_path.display(),
+        "workPath: '{}'\nformat: EDT\nbuilder: IBCMD\ninfobase:\n  connection: 'File=/tmp/ib'\nbuild:\n  partialLoadThreshold: 20\nsource-set:\n  - name: configuration\n    type: CONFIGURATION\n    path: project/configuration\ntools:\n  platform:\n    path: '{}'\n  edt_cli:\n    path: '{}'\n",
         work_path.display(),
         ibcmd_path.display(),
         edt_cli_path.display(),
@@ -368,8 +366,7 @@ fn setup_edt_extension_project() -> (tempfile::TempDir, PathBuf, PathBuf) {
     write_edt_script(&edt_cli_path, &edt_calls_log);
 
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: EDT\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nbuild:\n  partialLoadThreshold: 20\nsource-set:\n  - name: configuration\n    type: CONFIGURATION\n    path: configuration\n  - name: client_mcp\n    type: EXTENSION\n    path: exts/client-mcp\ntools:\n  platform:\n    path: '{}'\n  edt_cli:\n    path: '{}'\n",
-        base_path.display(),
+        "workPath: '{}'\nformat: EDT\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nbuild:\n  partialLoadThreshold: 20\nsource-set:\n  - name: configuration\n    type: CONFIGURATION\n    path: project/configuration\n  - name: client_mcp\n    type: EXTENSION\n    path: project/exts/client-mcp\ntools:\n  platform:\n    path: '{}'\n  edt_cli:\n    path: '{}'\n",
         work_path.display(),
         platform_path.display(),
         edt_cli_path.display(),
@@ -712,8 +709,7 @@ fn build_text_groups_tool_extension_stages_under_single_build_node() {
     write_edt_script(&edt_cli_path, &edt_calls_log);
 
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: EDT\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: configuration\n    type: CONFIGURATION\n    path: configuration\ntools:\n  platform:\n    path: '{}'\n  edt_cli:\n    path: '{}'\n  client_mcp:\n    extension:\n      name: client_mcp\n      source:\n        path: '{}'\n        format: EDT\n",
-        base_path.display(),
+        "workPath: '{}'\nformat: EDT\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: configuration\n    type: CONFIGURATION\n    path: project/configuration\ntools:\n  platform:\n    path: '{}'\n  edt_cli:\n    path: '{}'\n  client_mcp:\n    extension:\n      name: client_mcp\n      source:\n        path: '{}'\n        format: EDT\n",
         work_path.display(),
         platform_path.display(),
         edt_cli_path.display(),
@@ -855,10 +851,9 @@ fn build_ibcmd_full_rebuild_invokes_import_and_apply() {
 
 #[test]
 fn build_ibcmd_passes_credentials_to_import_and_apply() {
-    let (dir, config_path, binary_path, work_path, base_path, calls_log) = setup_ibcmd_project();
+    let (dir, config_path, binary_path, work_path, _base_path, calls_log) = setup_ibcmd_project();
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: IBCMD\ninfobase:\n  connection: 'File=/tmp/ib'\n  user: Admin\n  password: secret\nbuild:\n  partialLoadThreshold: 20\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n",
-        base_path.display(),
+        "workPath: '{}'\nformat: DESIGNER\nbuilder: IBCMD\ninfobase:\n  connection: 'File=/tmp/ib'\n  user: Admin\n  password: secret\nbuild:\n  partialLoadThreshold: 20\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: project/main\ntools:\n  platform:\n    path: '{}'\n",
         work_path.display(),
         binary_path.display(),
     );

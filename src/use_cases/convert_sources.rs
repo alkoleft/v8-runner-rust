@@ -772,13 +772,15 @@ fn validate_explicit_convert_target_roots(
     target_path: &Path,
     canonical_target_path: &Path,
 ) -> Result<(), AppError> {
-    let canonical_base_path = nearest_existing_canonical_path(&config.base_path)
-        .map_err(|error| AppError::Runtime(format!("failed to canonicalize basePath: {error}")))?;
+    let canonical_base_path =
+        nearest_existing_canonical_path(&config.base_path).map_err(|error| {
+            AppError::Runtime(format!("failed to canonicalize project base path: {error}"))
+        })?;
     if canonical_target_path == canonical_base_path
         || canonical_target_path.starts_with(&canonical_base_path)
     {
         return Err(AppError::Validation(format!(
-            "convert --output target must not be inside basePath: basePath={}, target={}",
+            "convert --output target must not be inside project base path: project_base_path={}, target={}",
             config.base_path.display(),
             target_path.display()
         )));
@@ -1442,7 +1444,7 @@ fn source_set_output_relative_path(
     let relative = if raw_path.is_absolute() {
         raw_path.strip_prefix(&config.base_path).map_err(|_| {
             AppError::Validation(format!(
-                "convert --output requires source-set '{}' path to be relative to basePath",
+                "convert --output requires source-set '{}' path to be relative to project base path",
                 source_set.name
             ))
         })?

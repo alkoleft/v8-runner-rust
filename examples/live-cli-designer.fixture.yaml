@@ -1,7 +1,6 @@
 # Fixture-based live smoke config for scripts/test/live-cli-fixture.sh
 # Copy this file, adjust the absolute paths, and export it as V8TR_DESIGNER_REAL_CONFIG.
 
-basePath: /abs/path/to/repo/tests/fixtures/designer
 workPath: /abs/path/to/repo/target/manual-tests/live-cli-fixture/work
 format: DESIGNER
 builder: DESIGNER

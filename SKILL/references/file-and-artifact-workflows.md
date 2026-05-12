@@ -47,7 +47,7 @@ It is not a dump alias:
 - it does not use `builder`;
 - direction is derived from configured `format`;
 - without `--output`, results are published under `workPath/convert/out/<sourceSetName>/<designer|edt>/`;
-- `--output` is a target root and mirrors `source-set.path` relative to `basePath`.
+- `--output` is a target root and mirrors `source-set.path` relative to the primary config directory.
 
 `convert` is a CLI file workflow and does not run through an infobase.
 

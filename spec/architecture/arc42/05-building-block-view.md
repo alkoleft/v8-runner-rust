@@ -37,22 +37,23 @@ flowchart TB
 
 - Преобразует аргументы `clap` в транспортно-нейтральные запросы.
 - Отвечает за разбор аргументов и CLI-специфичный рендеринг результатов.
-- Публикует команды `config init`, `init`, `extensions`, `build`, `load`, `test`, `dump`, `convert`, `make`/`artifacts`, `syntax`, `launch` и `mcp`.
+- Публикует команды `config init`, `tools download`, `init`, `extensions`, `build`, `load`, `test`, `dump`, `convert`, `make`/`artifacts`, `syntax`, `launch` и `mcp`.
 
 #### `use_cases`
 
-- Центральная оркестрация для `config init`, `init`, `extensions`, `build`, `load`, `test`, `dump`, `convert`, `artifacts`, `syntax` и `launch`.
+- Центральная оркестрация для `config init`, `tools download`, `init`, `extensions`, `build`, `load`, `test`, `dump`, `convert`, `artifacts`, `syntax` и `launch`.
 - Определяет transport-neutral request/result contracts, которые должны оставаться стабильной внутренней опорой для адаптеров и AI-агентов, работающих через эти адаптеры.
 - Предоставляет workspace lock helper и internal unlocked entrypoints для nested flows вроде `test -> build`; public lock boundary остаётся в CLI/MCP adapters.
 - Для runner-like сценариев собирает typed pipeline-like flow и заполняет `ExecutionOutcome<T>` вместо нового ad hoc result shape.
 - Для `convert` выводит direction из `format`, резолвит `source-set` из `v8project.yaml` и публикует generated output либо под default `workPath/convert/out`, либо под explicit `--output` root с mirror-layout.
+- Для `tools download <tool>` получает latest release metadata выбранного инструмента, скачивает sources/artifact, обновляет `v8project.local.yaml` для Vanessa/client MCP и при `yaxunit --sources` добавляет YAxUnit как project `source-set` `tests`.
 
 #### `mcp`
 
 - Преобразует MCP tool-запросы в запросы use case.
 - Публикует восемь текущих MCP-инструментов.
 - Обрабатывает stdio- и HTTP-транспорты, трекинг сессий, execution admission, HTTP session capacity и общий EDT actor-path.
-- Намеренно не публикует весь CLI: `config init`, `init`, `extensions`, `load`, `convert` и `make`/`artifacts` остаются CLI-only сценариями.
+- Намеренно не публикует весь CLI: `config init`, `tools download`, `init`, `extensions`, `load`, `convert` и `make`/`artifacts` остаются CLI-only сценариями.
 
 #### `platform`
 

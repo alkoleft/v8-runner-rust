@@ -16,8 +16,7 @@ fn write_minimal_config(dir: &Path) -> PathBuf {
     fs::write(
         &config_path,
         format!(
-            "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\n",
-            base_path.display(),
+            "workPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: project\n",
             work_path.display()
         ),
     )
@@ -263,20 +262,7 @@ fn artifacts_pre_dispatch_validation_in_json_mode_keeps_command_identity() {
 #[test]
 fn mcp_rejects_clean_before_execution_flag() {
     let dir = temp_workspace();
-    let config_path = dir.path().join("v8project.yaml");
-    let base_path = dir.path().join("project");
-    let work_path = dir.path().join("work");
-    fs::create_dir_all(&base_path).expect("base");
-    fs::create_dir_all(&work_path).expect("work");
-    fs::write(
-        &config_path,
-        format!(
-            "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\n",
-            base_path.display(),
-            work_path.display()
-        ),
-    )
-    .expect("config");
+    let config_path = write_minimal_config(dir.path());
 
     let output = v8_runner_command()
         .args([
@@ -308,8 +294,7 @@ fn legacy_top_level_connection_is_rejected_in_json_mode() {
     fs::write(
         &config_path,
         format!(
-            "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\n",
-            base_path.display(),
+            "workPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\nconnection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: project\n",
             work_path.display()
         ),
     )
@@ -347,8 +332,7 @@ fn legacy_top_level_credentials_is_rejected_in_json_mode() {
     fs::write(
         &config_path,
         format!(
-            "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\ncredentials:\n  user: Admin\n  password: secret\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\n",
-            base_path.display(),
+            "workPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\ncredentials:\n  user: Admin\n  password: secret\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: project\n",
             work_path.display()
         ),
     )
@@ -386,8 +370,7 @@ fn top_level_execution_timeout_seconds_is_rejected_in_json_mode() {
     fs::write(
         &config_path,
         format!(
-            "basePath: '{}'\nworkPath: '{}'\nexecution_timeout_seconds: 300\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\n",
-            base_path.display(),
+            "workPath: '{}'\nexecution_timeout_seconds: 300\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: project\n",
             work_path.display()
         ),
     )

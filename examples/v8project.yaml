@@ -1,10 +1,6 @@
 # Example configuration for v8-runner
 # Copy to v8project.yaml and adjust paths for your project
 
-# Root path of the project sources (Designer format).
-# Optional: when omitted, v8-runner uses the directory containing v8project.yaml.
-basePath: /path/to/project/sources
-
 # Working directory for temp files and hash storages
 workPath: build
 
@@ -22,7 +18,7 @@ infobase:
 source-set:
   - name: main
     type: CONFIGURATION
-    path: .  # relative to basePath
+    path: .  # relative to v8project.yaml
 
   # Uncomment to add an extension:
   # - name: my-extension

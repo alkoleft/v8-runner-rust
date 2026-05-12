@@ -908,8 +908,10 @@ fn resolve_target(config: &AppConfig, args: &DumpArgs) -> Result<ResolvedDumpTar
                 "failed to canonicalize platform target path: {error}"
             ))
         })?;
-    let canonical_base_path = nearest_existing_canonical_path(&config.base_path)
-        .map_err(|error| AppError::Runtime(format!("failed to canonicalize basePath: {error}")))?;
+    let canonical_base_path =
+        nearest_existing_canonical_path(&config.base_path).map_err(|error| {
+            AppError::Runtime(format!("failed to canonicalize project base path: {error}"))
+        })?;
     let canonical_work_path = nearest_existing_canonical_path(&config.work_path)
         .map_err(|error| AppError::Runtime(format!("failed to canonicalize workPath: {error}")))?;
     let target_identity = stable_path_identity(&canonical_target_path);

@@ -30,3 +30,5 @@ pub mod source_set;
 pub mod syntax;
 /// Test domain models.
 pub mod test;
+/// Tool download domain models.
+pub mod tools_download;

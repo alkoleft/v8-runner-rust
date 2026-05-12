@@ -48,7 +48,7 @@ fn write_edt_configuration_source(path: &Path, project_name: &str) {
 
 fn write_config(
     path: &Path,
-    base_path: &Path,
+    _base_path: &Path,
     work_path: &Path,
     platform_path: &Path,
     format: &str,
@@ -58,8 +58,7 @@ fn write_config(
         .map(|path| format!("  edt_cli:\n    path: '{}'\n", path.display()))
         .unwrap_or_default();
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: {}\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\ntools:\n  platform:\n    path: '{}'\n{}",
-        base_path.display(),
+        "workPath: '{}'\nformat: {}\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: .\ntools:\n  platform:\n    path: '{}'\n{}",
         work_path.display(),
         format,
         platform_path.display(),
@@ -73,7 +72,7 @@ fn setup_project(script_body: &str) -> (tempfile::TempDir, PathBuf) {
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
     let install_dir = dir.path().join("platform");
-    let config_path = dir.path().join("v8project.yaml");
+    let config_path = base_path.join("v8project.yaml");
 
     fs::create_dir_all(&base_path).expect("base");
     fs::create_dir_all(&work_path).expect("work");
@@ -96,7 +95,7 @@ fn setup_edt_project(script_body: &str) -> (tempfile::TempDir, PathBuf) {
     let work_path = dir.path().join("work");
     let install_dir = dir.path().join("platform");
     let edt_cli = dir.path().join("edt").join("1cedtcli");
-    let config_path = dir.path().join("v8project.yaml");
+    let config_path = base_path.join("v8project.yaml");
 
     fs::create_dir_all(&base_path).expect("base");
     write_edt_configuration_source(&base_path, "main");

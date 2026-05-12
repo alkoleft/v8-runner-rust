@@ -11,8 +11,8 @@ use serde_json::{json, Value};
 pub const MAIN_CONFIG_SCHEMA_PATH: &str = "docs/schemas/v8project.schema.json";
 pub const LOCAL_CONFIG_SCHEMA_PATH: &str = "docs/schemas/v8project.local.schema.json";
 
-const REPOSITORY_RAW_TAG_BASE: &str =
-    "https://raw.githubusercontent.com/alkoleft/v8-runner-rust/refs/tags";
+const REPOSITORY_RAW_SCHEMA_BASE: &str =
+    "https://raw.githubusercontent.com/alkoleft/v8-runner-rust/master/docs/schemas";
 
 pub fn main_config_schema_url() -> String {
     schema_url("v8project.schema.json")
@@ -58,10 +58,7 @@ pub fn schema_json_pretty(schema: &Value) -> String {
 }
 
 fn schema_url(file_name: &str) -> String {
-    format!(
-        "{REPOSITORY_RAW_TAG_BASE}/v{}/docs/schemas/{file_name}",
-        env!("CARGO_PKG_VERSION")
-    )
+    format!("{REPOSITORY_RAW_SCHEMA_BASE}/{file_name}")
 }
 
 fn set_schema_id(schema: &mut Value, id: &str) {
@@ -307,14 +304,6 @@ where
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct MainConfigSchema {
-    /// Root directory for project sources; defaults to the directory containing `v8project.yaml`.
-    #[serde(
-        default,
-        deserialize_with = "deserialize_non_null_optional",
-        skip_serializing_if = "Option::is_none"
-    )]
-    #[schemars(with = "PathBuf")]
-    base_path: Option<PathBuf>,
     /// Working directory for generated state, logs, temporary files, and hash storages.
     work_path: PathBuf,
     /// Global execution budget for public CLI and MCP commands in milliseconds.
@@ -509,7 +498,7 @@ struct SourceSetSchema {
     /// Source-set type: configuration, extension, external data processors, or external reports.
     #[serde(rename = "type")]
     purpose: SourceSetPurposeSchema,
-    /// Source path relative to `basePath` or an EDT project path.
+    /// Source path relative to the primary config directory or an EDT project path.
     path: PathBuf,
 }
 
@@ -1047,6 +1036,7 @@ mod tests {
     use std::path::Path;
 
     const REMOVED_SCHEMA_ALIAS_PROPERTIES: &[&str] = &[
+        "basePath",
         "executionTimeout",
         "execution_timeout_ms",
         "edt-cli",
@@ -1076,7 +1066,6 @@ mod tests {
     #[test]
     fn generated_schemas_include_user_facing_field_descriptions() {
         let main_schema = main_config_schema_json();
-        assert_property_description_contains(&main_schema, &[], "basePath", "Root directory");
         assert_property_description_contains(&main_schema, &[], "workPath", "Working directory");
         assert_property_description_contains(
             &main_schema,
@@ -1476,6 +1465,10 @@ mod tests {
         for config in [
             format!(
                 "{}toolz: {{}}\n",
+                minimal_project_config_without_base_path()
+            ),
+            format!(
+                "{}basePath: /tmp/project\n",
                 minimal_project_config_without_base_path()
             ),
             format!(

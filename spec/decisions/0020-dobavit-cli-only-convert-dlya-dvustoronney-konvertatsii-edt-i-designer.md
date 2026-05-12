@@ -53,13 +53,13 @@
 8. Флаги `--source`, `--target`, `--version`, `--base-project-name` и `--build` не являются частью целевого public contract.
 9. Внутренние EDT import/export параметры должны выводиться из `config.format`, `source-set` semantics, project metadata и tool discovery/config hints, а не требовать явного user-facing флага.
 10. Без `--output` результат `convert` публикуется в owned generated directories под `workPath/convert/out/<sourceSetName>/<target-format>/`.
-11. С `--output <dir>` команда публикует выбранные `source-set` под заданным target root, зеркаля logical source-set path относительно `basePath`, например `configuration`, `extension`, `external/processor`.
+11. С `--output <dir>` команда публикует выбранные `source-set` под заданным target root, зеркаля logical source-set path относительно каталога primary config, например `configuration`, `extension`, `external/processor`.
 12. `--output` задаёт только target root, а не произвольные пары `source`/`target`; direction и список source-set по-прежнему выводятся из `v8project.yaml`.
 13. Реальная EDT execution должна использовать тот же supported execution model, что и остальные EDT-сценарии: one-shot или shared interactive в зависимости от `tools.edt_cli.interactive_mode`.
 14. Runtime state EDT для команды должен жить в отдельном рабочем каталоге `workPath/convert/edt-workspace`, а не переиспользовать `workPath/edt-workspace` из `init` и других EDT-сценариев.
 15. Как и другие public команды с runtime state под `workPath`, `convert` должен брать workspace lock на adapter boundary по ADR-0011.
 16. Validation, не требующая владения `workPath`, может выполняться до захвата lock, чтобы пользователь получал deterministic validation error раньше workspace-conflict error.
-17. Публикация результата должна использовать full-replacement staging/backup contract по ADR-0015 для каждого resolved target; `basePath`, исходные каталоги проекта и пересекающиеся target paths не являются допустимыми publish target.
+17. Публикация результата должна использовать full-replacement staging/backup contract по ADR-0015 для каждого resolved target; каталог primary config, исходные каталоги проекта и пересекающиеся target paths не являются допустимыми publish target.
 18. Для `DESIGNER -> EDT` staging path не должен протекать в имена сгенерированных EDT-проектов: target project directory выбирается стабильно из logical source-set path/name до атомарной публикации.
 19. Историческая path-based реализация `convert` была transition state; текущий public contract считается repo-aware только через `v8project.yaml`, `source-set` scope и optional target-root `--output`.
 20. Это решение не расширяет контракт `dump`: реализованный `dump format=EDT` остаётся отдельной командной семантикой "ИБ -> файлы", а не thin alias поверх `convert`.
@@ -124,7 +124,7 @@
    - stable generated EDT project names;
    - validation-before-lock и busy workspace conflict;
    - one-shot и shared interactive execution paths;
-   - запрет destructive overlap по отношению к `basePath`.
+   - запрет destructive overlap по отношению к каталогу primary config.
 7. После фактической реализации синхронизировать:
    - `README.md`;
    - `docs/CAPABILITIES.md`;

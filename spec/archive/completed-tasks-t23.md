@@ -14,6 +14,13 @@ Implemented scope:
   schema URL for the current application version.
 - Documented VS Code setup, local overlay schema usage and schema versioning policy.
 
+Current status after `2026-05-11` follow-up:
+
+- `basePath` is no longer a public YAML key; the project base path is derived from the primary
+  config directory.
+- Generated schema `$id` values and `yaml-language-server` modelines now point to the published
+  `master` schema artifacts.
+
 Verification:
 
 - `cargo test --locked config::schema::tests`

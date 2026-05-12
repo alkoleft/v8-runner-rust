@@ -141,7 +141,7 @@ fn write_va_test_script(
 
 fn write_config(
     path: &Path,
-    base_path: &Path,
+    _base_path: &Path,
     work_path: &Path,
     install_dir: &Path,
     timeout_seconds: u64,
@@ -159,8 +159,7 @@ fn write_config(
         )
     };
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\n  password: secret\ntests:\n  execution_timeout_seconds: {}\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n{}",
-        base_path.display(),
+        "workPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\n  password: secret\ntests:\n  execution_timeout_seconds: {}\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n{}",
         work_path.display(),
         timeout_seconds,
         install_dir.display(),
@@ -204,7 +203,7 @@ fn setup_project_with_additional_launch_keys(
     let base_path = dir.path().join("project");
     let work_path = dir.path().join(work_dir_name);
     let install_dir = dir.path().join("platform");
-    let config_path = dir.path().join("v8project.yaml");
+    let config_path = base_path.join("v8project.yaml");
     let build_calls = dir.path().join("build.calls.log");
     let test_calls = dir.path().join("test.calls.log");
     let captured_config = dir.path().join("captured-config.json");
@@ -259,7 +258,7 @@ fn setup_va_project_with_work_name(
     let base_path = dir.path().join("project");
     let work_path = dir.path().join(work_dir_name);
     let install_dir = dir.path().join("platform");
-    let config_path = dir.path().join("v8project.yaml");
+    let config_path = base_path.join("v8project.yaml");
     let build_calls = dir.path().join("build.calls.log");
     let test_calls = dir.path().join("test.calls.log");
     let captured_params = dir.path().join("captured-va-params.json");
@@ -302,8 +301,7 @@ fn setup_va_project_with_work_name(
         )
     };
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\n  password: secret\ntests:\n  execution_timeout_seconds: 5\n  va:\n    params_path: '{}'\n    profile: smoke\n    profiles:\n      smoke:\n        feature_path: '{}'\n        features_to_run:\n          - login\n        filter_tags:\n          - '@smoke'\n        ignore_tags:\n          - '@draft'\n        scenario_filter:\n          - Проверка логина\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\ntools:\n  va:\n    epf_path: '{}'\n  platform:\n    path: '{}'\n{}",
-        base_path.display(),
+        "workPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\n  password: secret\ntests:\n  execution_timeout_seconds: 5\n  va:\n    params_path: '{}'\n    profile: smoke\n    profiles:\n      smoke:\n        feature_path: '{}'\n        features_to_run:\n          - login\n        filter_tags:\n          - '@smoke'\n        ignore_tags:\n          - '@draft'\n        scenario_filter:\n          - Проверка логина\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\ntools:\n  va:\n    epf_path: '{}'\n  platform:\n    path: '{}'\n{}",
         work_path.display(),
         va_params.display(),
         features_dir.display(),
@@ -1000,7 +998,7 @@ fn test_module_edt_extension_build_uses_full_load_before_enterprise_launch() {
     let work_path = dir.path().join("work");
     let install_dir = dir.path().join("platform");
     let edt_cli_path = dir.path().join("edt").join("1cedtcli");
-    let config_path = dir.path().join("v8project.yaml");
+    let config_path = base_path.join("v8project.yaml");
     let build_calls = dir.path().join("build.calls.log");
     let test_calls = dir.path().join("test.calls.log");
     let edt_calls = dir.path().join("edt.calls.log");
@@ -1057,8 +1055,7 @@ fn test_module_edt_extension_build_uses_full_load_before_enterprise_launch() {
     write_edt_script(&edt_cli_path, &edt_calls);
 
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: EDT\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\ntests:\n  execution_timeout_seconds: 5\nsource-set:\n  - name: configuration\n    type: CONFIGURATION\n    path: configuration\n  - name: client_mcp\n    type: EXTENSION\n    path: exts/client-mcp\ntools:\n  platform:\n    path: '{}'\n  edt_cli:\n    path: '{}'\n",
-        base_path.display(),
+        "workPath: '{}'\nformat: EDT\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\ntests:\n  execution_timeout_seconds: 5\nsource-set:\n  - name: configuration\n    type: CONFIGURATION\n    path: configuration\n  - name: client_mcp\n    type: EXTENSION\n    path: exts/client-mcp\ntools:\n  platform:\n    path: '{}'\n  edt_cli:\n    path: '{}'\n",
         work_path.display(),
         install_dir.display(),
         edt_cli_path.display(),
@@ -1117,7 +1114,7 @@ fn repeated_test_skips_unchanged_source_backed_tool_extension_build() {
     let work_path = dir.path().join("work");
     let install_dir = dir.path().join("platform");
     let edt_cli_path = dir.path().join("edt").join("1cedtcli");
-    let config_path = dir.path().join("v8project.yaml");
+    let config_path = base_path.join("v8project.yaml");
     let build_calls = dir.path().join("build.calls.log");
     let test_calls = dir.path().join("test.calls.log");
     let edt_calls = dir.path().join("edt.calls.log");
@@ -1151,8 +1148,7 @@ fn repeated_test_skips_unchanged_source_backed_tool_extension_build() {
     write_edt_script(&edt_cli_path, &edt_calls);
 
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: EDT\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\ntests:\n  execution_timeout_seconds: 5\nsource-set:\n  - name: configuration\n    type: CONFIGURATION\n    path: configuration\ntools:\n  platform:\n    path: '{}'\n  edt_cli:\n    path: '{}'\n  client_mcp:\n    extension:\n      name: client_mcp\n      source:\n        path: '{}'\n        format: EDT\n",
-        base_path.display(),
+        "workPath: '{}'\nformat: EDT\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\ntests:\n  execution_timeout_seconds: 5\nsource-set:\n  - name: configuration\n    type: CONFIGURATION\n    path: configuration\ntools:\n  platform:\n    path: '{}'\n  edt_cli:\n    path: '{}'\n  client_mcp:\n    extension:\n      name: client_mcp\n      source:\n        path: '{}'\n        format: EDT\n",
         work_path.display(),
         install_dir.display(),
         edt_cli_path.display(),

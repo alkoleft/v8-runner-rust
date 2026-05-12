@@ -56,14 +56,13 @@ fn write_edt_configuration_source(path: &Path, project_name: &str) {
 
 fn write_config(
     path: &Path,
-    base_path: &Path,
+    _base_path: &Path,
     work_path: &Path,
     platform_path: &Path,
     format: &str,
 ) {
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: {}\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n",
-        base_path.display(),
+        "workPath: '{}'\nformat: {}\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n",
         work_path.display(),
         format,
         platform_path.display(),
@@ -75,7 +74,7 @@ fn setup_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf, PathBuf) {
     let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
-    let config_path = dir.path().join("v8project.yaml");
+    let config_path = base_path.join("v8project.yaml");
     let binary_path = dir.path().join("1cv8");
     let calls_log = dir.path().join("calls.log");
 

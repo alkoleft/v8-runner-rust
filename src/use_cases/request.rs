@@ -6,6 +6,7 @@ use crate::domain::runner::{
     RunnerProfile, ScenarioExecutionRequest,
 };
 use crate::domain::test::TEST_RUNNER_ID;
+use crate::domain::tools_download::{ToolDownloadTarget, ToolExtensionInstallMode};
 use crate::use_cases::result::{UseCaseError, UseCaseErrorKind};
 
 /// Transport-neutral request for the `build` use case.
@@ -15,6 +16,19 @@ pub struct BuildRequest {
     pub full_rebuild: bool,
     /// Optional source-set selector. When absent, all configured source-sets are built.
     pub source_set: Option<String>,
+}
+
+/// Transport-neutral request for the `tools download` use case.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolsDownloadRequest {
+    /// Canonical path to the primary project config that may be updated.
+    pub config_path: std::path::PathBuf,
+    /// Selected tool to download.
+    pub target: ToolDownloadTarget,
+    /// Installation mode for extension tools.
+    pub extensions: ToolExtensionInstallMode,
+    /// Allows replacing existing downloaded paths.
+    pub force: bool,
 }
 
 /// Transport-neutral request for the `load` use case.

@@ -48,7 +48,7 @@ EDT source-set
 
 Правила:
 
-1. `edt-<sourceSetName>` хранит состояние основных EDT-исходников из `basePath/source-set.path`.
+1. `edt-<sourceSetName>` хранит состояние основных EDT-исходников из project root + `source-set.path`.
 2. `edt-<sourceSetName>` используется только для решения, нужна ли конвертация/export EDT source-set в Designer-формат.
 3. `designer-<sourceSetName>` хранит состояние generated Designer-файлов под `workPath/designer/<sourceSetName>`.
 4. `designer-<sourceSetName>` используется для решения, какие Designer-файлы грузить: partial или full.
@@ -67,7 +67,7 @@ EDT source-set
 ## Неграницы (Non-goals)
 
 1. Не вводить единый глобальный hash storage на весь проект.
-2. Не писать runtime-артефакты в `basePath` или каталоги пользовательских исходников.
+2. Не писать runtime-артефакты в project root или каталоги пользовательских исходников.
 3. Не считать `workPath/designer/<sourceSetName>` пользовательскими исходниками.
 4. Не обещать атомарность `build` по нескольким `source-set`.
 5. Не менять публичную YAML-модель `source-set` без отдельного решения.

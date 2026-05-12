@@ -6,7 +6,7 @@ use crate::domain::source_set::SourceSetContext;
 
 /// Builds the list of [`SourceSetContext`] instances for the given config.
 ///
-/// - `DESIGNER` format: one context per source-set, rooted at `basePath/ss.path`.
+/// - `DESIGNER` format: one context per source-set, rooted at project base path + `ss.path`.
 /// - `EDT` format (Wave 2): two contexts per source-set — the original EDT path
 ///   and a generated Designer copy under `workPath/designer/<name>/`.
 pub struct SourceSetsService<'a> {
@@ -20,7 +20,7 @@ impl<'a> SourceSetsService<'a> {
 
     /// Return all Designer-format contexts that should be scanned and built.
     ///
-    /// In `DESIGNER` mode this is simply each source-set resolved against `basePath`.
+    /// In `DESIGNER` mode this is simply each source-set resolved against the project base path.
     /// In `EDT` mode (Wave 2) this returns the generated Designer copies in
     /// `workPath/designer`.
     pub fn designer_contexts(&self) -> Vec<SourceSetContext> {

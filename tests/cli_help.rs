@@ -51,6 +51,37 @@ fn build_help_exposes_source_set_selector() {
 }
 
 #[test]
+fn tools_download_help_exposes_tool_commands() {
+    let output = v8_runner_command()
+        .args(["tools", "download", "--help"])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Global options:"));
+    assert!(stdout.contains("Commands:"));
+    assert!(stdout.contains("yaxunit"));
+    assert!(stdout.contains("vanessa"));
+    assert!(stdout.contains("client-mcp"));
+    assert!(!stdout.contains("--extensions"));
+}
+
+#[test]
+fn tools_download_extension_help_exposes_sources_flag() {
+    let output = v8_runner_command()
+        .args(["tools", "download", "yaxunit", "--help"])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Command options:"));
+    assert!(stdout.contains("--sources"));
+    assert!(stdout.contains("--force"));
+}
+
+#[test]
 fn launch_help_uses_output_path_name_and_global_json_selector() {
     let output = v8_runner_command()
         .args(["launch", "--help"])

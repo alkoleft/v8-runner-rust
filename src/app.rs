@@ -2,12 +2,14 @@ use clap::Parser;
 use tracing::{debug, error};
 
 use crate::cli::args::{
-    Cli, Command, ConfigCommand, ConfigInitArgs, McpCommand, McpServeTransport,
+    Cli, Command, ConfigCommand, ConfigInitArgs, McpCommand, McpServeTransport, ToolsCommand,
 };
 use crate::cli::execute;
 use crate::cli::output::print_command_error;
 use crate::command_envelope::Envelope;
-use crate::config::loader::load_config;
+use crate::config::loader::{
+    load_config, load_config_for_tools_download, resolve_primary_config_path,
+};
 use crate::output::presenter::Presenter;
 use crate::output::text::{TimelineItem, TimelineStatus};
 use crate::support::error::AppError;
@@ -35,8 +37,17 @@ pub fn run() -> i32 {
         return run_config_command(args, &presenter);
     }
 
-    let config = match load_config(cli.config.as_deref(), cli.workdir.as_deref()) {
+    let config = match load_cli_config(&cli) {
         Ok(c) => c,
+        Err(e) => {
+            let message = e.to_string();
+            let error = UseCaseError::from(AppError::from(e));
+            print_command_error(&presenter, command_name(&cli.command), &error, &message);
+            return error.exit_code();
+        }
+    };
+    let primary_config_path = match resolve_primary_config_path(cli.config.as_deref()) {
+        Ok(path) => path,
         Err(e) => {
             let message = e.to_string();
             let error = UseCaseError::from(AppError::from(e));
@@ -74,6 +85,7 @@ pub fn run() -> i32 {
     let result = match &cli.command {
         Command::Init
         | Command::Config(_)
+        | Command::Tools(_)
         | Command::Extensions(_)
         | Command::Build(_)
         | Command::Load(_)
@@ -85,6 +97,7 @@ pub fn run() -> i32 {
         | Command::Launch(_) => execute::execute_command(
             &config,
             &cli.command,
+            Some(primary_config_path),
             &presenter,
             cli.clean_before_execution,
         ),
@@ -107,6 +120,21 @@ pub fn run() -> i32 {
             }
             e.exit_code()
         }
+    }
+}
+
+fn load_cli_config(
+    cli: &Cli,
+) -> Result<crate::config::model::AppConfig, crate::config::loader::ConfigLoadError> {
+    if matches!(
+        &cli.command,
+        Command::Tools(crate::cli::args::ToolsArgs {
+            command: ToolsCommand::Download(_)
+        })
+    ) {
+        load_config_for_tools_download(cli.config.as_deref(), cli.workdir.as_deref())
+    } else {
+        load_config(cli.config.as_deref(), cli.workdir.as_deref())
     }
 }
 
@@ -184,6 +212,8 @@ fn render_config_init_text(
 ) {
     let mut details = vec![
         format!("path: {}", result.path),
+        format!("local path: {}", result.local_path),
+        format!("gitignore: {}", result.gitignore_path),
         format!("format: {}", result.format),
         format!("builder: {}", result.builder),
     ];

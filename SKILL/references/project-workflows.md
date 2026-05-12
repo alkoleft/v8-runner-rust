@@ -12,6 +12,9 @@ Create the default config when the project has no `v8project.yaml`:
 v8-runner config init
 ```
 
+This creates `v8project.yaml`, a sibling empty `v8project.local.yaml` for machine-local overrides,
+and a `.gitignore` entry for the local overlay when needed.
+
 Choose a narrower init command only when the project shape is known:
 
 ```bash

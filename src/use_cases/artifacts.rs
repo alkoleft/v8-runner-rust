@@ -768,8 +768,10 @@ fn resolve_target(
     let canonical_output_path = nearest_existing_canonical_path(&output_path).map_err(|error| {
         AppError::Runtime(format!("failed to canonicalize output path: {error}"))
     })?;
-    let canonical_base_path = nearest_existing_canonical_path(&config.base_path)
-        .map_err(|error| AppError::Runtime(format!("failed to canonicalize basePath: {error}")))?;
+    let canonical_base_path =
+        nearest_existing_canonical_path(&config.base_path).map_err(|error| {
+            AppError::Runtime(format!("failed to canonicalize project base path: {error}"))
+        })?;
     let canonical_work_path = nearest_existing_canonical_path(&config.work_path)
         .map_err(|error| AppError::Runtime(format!("failed to canonicalize workPath: {error}")))?;
     let target_identity = stable_path_identity(&canonical_output_path);
@@ -886,7 +888,7 @@ fn validate_publish_target(resolved: &ResolvedArtifactsTarget) -> Result<(), App
     }
     if resolved.canonical_output_path == resolved.canonical_base_path {
         return Err(AppError::Validation(
-            "artifacts output must not equal basePath".to_owned(),
+            "artifacts output must not equal project base path".to_owned(),
         ));
     }
     if resolved.canonical_output_path == resolved.canonical_work_path {

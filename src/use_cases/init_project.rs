@@ -21,7 +21,7 @@ use crate::platform::utilities::PlatformUtilities;
 use crate::support::error::AppError;
 use crate::use_cases::context::{ExecutionContext, InterruptionSafetyClass};
 use crate::use_cases::interruption;
-use crate::use_cases::progress::log_live_stage;
+use crate::use_cases::progress::{log_live_stage, log_live_stage_status, LiveStageStatus};
 use crate::use_cases::request::InitRequest;
 use crate::use_cases::result::{UseCaseError, UseCaseFailure, UseCaseResult};
 use crate::use_cases::tool_extension;
@@ -59,15 +59,19 @@ fn run_init(context: &ExecutionContext, config: &AppConfig) -> UseCaseResult<Ini
         ensure_edt_workspace(context, config, &mut utilities),
     );
 
-    let result = InitResult {
-        ok: first_error.is_none(),
-        steps,
-        duration_ms: started.elapsed().as_millis() as u64,
-    };
+    let result = init_result(started, steps, first_error.is_none());
 
     match first_error {
         Some(error) => Err(InitExecutionFailure::with_payload(error, result)),
         None => Ok(result),
+    }
+}
+
+fn init_result(started: Instant, steps: Vec<InitStep>, ok: bool) -> InitResult {
+    InitResult {
+        ok,
+        steps,
+        duration_ms: started.elapsed().as_millis() as u64,
     }
 }
 
@@ -79,7 +83,40 @@ fn record_step(
     if first_error.is_none() {
         *first_error = outcome.error.clone();
     }
+    log_step_status(&outcome.step);
     steps.push(outcome.step);
+}
+
+fn log_step_status(step: &InitStep) {
+    let Some(label) = live_step_label(step) else {
+        return;
+    };
+    let Some((status, marker)) = live_status_marker(&step.status) else {
+        return;
+    };
+    log_live_stage_status(
+        label,
+        status,
+        &format!("{marker} {}: {}", step.target, step.action),
+    );
+}
+
+fn live_step_label(step: &InitStep) -> Option<&'static str> {
+    match (step.target.as_str(), step.action.as_str()) {
+        ("infobase", "create") => Some("init: infobase create"),
+        ("edt_workspace", "import") if !matches!(step.status, InitStepStatus::Skipped) => {
+            Some("init: edt import")
+        }
+        _ => None,
+    }
+}
+
+fn live_status_marker(status: &InitStepStatus) -> Option<(LiveStageStatus, &'static str)> {
+    match status {
+        InitStepStatus::Ok => Some((LiveStageStatus::Succeeded, "✓")),
+        InitStepStatus::Failed => Some((LiveStageStatus::Failed, "✗")),
+        InitStepStatus::Skipped => None,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -407,6 +444,7 @@ fn ensure_edt_workspace(
         )
     };
     debug!("[EDT] Инициализация workspace: {}", workspace.display());
+    let mut imported_projects = Vec::new();
     for project in projects {
         if let Some(outcome) = interruption_step_outcome(
             context,
@@ -418,7 +456,10 @@ fn ensure_edt_workspace(
             return outcome;
         }
         debug!("[EDT] Импорт проекта: {}", project.name);
-        log_live_stage("init: edt import", "[EDT] importing source-set project");
+        log_live_stage(
+            "init: edt import",
+            &format!("[EDT] importing source-set project '{}'", project.name),
+        );
         match dsl.import_project(&project.path) {
             Ok(result) => {
                 if let Err(error) =
@@ -436,6 +477,7 @@ fn ensure_edt_workspace(
                 )
             }
         }
+        imported_projects.push(project.name);
     }
 
     if let Err(error) = std::fs::write(&marker, b"initialized\n") {
@@ -455,10 +497,19 @@ fn ensure_edt_workspace(
         "import",
         started,
         with_optional_warning(
-            format!("workspace initialized: {}", workspace.display()),
+            edt_workspace_initialized_message(&workspace, &imported_projects),
             context_deferred_warning(context),
         ),
     )
+}
+
+fn edt_workspace_initialized_message(workspace: &Path, imported_projects: &[String]) -> String {
+    let mut message = format!("workspace initialized: {}", workspace.display());
+    if !imported_projects.is_empty() {
+        message.push_str("; imported EDT projects: ");
+        message.push_str(&imported_projects.join(", "));
+    }
+    message
 }
 
 fn create_infobase_via_designer(

@@ -93,6 +93,14 @@ pub fn read_line_count(path: &Path) -> usize {
         .unwrap_or(0)
 }
 
+pub fn free_tcp_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .expect("bind free port")
+        .local_addr()
+        .expect("local addr")
+        .port()
+}
+
 pub async fn wait_until_async<F>(attempts: usize, interval: Duration, mut condition: F) -> bool
 where
     F: FnMut() -> bool,

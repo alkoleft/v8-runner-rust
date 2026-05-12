@@ -17,7 +17,7 @@ pub enum ConfigValidationError {
     #[error("{0}")]
     InvalidYamlRoot(String),
 
-    #[error("basePath does not exist or is not a directory: {0}")]
+    #[error("project base path does not exist or is not a directory: {0}")]
     BasePathInvalid(String),
 
     #[error("workPath could not be created: {0}")]
@@ -198,6 +198,23 @@ pub fn validate(config: &AppConfig) -> Result<(), ConfigValidationError> {
     validate_test_config(config)?;
     validate_mcp_config(config)?;
     validate_client_mcp_tool_extension(config)?;
+    validate_edt_cli_config(config)?;
+    Ok(())
+}
+
+/// Validate only the configuration parts required to bootstrap downloaded tools.
+///
+/// `tools download` may be invoked specifically to create Vanessa Automation and
+/// client MCP paths, so those tool-dependent checks must not block the command.
+pub fn validate_tools_download_bootstrap(config: &AppConfig) -> Result<(), ConfigValidationError> {
+    validate_base_path(&config.base_path)?;
+    validate_work_path(&config.work_path)?;
+    validate_matrix(config)?;
+    validate_connection(config)?;
+    validate_platform_version(config)?;
+    validate_build_config(config)?;
+    validate_execution_timeout(config)?;
+    validate_mcp_config(config)?;
     validate_edt_cli_config(config)?;
     Ok(())
 }

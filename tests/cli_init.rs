@@ -82,7 +82,7 @@ fn setup_designer_init_project_with_body(
     let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
-    let config_path = dir.path().join("v8project.yaml");
+    let config_path = base_path.join("v8project.yaml");
     let v8_path = dir.path().join("1cv8");
     let infobase_path = dir.path().join("ib");
 
@@ -94,8 +94,7 @@ fn setup_designer_init_project_with_body(
     );
 
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File={}'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n",
-        base_path.display(),
+        "workPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File={}'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n",
         work_path.display(),
         infobase_path.display(),
         v8_path.display(),
@@ -120,7 +119,7 @@ fn setup_edt_init_project(
     let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
-    let config_path = dir.path().join("v8project.yaml");
+    let config_path = base_path.join("v8project.yaml");
     let platform_path = dir
         .path()
         .join(if builder == "IBCMD" { "ibcmd" } else { "1cv8" });
@@ -158,8 +157,7 @@ fn setup_edt_init_project(
     );
 
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: {}\nbuilder: {}\ninfobase:\n  connection: '{}'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\n  - name: ext\n    type: EXTENSION\n    path: ext\ntools:\n  platform:\n    path: '{}'\n  edt_cli:\n    path: '{}'\n",
-        base_path.display(),
+        "workPath: '{}'\nformat: {}\nbuilder: {}\ninfobase:\n  connection: '{}'\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\n  - name: ext\n    type: EXTENSION\n    path: ext\ntools:\n  platform:\n    path: '{}'\n  edt_cli:\n    path: '{}'\n",
         work_path.display(),
         format,
         builder,
@@ -185,7 +183,7 @@ fn setup_ibcmd_server_init_project(
     let dir = temp_workspace();
     let base_path = dir.path().join("project");
     let work_path = dir.path().join("work");
-    let config_path = dir.path().join("v8project.yaml");
+    let config_path = base_path.join("v8project.yaml");
     let ibcmd_path = dir.path().join("ibcmd");
     let calls_log = dir.path().join("ibcmd.calls.log");
 
@@ -201,8 +199,7 @@ fn setup_ibcmd_server_init_project(
     );
 
     let config = format!(
-        "basePath: '{}'\nworkPath: '{}'\nformat: DESIGNER\nbuilder: IBCMD\ninfobase:\n  connection: 'Srvr=cluster:1541;Ref=demo'\n  user: Admin\n  password: secret\n  dbms:\n    kind: PostgreSQL\n    server: localhost\n    name: demo\n    user: postgres\n    password: pg-secret\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n",
-        base_path.display(),
+        "workPath: '{}'\nformat: DESIGNER\nbuilder: IBCMD\ninfobase:\n  connection: 'Srvr=cluster:1541;Ref=demo'\n  user: Admin\n  password: secret\n  dbms:\n    kind: PostgreSQL\n    server: localhost\n    name: demo\n    user: postgres\n    password: pg-secret\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\ntools:\n  platform:\n    path: '{}'\n",
         work_path.display(),
         ibcmd_path.display(),
     );
@@ -252,6 +249,40 @@ fn init_designer_non_zero_create_exit_stays_fatal_even_when_marker_appears() {
         .as_str()
         .expect("message")
         .contains("designer create failed"));
+}
+
+#[test]
+fn init_text_reports_infobase_failure_before_continuing_edt_import() {
+    let (_dir, config_path, _work_path, _base_path, platform_path, edt_calls_log) =
+        setup_edt_init_project("EDT", "DESIGNER", "__AUTO_FILE__");
+    write_script(
+        &platform_path,
+        "printf 'designer create failed\\n' >&2\nexit 1",
+    );
+
+    let output = v8_runner_command()
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--no-color",
+            "init",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let failed_step = stdout
+        .find("✗ infobase: create")
+        .expect("live failed infobase status");
+    let edt_import = stdout
+        .find("importing source-set project")
+        .expect("continued edt import");
+    let final_summary = stdout.find("Init failed").expect("final summary");
+    assert!(failed_step < edt_import);
+    assert!(failed_step < final_summary);
+    assert!(stdout.contains("✓ edt_workspace: import"));
+    assert!(edt_calls_log.exists());
 }
 
 #[test]
@@ -331,6 +362,10 @@ fn init_edt_with_ibcmd_creates_infobase_and_imports_projects_in_order() {
         .trim_matches('\'');
     assert!(Path::new(infobase_dir).join("1Cv8.1CD").exists());
     assert!(work_path.join("edt-workspace").exists());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("importing source-set project 'main'"));
+    assert!(stdout.contains("importing source-set project 'ext'"));
+    assert!(stdout.contains("imported EDT projects: main, ext"));
     let calls = fs::read_to_string(edt_calls_log).expect("calls");
     let lines: Vec<_> = calls.lines().collect();
     assert_eq!(lines.len(), 2);

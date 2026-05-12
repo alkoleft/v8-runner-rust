@@ -1,7 +1,6 @@
 # Default live smoke config for scripts/test/live-cli-fixture.sh.
 # The script resolves __ROOT_DIR__ and __OUTPUT_ROOT__ into an isolated workspace.
 
-basePath: __OUTPUT_ROOT__/workspace/basePath
 workPath: __OUTPUT_ROOT__/work
 format: DESIGNER
 builder: DESIGNER

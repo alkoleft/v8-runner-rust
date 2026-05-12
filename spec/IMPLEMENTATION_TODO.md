@@ -4,7 +4,7 @@ This file tracks open implementation work only.
 
 ## Current Status
 
-- Open tasks as of `2026-05-03`: 0.
+- Open tasks as of `2026-05-11`: 0.
 
 ## Open Tasks
 
@@ -35,3 +35,5 @@ No open implementation tasks.
   closed source-backed tool extension change-detection task.
 - [spec/archive/completed-tasks-t25.md](archive/completed-tasks-t25.md):
   closed JSON Schema descriptions and config alias removal task.
+- [spec/archive/completed-tasks-t26.md](archive/completed-tasks-t26.md):
+  closed post-T25 public `basePath` removal and schema URL follow-up.

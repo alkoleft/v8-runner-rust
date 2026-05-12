@@ -76,7 +76,7 @@ fn validate_publish_target_path(
 
     if canonical_target_path == canonical_base_path {
         return Err(AppError::Validation(
-            "dump target must not equal basePath".to_owned(),
+            "dump target must not equal project base path".to_owned(),
         ));
     }
     if canonical_target_path == canonical_work_path {

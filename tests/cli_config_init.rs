@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use support::{temp_workspace, v8_runner_command};
 
 const V8_EXTERNAL_OBJECTS_NATURE: &str = "com._1c.g5.v8.dt.core.V8ExternalObjectsNature";
+const LOCAL_CONFIG_SCHEMA_MODEL_LINE: &str = "# yaml-language-server: $schema=https://raw.githubusercontent.com/alkoleft/v8-runner-rust/master/docs/schemas/v8project.local.schema.json";
 
 fn copy_dir_all(src: &Path, dst: &Path) {
     fs::create_dir_all(dst).expect("create dst");
@@ -83,12 +84,12 @@ fn config_init_creates_yaml_with_detected_designer_sources() {
 
     assert!(output.status.success());
     let config = fs::read_to_string(dir.path().join("v8project.yaml")).expect("config");
-    assert!(config.starts_with(&format!(
-        "# yaml-language-server: $schema=https://raw.githubusercontent.com/alkoleft/v8-runner-rust/refs/tags/v{}/docs/schemas/v8project.schema.json\n",
-        env!("CARGO_PKG_VERSION")
-    )));
+    assert!(config.starts_with(
+        "# yaml-language-server: $schema=https://raw.githubusercontent.com/alkoleft/v8-runner-rust/master/docs/schemas/v8project.schema.json\n"
+    ));
     serde_yaml::from_str::<serde_yaml::Value>(&config).expect("generated config remains YAML");
     assert!(config.contains("format: DESIGNER"));
+    assert!(!config.contains("basePath:"));
     assert!(config.contains("workPath: 'build'"));
     assert!(config.contains("infobase:"));
     assert!(config.contains("  connection: 'File=build/ib'"));
@@ -96,6 +97,13 @@ fn config_init_creates_yaml_with_detected_designer_sources() {
     assert!(config.contains("name: 'SalesAddon'"));
     assert!(config.contains("type: EXTENSION"));
     assert!(String::from_utf8_lossy(&output.stdout).contains("Config written"));
+    let local_config =
+        fs::read_to_string(dir.path().join("v8project.local.yaml")).expect("local config");
+    assert!(local_config.starts_with(LOCAL_CONFIG_SCHEMA_MODEL_LINE));
+    serde_yaml::from_str::<serde_yaml::Value>(&local_config)
+        .expect("generated local config remains YAML");
+    let gitignore = fs::read_to_string(dir.path().join(".gitignore")).expect("gitignore");
+    assert!(gitignore.lines().any(|line| line == "v8project.local.yaml"));
 }
 
 #[test]
@@ -123,11 +131,47 @@ fn config_init_uses_json_envelope_and_output_override() {
     let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
     assert_eq!(payload["ok"], true);
     assert_eq!(payload["command"], "config init");
+    assert_eq!(
+        payload["data"]["local_path"],
+        dir.path()
+            .join("v8project.local.yaml")
+            .display()
+            .to_string()
+    );
+    assert_eq!(
+        payload["data"]["gitignore_path"],
+        dir.path().join(".gitignore").display().to_string()
+    );
     assert_eq!(payload["data"]["source_sets"][0]["path"], ".");
     assert_eq!(payload["data"]["source_sets"][0]["type"], "CONFIGURATION");
     let config = fs::read_to_string(config_path).expect("config");
     assert!(config.contains("infobase:"));
     assert!(config.contains("  connection: 'File=/tmp/test-ib'"));
+    assert!(!config.contains("basePath:"));
+}
+
+#[test]
+fn config_init_creates_local_overlay_next_to_output_override() {
+    let dir = temp_workspace();
+    fs::write(dir.path().join("Configuration.xml"), "<Configuration/>").expect("xml");
+
+    let output = v8_runner_command()
+        .current_dir(dir.path())
+        .args(["config", "init", "--output", "config/v8project.yaml"])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let config =
+        fs::read_to_string(dir.path().join("config").join("v8project.yaml")).expect("config");
+    assert!(!config.contains("basePath:"));
+    assert!(config.contains("path: '..'"));
+    let local_config = fs::read_to_string(dir.path().join("config").join("v8project.local.yaml"))
+        .expect("local config");
+    assert!(local_config.starts_with(LOCAL_CONFIG_SCHEMA_MODEL_LINE));
+    let gitignore =
+        fs::read_to_string(dir.path().join("config").join(".gitignore")).expect("gitignore");
+    assert!(gitignore.lines().any(|line| line == "v8project.local.yaml"));
 }
 
 #[test]

@@ -6,7 +6,6 @@ settings before CLI overrides.
 
 ## Fields To Check First
 
-- `basePath`: root of 1C source files; defaults to the directory containing the primary config when omitted.
 - `workPath`: generated state, temp files, and workspace location.
 - `format`: `DESIGNER` or `EDT`.
 - `builder`: `DESIGNER` or `IBCMD`.
@@ -36,6 +35,7 @@ settings before CLI overrides.
 ## Source-Set Notes
 
 `source-set.name` is the stable identity for ordering, diagnostics, runtime contexts, generated directories, and command selection.
+Relative `source-set.path` values are resolved from the directory containing the primary `v8project.yaml`.
 
 Supported `source-set.type` values:
 
@@ -53,3 +53,5 @@ Prefer `--source-set <NAME>` for narrow build, dump, convert, and artifact flows
 `v8project.local.yaml` is an automatic local overlay only. It may override only `workPath`,
 `infobase.*`, `tools.*`, `tests.*`, and `mcp.*`; it must not define `source-set`, `format`, or
 `builder`, and it must not be used as `--config`. `--workdir` wins over both config files.
+`config init` creates the sibling local overlay as an empty mapping with a schema modeline and adds
+`v8project.local.yaml` to `.gitignore` when needed.

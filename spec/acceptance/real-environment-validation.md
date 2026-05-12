@@ -126,7 +126,7 @@ bash scripts/test/live-cli-fixture.sh
 - `format: DESIGNER`
 - `builder: DESIGNER`
 - файловое подключение `File=...` или raw `/F ...`
-- `basePath`, резолвящийся в `tests/fixtures/designer`
+- primary config directory, резолвящийся в `tests/fixtures/designer`
 - source-set'ы для `configuration`, `extension`, `external-processor`, `external-report`
 - заданный `tools.platform.path` или внешний override `V8TR_PLATFORM_PATH`
 
