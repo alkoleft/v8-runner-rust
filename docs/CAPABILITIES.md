@@ -175,7 +175,9 @@ v8-runner test va
 v8-runner test va --feature login --filter-tag @smoke
 ```
 
-- Всегда сначала запускает `build`.
+- Всегда сначала запускает `build` со статическим `/UpdateDBCfg`, даже если
+  `build.dynamicUpdate: true`. Для динамической подготовки перед тестами выполните отдельный
+  `v8-runner build --dynamic`.
 - `test yaxunit module <NAME>` требует непустое имя модуля.
 - `test va` использует профиль из `tests.va.profile`; `--feature`, `--filter-tag`,
   `--ignore-tag` и `--scenario-filter` переопределяют соответствующие списки выбранного профиля

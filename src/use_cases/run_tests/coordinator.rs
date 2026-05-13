@@ -76,9 +76,9 @@ pub(super) fn run_tests(
         &BuildArgs {
             full_rebuild: false,
             source_set: None,
-            // `test` always rebuilds with the project default (`build.dynamicUpdate`); the
-            // ergonomic CLI for one-shot dynamic remains `build --dynamic && test`.
-            dynamic_update: None,
+            // Test prerequisite builds must stay static even when the project default enables
+            // dynamic updates; use `build --dynamic && test` for one-shot dynamic preparation.
+            dynamic_update: Some(false),
         },
     ) {
         Ok(result) => result,

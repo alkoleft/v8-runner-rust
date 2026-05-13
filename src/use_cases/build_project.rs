@@ -2719,6 +2719,59 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn edt_build_designer_dynamic_update_modes_reach_update_db_cfg() {
+        for (case, config_dynamic_update, arg_dynamic_update, expected_dynamic) in [
+            ("cli_dynamic", false, Some(true), true),
+            ("config_default_dynamic", true, None, true),
+            ("cli_static_overrides_config", true, Some(false), false),
+            ("static_default", false, None, false),
+        ] {
+            let dir = tempdir().expect("tempdir");
+            let base = dir.path().join("base");
+            let work = dir.path().join("work");
+            let platform_script = dir.path().join("platform").join("bin").join("1cv8");
+            let edt_script = dir.path().join("edt").join("1cedtcli");
+            let designer_calls = dir.path().join(format!("{case}-designer-calls.log"));
+            let edt_calls = dir.path().join(format!("{case}-edt-calls.log"));
+            create_source_tree(&base);
+            write_designer_script(&platform_script, &designer_calls, None);
+            write_edt_script(&edt_script, &edt_calls, None);
+            let mut config =
+                build_edt_config(&base, &work, &dir.path().join("platform"), &edt_script);
+            config.build.dynamic_update = config_dynamic_update;
+            prime_edt_snapshots(&config);
+
+            fs::write(
+                base.join("main")
+                    .join("Catalogs.Items")
+                    .join("ObjectModule.bsl"),
+                format!("procedure Test()\n  // changed in {case}\nendprocedure"),
+            )
+            .expect("modify edt main");
+
+            let result = run_build(
+                &config,
+                &BuildArgs {
+                    full_rebuild: false,
+                    source_set: None,
+                    dynamic_update: arg_dynamic_update,
+                },
+            )
+            .expect(case);
+            let calls_text = fs::read_to_string(&designer_calls).expect("designer calls");
+
+            assert!(result.ok, "{case}");
+            assert!(calls_text.contains("/UpdateDBCfg"), "{case}");
+            assert_eq!(
+                calls_text.contains("-Dynamic+"),
+                expected_dynamic,
+                "{case}: {calls_text}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn infobase_unlock_code_propagates_to_designer_args() {
         let dir = tempdir().expect("tempdir");
         let base = dir.path().join("base");

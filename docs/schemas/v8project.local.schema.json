@@ -242,6 +242,13 @@
             "null"
           ]
         },
+        "unlock_code": {
+          "description": "Optional local infobase unlock code propagated as `/UC <value>`. Masked in command logs.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "user": {
           "description": "Optional local infobase user name.",
           "type": [

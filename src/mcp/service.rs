@@ -824,7 +824,7 @@ mod tests {
                 &McpBuildProjectRequest {
                     full_rebuild: Some(true),
                     source_set: Some("main".to_owned()),
-                    dynamic_update: None,
+                    dynamic_update: Some(true),
                 },
             )
             .expect("success");
@@ -840,6 +840,7 @@ mod tests {
         assert_eq!(requests[0].0.transport(), ExecutionTransport::McpStdio);
         assert_eq!(requests[0].1.full_rebuild, true);
         assert_eq!(requests[0].1.source_set.as_deref(), Some("main"));
+        assert_eq!(requests[0].1.dynamic_update, Some(true));
     }
 
     #[test]

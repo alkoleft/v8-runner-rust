@@ -726,8 +726,7 @@ mod tests {
         std::fs::write(
             &config_path,
             format!(
-                "basePath: {}\nworkPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: \"File=/tmp/ib\"\n  unlock_code: seal-1\nbuild:\n  dynamicUpdate: true\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: src\n",
-                base.display(),
+                "workPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: \"File=/tmp/ib\"\n  unlock_code: seal-1\nbuild:\n  dynamicUpdate: true\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: base/src\n",
                 work.display()
             ),
         )
