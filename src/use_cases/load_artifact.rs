@@ -328,8 +328,10 @@ fn run_load(
         "load: update_db_cfg",
         "[Конфигуратор] updating database configuration",
     );
+    // `load` mirrors the historical static update — DBA approves the artifact, the runner
+    // applies the locked change. Dynamic mode is scoped to `build` per TASK-124.
     let update_result = update_dsl
-        .update_db_cfg(resolved.extension.as_deref())
+        .update_db_cfg(resolved.extension.as_deref(), false)
         .map_err(AppError::from);
 
     let update_result = match update_result {

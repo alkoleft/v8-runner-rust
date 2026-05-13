@@ -7,6 +7,12 @@ pub struct V8Connection {
     pub user: Option<String>,
     /// Optional password added as `/P <value>`.
     pub password: Option<String>,
+    /// Optional infobase unlock code emitted as `/UC <value>`.
+    ///
+    /// Configurations protected by a locking code (`Конфигурация → Установить пароль`) refuse any
+    /// administrative DESIGNER operation until the matching `/UC` is supplied; an empty string is
+    /// treated as "no unlock code" for backwards compatibility with explicit nulling in overlays.
+    pub unlock_code: Option<String>,
 }
 
 impl V8Connection {
@@ -24,6 +30,7 @@ impl V8Connection {
             connection_args,
             user: None,
             password: None,
+            unlock_code: None,
         }
     }
 
@@ -38,6 +45,14 @@ impl V8Connection {
             if !password.is_empty() {
                 args.push("/P".to_owned());
                 args.push(password.clone());
+            }
+        }
+        if let Some(unlock_code) = &self.unlock_code {
+            // Empty value is intentionally treated as absent: a misconfigured overlay setting
+            // `unlock_code: ""` should not push an `/UC` token without a value to the platform.
+            if !unlock_code.is_empty() {
+                args.push("/UC".to_owned());
+                args.push(unlock_code.clone());
             }
         }
         args
@@ -155,5 +170,42 @@ mod tests {
 
         assert_eq!(connection.args(), vec!["/F", "/tmp/ib"]);
         assert_eq!(connection.file_path(), Some("/tmp/ib"));
+    }
+
+    #[test]
+    fn appends_unlock_code_after_credentials() {
+        let mut connection = V8Connection::from_connection_string("File=/tmp/ib");
+        connection.user = Some("Admin".to_owned());
+        connection.password = Some("pw".to_owned());
+        connection.unlock_code = Some("uc-secret".to_owned());
+
+        assert_eq!(
+            connection.args(),
+            vec![
+                "/IBConnectionString",
+                "File=/tmp/ib",
+                "/N",
+                "Admin",
+                "/P",
+                "pw",
+                "/UC",
+                "uc-secret",
+            ]
+        );
+    }
+
+    #[test]
+    fn omits_unlock_code_when_value_is_empty() {
+        let mut connection = V8Connection::from_connection_string("File=/tmp/ib");
+        connection.unlock_code = Some(String::new());
+
+        assert!(!connection.args().iter().any(|arg| arg == "/UC"));
+    }
+
+    #[test]
+    fn omits_unlock_code_when_not_configured() {
+        let connection = V8Connection::from_connection_string("File=/tmp/ib");
+
+        assert!(!connection.args().iter().any(|arg| arg == "/UC"));
     }
 }

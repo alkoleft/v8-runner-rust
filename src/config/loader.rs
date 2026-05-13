@@ -716,6 +716,36 @@ mod tests {
     }
 
     #[test]
+    fn load_config_reads_build_dynamic_update_and_infobase_unlock_code() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).expect("src dir");
+        let config_path = dir.path().join("v8project.yaml");
+        std::fs::write(
+            &config_path,
+            format!(
+                "workPath: {}\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: \"File=/tmp/ib\"\n  unlock_code: seal-1\nbuild:\n  dynamicUpdate: true\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: base/src\n",
+                work.display()
+            ),
+        )
+        .expect("write config");
+
+        let config = load_config(config_path.to_str(), None).expect("load config");
+
+        assert!(config.build.dynamic_update);
+        assert_eq!(config.infobase.unlock_code.as_deref(), Some("seal-1"));
+
+        // And the resulting V8Connection carries the unlock code into the platform layer.
+        let connection = config.v8_connection();
+        assert_eq!(connection.unlock_code.as_deref(), Some("seal-1"));
+        let args = connection.args();
+        let uc_index = args.iter().position(|arg| arg == "/UC").expect("/UC");
+        assert_eq!(args.get(uc_index + 1).map(String::as_str), Some("seal-1"));
+    }
+
+    #[test]
     fn load_config_reads_test_timeout_from_exact_yaml_key() {
         let dir = tempdir().expect("tempdir");
         let base = dir.path().join("base");

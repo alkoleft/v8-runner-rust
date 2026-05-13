@@ -88,13 +88,22 @@ impl<'a> DesignerDsl<'a> {
         self.run(&args)
     }
 
-    /// `/UpdateDBCfg`
+    /// `/UpdateDBCfg [-Dynamic+] [-Extension <name>]`
+    ///
+    /// `dynamic = true` adds `-Dynamic+`, instructing the platform to apply the change set
+    /// without grabbing an exclusive infobase lock. The platform itself refuses dynamic mode
+    /// when restructuring is required; the runner surfaces that error verbatim instead of
+    /// retrying statically.
     pub fn update_db_cfg(
         &self,
         extension: Option<&str>,
+        dynamic: bool,
     ) -> Result<PlatformCommandResult, DesignerError> {
         let mut args = self.base_args();
         args.push("/UpdateDBCfg".to_owned());
+        if dynamic {
+            args.push("-Dynamic+".to_owned());
+        }
         if let Some(extension) = extension {
             args.push("-Extension".to_owned());
             args.push(extension.to_owned());
@@ -437,6 +446,84 @@ mod tests {
             .as_deref()
             .expect("read error")
             .contains("failed to read designer /Out log"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn update_db_cfg_emits_dynamic_flag_when_requested() {
+        let dir = tempdir().expect("tempdir");
+        let script = dir.path().join("1cv8");
+        let args_log = dir.path().join("args.log");
+        write_script(
+            &script,
+            &format!("printf '%s\n' \"$@\" > \"{}\"\nexit 0", args_log.display()),
+        );
+        let runner = ProcessExecutor;
+        let dsl = DesignerDsl::new(
+            script,
+            V8Connection::from_connection_string("File=/tmp/ib"),
+            &runner as &dyn ProcessRunner,
+            None,
+        );
+
+        dsl.update_db_cfg(None, true).expect("dynamic update");
+
+        let args = fs::read_to_string(&args_log).expect("args log");
+        assert!(args.contains("/UpdateDBCfg"));
+        assert!(args.contains("-Dynamic+"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn update_db_cfg_omits_dynamic_flag_by_default() {
+        let dir = tempdir().expect("tempdir");
+        let script = dir.path().join("1cv8");
+        let args_log = dir.path().join("args.log");
+        write_script(
+            &script,
+            &format!("printf '%s\n' \"$@\" > \"{}\"\nexit 0", args_log.display()),
+        );
+        let runner = ProcessExecutor;
+        let dsl = DesignerDsl::new(
+            script,
+            V8Connection::from_connection_string("File=/tmp/ib"),
+            &runner as &dyn ProcessRunner,
+            None,
+        );
+
+        dsl.update_db_cfg(Some("Ext"), false)
+            .expect("static update");
+
+        let args = fs::read_to_string(&args_log).expect("args log");
+        assert!(args.contains("/UpdateDBCfg"));
+        assert!(!args.contains("-Dynamic"));
+        assert!(args.contains("-Extension"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn base_args_propagate_unlock_code_to_every_designer_command() {
+        let dir = tempdir().expect("tempdir");
+        let script = dir.path().join("1cv8");
+        let args_log = dir.path().join("args.log");
+        write_script(
+            &script,
+            &format!("printf '%s\n' \"$@\" > \"{}\"\nexit 0", args_log.display()),
+        );
+        let runner = ProcessExecutor;
+        let mut connection = V8Connection::from_connection_string("File=/tmp/ib");
+        connection.unlock_code = Some("seal".to_owned());
+        let dsl = DesignerDsl::new(script, connection, &runner as &dyn ProcessRunner, None);
+
+        dsl.update_db_cfg(None, false).expect("update");
+
+        let args = fs::read_to_string(&args_log).expect("args log");
+        let lines: Vec<&str> = args.lines().collect();
+        let uc_index = lines
+            .iter()
+            .position(|line| *line == "/UC")
+            .expect("/UC token");
+        assert_eq!(lines.get(uc_index + 1).copied(), Some("seal"));
     }
 
     #[cfg(unix)]

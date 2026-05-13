@@ -11,6 +11,11 @@ pub struct McpBuildProjectRequest {
     /// Optional source-set selector from v8project.yaml.
     #[schemars(description = "Source-set name to build. When omitted, all source-sets are built.")]
     pub source_set: Option<String>,
+    /// Optional one-shot override for `/UpdateDBCfg -Dynamic+`.
+    #[schemars(
+        description = "Override build.dynamicUpdate for this call: true applies changes without exclusive lock."
+    )]
+    pub dynamic_update: Option<bool>,
 }
 
 /// MCP request for `run_all_tests`.

@@ -127,6 +127,7 @@ infobase:
   connection: "File=build/ib"
   user: Admin
   password: secret
+  unlock_code: seal-42         # non-empty value is passed as `/UC <значение>`
 
 source-set:
   - name: main
@@ -138,6 +139,7 @@ source-set:
 
 build:
   partialLoadThreshold: 20
+  dynamicUpdate: false          # `/UpdateDBCfg -Dynamic+` по умолчанию
 
 tools:
   client_mcp:
@@ -314,6 +316,17 @@ tests:
 
 Credentials самой информационной базы.
 
+#### `infobase.unlock_code`
+
+- Тип: строка
+- Обязателен: нет
+
+Кодовое слово (`Конфигурация → Установить пароль`), которое транслируется в DESIGNER как
+`/UC <значение>`. Без него платформа отказывается выполнять административные операции на
+запароленных конфигурациях. Пустая строка считается отсутствием кода и не добавляет `/UC`.
+Значение маскируется в логах команд (`/UC ***`), поэтому его безопасно держать в
+`v8project.local.yaml` рядом с `infobase.password`.
+
 #### `infobase.dbms`
 
 - Тип: объект
@@ -372,6 +385,18 @@ Validation rules:
 - Минимум: `1`
 
 Порог между partial и full load.
+
+#### `build.dynamicUpdate`
+
+- Тип: boolean
+- По умолчанию: `false`
+
+Включает режим динамического обновления (`/UpdateDBCfg -Dynamic+`) для `build`. Полезно,
+когда в инфобазе живут HTTP-сервисы или фоновые задания и захват исключительной блокировки
+нежелателен. Если изменения требуют реструктуризации, DESIGNER возвращает ошибку, и
+`v8-runner` пробрасывает её наружу — fallback на статический режим не выполняется.
+
+CLI-флаг `v8-runner build --dynamic` переопределяет это значение на одну команду.
 
 CLI selector `v8-runner build --source-set <name>` использует `source-set[].name` как stable
 runtime identity и не добавляет отдельное поле конфигурации. Если selector не задан, `build`

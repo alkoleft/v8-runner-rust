@@ -3,6 +3,10 @@
     "BuildSchema": {
       "additionalProperties": false,
       "properties": {
+        "dynamicUpdate": {
+          "description": "Default `/UpdateDBCfg -Dynamic+` toggle for `build`. CLI `--dynamic` overrides this.",
+          "type": "boolean"
+        },
         "partialLoadThreshold": {
           "description": "Maximum changed-file count for partial Designer load before falling back to full load.",
           "format": "uint",
@@ -193,6 +197,13 @@
         },
         "password": {
           "description": "Optional infobase password passed to platform utilities.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unlock_code": {
+          "description": "Optional unlock code. Non-empty value is propagated as `/UC <value>` to DESIGNER;\nempty string means no unlock code and `/UC` is not passed. Masked in command logs.",
           "type": [
             "string",
             "null"

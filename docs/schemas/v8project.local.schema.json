@@ -242,6 +242,13 @@
             "null"
           ]
         },
+        "unlock_code": {
+          "description": "Optional local infobase unlock code. Non-empty value is propagated as `/UC <value>`;\nempty string means no unlock code and `/UC` is not passed. Masked in command logs.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "user": {
           "description": "Optional local infobase user name.",
           "type": [

@@ -231,6 +231,7 @@ mod tests {
                 &BuildRequest {
                     full_rebuild: true,
                     source_set: None,
+                    dynamic_update: None,
                 },
             )
             .expect_err("busy workspace");

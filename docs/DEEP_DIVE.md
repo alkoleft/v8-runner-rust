@@ -66,7 +66,9 @@ runtime snapshot commit только указанным source-set.
 `test` и `syntax` проектируются как часть того же локального цикла, а не как отдельная
 эксплуатационная подсистема.
 
-- `test` всегда сначала делает `build`, затем запускает YaXUnit или Vanessa Automation.
+- `test` всегда сначала делает `build` со статическим `/UpdateDBCfg`, затем запускает YaXUnit или
+  Vanessa Automation. Динамическая подготовка перед тестами выполняется отдельным
+  `build --dynamic`.
 - `syntax designer-*` работает только для `DESIGNER` source format.
 - `syntax edt` использует EDT `validate` и привязан к `format=EDT`.
 - Таймауты и interruption metadata должны проходить через общий command-level contract, а не

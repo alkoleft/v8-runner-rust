@@ -68,7 +68,9 @@ v8-runner init
 - Only one source-set changed: use commands that accept `--source-set <NAME>` instead of rebuilding or materializing everything.
 - Branch switch, rebase, large object moves, stale source-backed tool extension state, or suspicious incremental state: run `v8-runner build --full-rebuild`.
 - Syntax check: inspect `format` and `builder`, then choose `syntax designer-modules`, `syntax designer-config`, or `syntax edt`.
-- Behavior validation: run the relevant `v8-runner test ...` command; tests build first.
+- Behavior validation: run the relevant `v8-runner test ...` command; tests build first with a
+  static `/UpdateDBCfg`. Use `v8-runner build --dynamic` before tests when dynamic preparation is
+  intentional.
 - Missing local YAxUnit, Vanessa Automation, or onec-client-mcp-devkit setup: run
   `v8-runner tools download yaxunit --sources`, `v8-runner tools download vanessa`, and
   `v8-runner tools download client-mcp --sources` for source-backed setup. Omit

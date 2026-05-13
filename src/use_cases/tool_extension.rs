@@ -318,8 +318,10 @@ fn prepare_designer_source_extension(
                 "update",
                 &extension_stage_detail("Конфигуратор", "Применение", extension),
             );
+            // Tool-extension flow keeps the historical static update; dynamic mode is opt-in
+            // through `build --dynamic` / `build.dynamicUpdate` and not propagated here.
             let update = dsl
-                .update_db_cfg(Some(&extension.name))
+                .update_db_cfg(Some(&extension.name), false)
                 .map_err(AppError::from)?;
             ensure_tool_extension_success("update_db_cfg", extension, &update)
         }
@@ -410,8 +412,9 @@ fn prepare_artifact_extension(
         extension,
         "update-artifact",
     )?;
+    // Tool-extension artifact apply path uses static update; see tool_extension::execute().
     let update = dsl
-        .update_db_cfg(Some(&extension.name))
+        .update_db_cfg(Some(&extension.name), false)
         .map_err(AppError::from)?;
     ensure_tool_extension_success("update_db_cfg", extension, &update)
 }

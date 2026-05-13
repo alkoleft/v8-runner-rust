@@ -807,6 +807,8 @@ fn map_build_request(args: &BuildArgs) -> BuildRequest {
     BuildRequest {
         full_rebuild: args.full_rebuild,
         source_set: args.source_set.clone(),
+        // CLI flag is a one-shot override; absence means "fall back to project config".
+        dynamic_update: if args.dynamic { Some(true) } else { None },
     }
 }
 
@@ -2548,6 +2550,7 @@ mod tests {
             map_build_request(&BuildArgs {
                 full_rebuild: true,
                 source_set: None,
+                dynamic: false,
             })
             .full_rebuild
         );
@@ -2829,6 +2832,7 @@ mod tests {
             command_name(&Command::Build(BuildArgs {
                 full_rebuild: false,
                 source_set: None,
+                dynamic: false,
             })),
             CommandName::Build
         );
@@ -2899,6 +2903,7 @@ mod tests {
             &Command::Build(BuildArgs {
                 full_rebuild: true,
                 source_set: None,
+                dynamic: false,
             }),
             None,
             &presenter,
@@ -3027,6 +3032,7 @@ mod tests {
             &Command::Build(BuildArgs {
                 full_rebuild: true,
                 source_set: None,
+                dynamic: false,
             }),
             None,
             &presenter,

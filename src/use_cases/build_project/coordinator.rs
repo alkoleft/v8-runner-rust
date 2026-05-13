@@ -174,6 +174,7 @@ pub(super) fn run_build_designer(
                     index,
                     partial_paths.as_deref(),
                     &commit,
+                    resolve_dynamic_update(config, args),
                 ) {
                     Ok(warnings) => push_build_step(
                         &mut steps,
@@ -888,6 +889,7 @@ pub(super) fn run_build_edt(
                             index,
                             partial_paths.as_deref(),
                             &commit,
+                            resolve_dynamic_update(config, args),
                         )
                     }
                     BuilderBackend::Ibcmd => {

@@ -615,6 +615,9 @@ fn is_sensitive_flag(arg: &str) -> bool {
         "--db-pwd",
         "--target-database-password",
         "--target-db-pwd",
+        // `/UC` carries the infobase unlock code (TASK-124) — treat it as a secret.
+        "/UC",
+        "-UC",
     ];
 
     FLAGS.iter().any(|flag| arg.eq_ignore_ascii_case(flag))
@@ -629,6 +632,9 @@ fn split_sensitive_assignment(arg: &str) -> Option<(&str, &str)> {
         "--db-pwd",
         "--target-database-password",
         "--target-db-pwd",
+        // `/UC` carries the infobase unlock code (TASK-124) — treat it as a secret.
+        "/UC",
+        "-UC",
     ];
 
     let (key, value) = arg.split_once('=')?;
@@ -705,6 +711,26 @@ mod tests {
             fs::read_to_string(stderr_log).expect("stderr log").trim(),
             "oops"
         );
+    }
+
+    #[test]
+    fn render_command_masks_unlock_code_flag() {
+        let rendered = render_command(&ProcessRequest {
+            program: Path::new("/tmp/1cv8").to_path_buf(),
+            args: vec![
+                "DESIGNER".to_owned(),
+                "/UC".to_owned(),
+                "seal-42".to_owned(),
+                "/UpdateDBCfg".to_owned(),
+            ],
+            workdir: None,
+            stdout_log_path: None,
+            stderr_log_path: None,
+            startup_probe: None,
+        });
+
+        assert!(rendered.contains("/UC ***"));
+        assert!(!rendered.contains("seal-42"));
     }
 
     #[test]

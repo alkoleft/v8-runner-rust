@@ -16,6 +16,11 @@ pub struct BuildRequest {
     pub full_rebuild: bool,
     /// Optional source-set selector. When absent, all configured source-sets are built.
     pub source_set: Option<String>,
+    /// Per-invocation override for `/UpdateDBCfg -Dynamic+`.
+    ///
+    /// `None` means "no override — use `build.dynamic_update` from project config";
+    /// `Some(true)` / `Some(false)` overrides the project default for this call.
+    pub dynamic_update: Option<bool>,
 }
 
 /// Transport-neutral request for the `tools download` use case.

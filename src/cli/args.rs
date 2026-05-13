@@ -169,6 +169,14 @@ pub struct BuildArgs {
     /// Limit build to one source-set from v8project.yaml
     #[arg(long)]
     pub source_set: Option<String>,
+
+    /// Apply changes via `/UpdateDBCfg -Dynamic+` (no exclusive lock).
+    ///
+    /// Overrides `build.dynamicUpdate` from v8project.yaml for this run. The platform itself
+    /// refuses dynamic mode when restructuring is required; the runner surfaces that error
+    /// instead of falling back to a static update.
+    #[arg(long)]
+    pub dynamic: bool,
 }
 
 #[derive(Args, Debug)]
