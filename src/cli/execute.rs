@@ -1231,10 +1231,10 @@ fn map_mcp_ws_args(
                 "--manager-url must not contain ';' or '=' because the /C payload is semicolon-delimited",
             ));
         }
-        if crate::use_cases::mcp_ws::parse_manager_addr(url).is_err() {
+        if let Err(error) = crate::use_cases::mcp_ws::parse_manager_addr(url) {
             return Err(UseCaseError::new(
                 UseCaseErrorKind::Validation,
-                format!("--manager-url must include host:port (got: {url})"),
+                format!("--manager-url parse error: {error}"),
             ));
         }
     }

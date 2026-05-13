@@ -39,7 +39,7 @@ If the format is unambiguously one or the other, you may pass `--format=designer
 Defaults to `DESIGNER`. Switch to `IBCMD` only when:
 
 - the project is `EDT` and the team is on a platform version where `ibcmd` is supported and faster (≥ 8.3.20); **and**
-- there is no Designer-only feature on the critical path (some legacy project tasks still need the Designer GUI).
+- there is no Designer-only feature on the critical path (some older project tasks still need the Designer GUI).
 
 Ask the user only if the choice is ambiguous and you cannot tell from `tools.platform.version`. Default to `DESIGNER` when in doubt — it is the safer baseline.
 

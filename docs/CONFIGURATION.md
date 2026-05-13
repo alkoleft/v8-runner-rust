@@ -454,8 +454,8 @@ runtime identity и не добавляет отдельное поле конф
   по умолчанию `ws://127.0.0.1:4000/sessions`.
 - `log_level` (`off`/`error`/`warn`/`info`/`debug`/`trace`) — значение `mcp_log_level`,
   передаваемое в `/C` BSL-расширению `client_mcp`.
-- `ws_timeout_ms` — значение `mcp_ws_timeout_ms` (таймаут установки WS-сессии в режиме `auto`,
-  > 0).
+- `ws_timeout_ms` — значение `mcp_ws_timeout_ms`, таймаут установки WS-сессии
+  в миллисекундах (> 0).
 
 `launch mcp` передаёт `port` как `mcpPort` внутри `/C"runMcp..."`
 если CLI не указал `--mcp-port` и выбран `mcp`/`auto`-fallback транспорт.
