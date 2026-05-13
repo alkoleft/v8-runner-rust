@@ -163,7 +163,7 @@ pub enum ConfigValidationError {
     #[error("tools.client_mcp.port must be greater than or equal to 1")]
     InvalidMcpClientPort,
 
-    #[error("tools.client_mcp.transport must be one of: ws, legacy, auto (got: {0})")]
+    #[error("tools.client_mcp.transport must be one of: ws, mcp, auto (got: {0})")]
     InvalidMcpClientTransport(String),
 
     #[error(
@@ -850,6 +850,11 @@ fn validate_mcp_config(config: &AppConfig) -> Result<(), ConfigValidationError> 
     }
 
     if let Some(url) = config.tools.client_mcp.manager_url.as_deref() {
+        if !crate::use_cases::mcp_ws::is_payload_token_safe(url) {
+            return Err(ConfigValidationError::InvalidMcpClientManagerUrl(
+                url.to_owned(),
+            ));
+        }
         if crate::use_cases::mcp_ws::parse_manager_addr(url).is_err() {
             return Err(ConfigValidationError::InvalidMcpClientManagerUrl(
                 url.to_owned(),

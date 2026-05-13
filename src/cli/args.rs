@@ -325,9 +325,9 @@ pub struct LaunchArgs {
 #[derive(Args, Debug, Clone, Default, PartialEq, Eq)]
 #[command(next_help_heading = "MCP client WS options")]
 pub struct McpClientWsArgs {
-    /// Override the transport selection: `ws` forces WS, `legacy` forces local
-    /// HTTP MCP, `auto` probes the manager and falls back to legacy.
-    #[arg(long = "mcp-transport", value_parser = ["ws", "legacy", "auto"])]
+    /// Override the transport selection: `ws` forces WS, `mcp` forces local
+    /// HTTP MCP, `auto` probes the manager and falls back to MCP.
+    #[arg(long = "mcp-transport", value_parser = ["ws", "mcp", "auto"])]
     pub mcp_transport: Option<String>,
 
     /// Override the session-manager WS endpoint
@@ -345,7 +345,7 @@ pub struct McpClientWsArgs {
     pub corr_id: Option<String>,
 
     /// Override the `mcp_log_level` value passed to the BSL devkit.
-    #[arg(long = "mcp-log-level", value_parser = ["off", "error", "warn", "info", "debug", "trace"])]
+    #[arg(long = "mcp-log-level")]
     pub mcp_log_level: Option<String>,
 
     /// Override the `mcp_ws_timeout_ms` value passed to the BSL devkit

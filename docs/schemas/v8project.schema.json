@@ -41,7 +41,7 @@
           ]
         },
         "manager_url": {
-          "description": "Default WS endpoint for the session-manager.",
+          "description": "Default WS endpoint with IP address and port for the session-manager.",
           "type": [
             "string",
             "null"
@@ -58,7 +58,13 @@
           ]
         },
         "transport": {
-          "description": "Default transport for the MCP client side: `ws`, `legacy` or `auto`.",
+          "description": "Default transport for the MCP client side: `ws`, `mcp` or `auto`.",
+          "enum": [
+            "ws",
+            "mcp",
+            "auto",
+            null
+          ],
           "type": [
             "string",
             "null"
@@ -67,7 +73,7 @@
         "ws_timeout_ms": {
           "description": "Default `mcp_ws_timeout_ms` value forwarded into the `/C` payload.",
           "format": "uint64",
-          "minimum": 0,
+          "minimum": 1,
           "type": [
             "integer",
             "null"

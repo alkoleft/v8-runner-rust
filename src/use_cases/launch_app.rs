@@ -2,7 +2,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::config::model::AppConfig;
-use crate::domain::launch::{LaunchMode, LaunchResult};
+use crate::domain::launch::{LaunchMcpTransport, LaunchMode, LaunchResult};
 use crate::domain::runner::LaunchOptions;
 use crate::platform::enterprise::{
     build_launch_args, normalize_launch_payload_path, LaunchClientMode,
@@ -24,7 +24,7 @@ use crate::use_cases::request::{
 };
 use crate::use_cases::result::{UseCaseFailure, UseCaseResult};
 use crate::use_cases::tool_extension;
-use tracing::debug;
+use tracing::{debug, warn};
 
 const LAUNCH_STARTUP_PROBE: Duration = Duration::from_millis(250);
 
@@ -119,14 +119,14 @@ pub fn execute(
 fn apply_mcp_resolution_to_result(result: &mut LaunchResult, meta: McpResolutionMeta) {
     match meta {
         McpResolutionMeta::Ws(params) => {
-            result.transport = Some("ws".to_owned());
+            result.transport = Some(LaunchMcpTransport::Ws);
             result.client_uid = Some(params.client_uid);
             result.kind = Some(params.kind.as_str().to_owned());
             result.manager_url = Some(params.manager_url);
             result.corr_id = Some(params.corr_id);
         }
-        McpResolutionMeta::Legacy { port } => {
-            result.transport = Some("legacy".to_owned());
+        McpResolutionMeta::Mcp { port } => {
+            result.transport = Some(LaunchMcpTransport::Mcp);
             result.mcp_port = port;
         }
     }
@@ -135,7 +135,7 @@ fn apply_mcp_resolution_to_result(result: &mut LaunchResult, meta: McpResolution
 #[derive(Debug, Clone)]
 enum McpResolutionMeta {
     Ws(WsLaunchParams),
-    Legacy { port: Option<u16> },
+    Mcp { port: Option<u16> },
 }
 
 fn launch_message(config: &AppConfig, args: &LaunchArgs, binary: &Path, pid: u32) -> String {
@@ -245,14 +245,22 @@ fn effective_launch_options(
     let mut launch = args.launch.clone();
     let (mut payload, meta) = match decision {
         TransportDecision::Ws => {
+            if client_mcp.port.is_some() || config.tools.client_mcp.port.is_some() {
+                warn!(
+                    "ws transport: client_mcp.port is ignored; session-manager controls the port"
+                );
+            }
+            if client_mcp.config_path.is_some() {
+                warn!("ws transport: client_mcp.config_path is ignored");
+            }
             let params = resolve_ws_launch_params(config, &args.mcp_ws, kind);
             let snippet = params.payload_snippet();
             (snippet, McpResolutionMeta::Ws(params))
         }
-        TransportDecision::Legacy => {
+        TransportDecision::Mcp => {
             let payload = build_legacy_client_mcp_payload(client_mcp, config.tools.client_mcp.port);
             let port = client_mcp.port.or(config.tools.client_mcp.port);
-            (payload, McpResolutionMeta::Legacy { port })
+            (payload, McpResolutionMeta::Mcp { port })
         }
     };
     if matches!(
@@ -308,7 +316,7 @@ pub(crate) fn effective_transport(
     if let Some(t) = cli.transport {
         return match t {
             McpClientTransportRequest::Ws => McpClientTransport::Ws,
-            McpClientTransportRequest::Legacy => McpClientTransport::Legacy,
+            McpClientTransportRequest::Mcp => McpClientTransport::Mcp,
             McpClientTransportRequest::Auto => McpClientTransport::Auto,
         };
     }
@@ -354,6 +362,7 @@ mod tests {
         SourceFormat, SourceSetConfig, SourceSetPurpose, TestsConfig, ToolExtensionArtifactConfig,
         ToolExtensionConfig, ToolExtensionInput, ToolsConfig,
     };
+    use crate::domain::launch::LaunchMcpTransport;
     use crate::use_cases::context::{CommandName, ExecutionContext};
     use crate::use_cases::request::{
         ClientMcpMode, ClientMcpOptionsRequest, LaunchRequest, LaunchTargetRequest,
@@ -533,7 +542,7 @@ mod tests {
                 launch: Default::default(),
                 client_mcp: Some(ClientMcpOptionsRequest::default()),
                 mcp_ws: crate::use_cases::request::McpClientWsRequest {
-                    transport: Some(crate::use_cases::request::McpClientTransportRequest::Legacy),
+                    transport: Some(crate::use_cases::request::McpClientTransportRequest::Mcp),
                     ..Default::default()
                 },
             },
@@ -546,7 +555,7 @@ mod tests {
             .as_deref()
             .expect("message")
             .contains("v8-runner build"));
-        assert_eq!(result.transport.as_deref(), Some("legacy"));
+        assert_eq!(result.transport, Some(LaunchMcpTransport::Mcp));
         assert_eq!(result.mcp_port, Some(9874));
         let args = fs::read_to_string(args_log).expect("args log");
         assert!(args.contains("ENTERPRISE"));

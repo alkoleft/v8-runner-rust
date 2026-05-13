@@ -166,8 +166,8 @@ WS-mode flags (when v8-client-session-manager is reachable):
 
 ```bash
 v8-runner launch mcp --mcp-transport=ws --manager-url ws://127.0.0.1:4000/sessions
-v8-runner launch mcp --mcp-transport=legacy             # force legacy without probe
+v8-runner launch mcp --mcp-transport=mcp                # force local MCP without probe
 v8-runner launch mcp --mcp-log-level=debug --client-uid <UUID> --corr-id <STR>
 ```
 
-`--mcp-transport=auto` (default) probes `manager_url` for 200 ms and chooses `ws` on success, `legacy` on failure. The same WS-flags work on `test yaxunit ...` and `test va ...`. See `project-workflows.md` for the full WS-режим section, internal `kind` mapping, and `--json-message` output shape.
+`--mcp-transport=auto` (default) probes `manager_url` for 200 ms and chooses `ws` on success, `mcp` on failure. The same WS-flags work on `test yaxunit ...` and `test va ...`. See `project-workflows.md` for the full WS-режим section, internal `kind` mapping, and `--json-message` output shape.

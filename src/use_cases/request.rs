@@ -619,7 +619,7 @@ pub struct LaunchRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum McpClientTransportRequest {
     Ws,
-    Legacy,
+    Mcp,
     Auto,
 }
 

@@ -141,7 +141,7 @@ tools:
       source:
         path: /path/to/onec-client-mcp/exts/client-mcp
         format: EDT
-    transport: auto                       # ws | legacy | auto (default)
+    transport: auto                       # ws | mcp | auto (default)
     manager_url: ws://127.0.0.1:4000/sessions
     log_level: info                       # off|error|warn|info|debug|trace
     ws_timeout_ms: 1000
@@ -446,11 +446,11 @@ runtime identity и не добавляет отдельное поле конф
 
 Поддержанные поля:
 
-- `port`, опциональный порт клиентского MCP-сервера onec-client-mcp-devkit (legacy режим).
+- `port`, опциональный порт клиентского MCP-сервера onec-client-mcp-devkit (MCP-режим).
 - `extension`, опциональное tool extension для клиентского MCP-сервера.
-- `transport` (`ws`, `legacy`, `auto`; по умолчанию `auto`) — режим транспорта. См. раздел
+- `transport` (`ws`, `mcp`, `auto`; по умолчанию `auto`) — режим транспорта. См. раздел
   «WS-режим к session-manager» ниже.
-- `manager_url` — WS-эндпоинт `v8-client-session-manager`,
+- `manager_url` — WS-эндпоинт `v8-client-session-manager` с IP-адресом и портом,
   по умолчанию `ws://127.0.0.1:4000/sessions`.
 - `log_level` (`off`/`error`/`warn`/`info`/`debug`/`trace`) — значение `mcp_log_level`,
   передаваемое в `/C` BSL-расширению `client_mcp`.
@@ -458,7 +458,7 @@ runtime identity и не добавляет отдельное поле конф
   > 0).
 
 `launch mcp` передаёт `port` как `mcpPort` внутри `/C"runMcp..."`
-если CLI не указал `--mcp-port` и выбран legacy/`auto`-fallback транспорт.
+если CLI не указал `--mcp-port` и выбран `mcp`/`auto`-fallback транспорт.
 
 #### WS-режим к session-manager
 
@@ -488,12 +488,12 @@ CLI-флаги: `--mcp-transport`, `--manager-url`, `--client-uid`, `--corr-id`,
 встроенными дефолтами. `client_uid` по умолчанию рандомный UUIDv4 на каждый запуск,
 `corr_id` по умолчанию `vr-<первые 8 символов uid>`.
 
-Для `transport=auto` v8-runner делает короткий TCP-probe (200 ms) на хост:порт из
-`manager_url`. При успехе выбирается WS, иначе legacy. Для `transport=ws` без живого
+Для `transport=auto` v8-runner делает короткий TCP-probe (200 ms) на IP:порт из
+`manager_url`. При успехе выбирается WS, иначе MCP. Для `transport=ws` без живого
 менеджера запуск падает с ошибкой `session-manager unreachable at <url>`.
 
 Сам менеджер v8-runner не запускает — его нужно поднять отдельно
-(см. соседний репозиторий [`v8-client-session-manager`](../../v8-client-session-manager/)).
+(см. репозиторий [`v8-client-session-manager`](https://github.com/SteelMorgan/v8-client-session-manager)).
 
 `extension` поддерживает:
 

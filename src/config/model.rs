@@ -287,12 +287,12 @@ pub struct ClientMcpToolConfig {
     /// Optional tool extension prepared by `build` for client MCP launches.
     pub extension: Option<ToolExtensionConfig>,
 
-    /// Default transport for the MCP client side: `ws`, `legacy` or `auto`.
+    /// Default transport for the MCP client side: `ws`, `mcp` or `auto`.
     /// When omitted, runtime treats it as `auto` (probe manager, fall back
-    /// to legacy local HTTP MCP).
+    /// to local HTTP MCP).
     pub transport: Option<String>,
 
-    /// Default WS endpoint for the session-manager
+    /// Default WS endpoint with IP address and port for the session-manager
     /// (e.g. `ws://127.0.0.1:4000/sessions`).
     pub manager_url: Option<String>,
 

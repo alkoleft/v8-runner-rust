@@ -224,12 +224,17 @@
         },
         "transport": {
           "description": "Machine-local override of the default MCP client transport.",
+          "enum": [
+            "ws",
+            "mcp",
+            "auto"
+          ],
           "type": "string"
         },
         "ws_timeout_ms": {
           "description": "Machine-local override of the default `mcp_ws_timeout_ms`.",
           "format": "uint64",
-          "minimum": 0,
+          "minimum": 1,
           "type": "integer"
         }
       },

@@ -27,6 +27,7 @@ pub fn main_config_schema_json() -> Value {
     set_schema_id(&mut schema, &main_config_schema_url());
     add_tool_extension_schema_constraints(&mut schema);
     add_numeric_runtime_bounds(&mut schema);
+    add_mcp_transport_schema_constraints(&mut schema);
     schema
 }
 
@@ -36,6 +37,7 @@ pub fn local_config_schema_json() -> Value {
     set_schema_id(&mut schema, &local_config_schema_url());
     add_tool_extension_schema_constraints(&mut schema);
     add_numeric_runtime_bounds(&mut schema);
+    add_mcp_transport_schema_constraints(&mut schema);
     schema
 }
 
@@ -233,6 +235,7 @@ fn add_numeric_runtime_bounds(schema: &mut Value) {
     );
     for def in ["ClientMcpToolSchema", "PartialClientMcpToolSchema"] {
         set_numeric_bounds(schema, &[def], "port", Some(1), None);
+        set_numeric_bounds(schema, &[def], "ws_timeout_ms", Some(1), None);
     }
     for name in ["max_sessions", "idle_ttl_secs"] {
         set_numeric_bounds(schema, &["McpHttpSchema"], name, Some(1), None);
@@ -277,6 +280,35 @@ fn set_numeric_bounds(
     if let Some(maximum) = maximum {
         property.insert("maximum".to_owned(), Value::from(maximum));
     }
+}
+
+fn add_mcp_transport_schema_constraints(schema: &mut Value) {
+    for def in ["ClientMcpToolSchema", "PartialClientMcpToolSchema"] {
+        set_string_enum(schema, &[def], "transport", &["ws", "mcp", "auto"]);
+    }
+}
+
+fn set_string_enum(schema: &mut Value, def_path: &[&str], property: &str, variants: &[&str]) {
+    let Some(object) = schema_object_mut(schema, def_path) else {
+        return;
+    };
+    let Some(property) = object
+        .get_mut("properties")
+        .and_then(Value::as_object_mut)
+        .and_then(|properties| properties.get_mut(property))
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+
+    let mut variants = variants
+        .iter()
+        .map(|value| json!(value))
+        .collect::<Vec<_>>();
+    if matches!(property.get("type"), Some(Value::Array(_))) {
+        variants.push(Value::Null);
+    }
+    property.insert("enum".to_owned(), Value::Array(variants));
 }
 
 fn schema_object_mut<'a>(
@@ -705,10 +737,10 @@ struct ClientMcpToolSchema {
     /// Optional tool extension prepared by `build` for client MCP launches.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     extension: Option<ToolExtensionSchema>,
-    /// Default transport for the MCP client side: `ws`, `legacy` or `auto`.
+    /// Default transport for the MCP client side: `ws`, `mcp` or `auto`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     transport: Option<String>,
-    /// Default WS endpoint for the session-manager.
+    /// Default WS endpoint with IP address and port for the session-manager.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     manager_url: Option<String>,
     /// Default `mcp_log_level` value forwarded into the `/C` payload.
@@ -1458,6 +1490,20 @@ mod tests {
             assert_schema_invalid(&local_config_schema_json(), overlay);
             assert_overlay_loader_error(overlay);
         }
+    }
+
+    #[test]
+    fn schemas_and_loader_reject_invalid_client_mcp_transport() {
+        let config = format!(
+            "{}tools:\n  client_mcp:\n    transport: legacy\n",
+            minimal_project_config_without_base_path()
+        );
+        assert_schema_invalid(&main_config_schema_json(), &config);
+        assert_config_loader_error_any(&config);
+
+        let overlay = "tools:\n  client_mcp:\n    transport: legacy\n";
+        assert_schema_invalid(&local_config_schema_json(), overlay);
+        assert_overlay_loader_error(overlay);
     }
 
     #[test]

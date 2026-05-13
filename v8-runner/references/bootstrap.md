@@ -45,7 +45,7 @@ Ask the user only if the choice is ambiguous and you cannot tell from `tools.pla
 
 ### 4. Decide infobase connection
 
-`--connection` is the connection string written into `tools.connection`. Three common shapes:
+`--connection` is the connection string written into `infobase.connection`. Three common shapes:
 
 | Shape | Example | When to use |
 |---|---|---|

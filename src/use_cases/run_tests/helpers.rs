@@ -431,32 +431,25 @@ pub(super) fn append_mcp_ws_snippet(launch: &mut LaunchOptions, snippet: &str) {
 /// `mcpMode=ws;...` snippet to the platform `/C` so the BSL devkit registers
 /// with `v8-client-session-manager` instead of starting a local HTTP MCP.
 ///
-/// Errors from the resolution layer (e.g. invalid `manager_url`) are logged
-/// and treated as "no WS snippet"; the test run still proceeds with its
-/// regular `/C` payload. This preserves the previous behavior when the
-/// session-manager is not used.
+/// Errors from explicit WS resolution are returned to the caller. Auto mode
+/// still falls back to the regular `/C` payload when the manager is down.
 pub(super) fn apply_test_mcp_ws_payload(
     config: &AppConfig,
     mcp_ws: &crate::use_cases::request::McpClientWsRequest,
     prepared_run: &PreparedRun,
     launch: &mut LaunchOptions,
-) {
+) -> Result<(), AppError> {
     let kind = match prepared_run {
         PreparedRun::YaXUnit => crate::use_cases::mcp_ws::ClientKind::YaxunitRunner,
         PreparedRun::Vanessa { .. } => crate::use_cases::mcp_ws::ClientKind::VanessaTestClient,
     };
-    let decision = match crate::use_cases::launch_app::decide_mcp_transport(config, mcp_ws) {
-        Ok(d) => d,
-        Err(err) => {
-            tracing::warn!(error = %err, "failed to resolve MCP client transport for test run");
-            return;
-        }
-    };
+    let decision = crate::use_cases::launch_app::decide_mcp_transport(config, mcp_ws)?;
     if !matches!(decision, crate::use_cases::mcp_ws::TransportDecision::Ws) {
-        return;
+        return Ok(());
     }
     let params = crate::use_cases::launch_app::resolve_ws_launch_params(config, mcp_ws, kind);
     append_mcp_ws_snippet(launch, &params.payload_snippet());
+    Ok(())
 }
 
 pub(super) fn collect_diagnostics(

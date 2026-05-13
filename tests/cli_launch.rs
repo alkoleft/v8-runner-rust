@@ -384,7 +384,7 @@ fn launch_mcp_va_builds_payload_from_configured_port_and_ordinary_mode() {
             "--mcp-config",
             "/tmp/mcp conf.json",
             "--mcp-transport",
-            "legacy",
+            "mcp",
             "--raw-key",
             "/WA-",
         ])
@@ -400,7 +400,7 @@ fn launch_mcp_va_builds_payload_from_configured_port_and_ordinary_mode() {
     );
     let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
     assert_eq!(payload["data"]["mode"], "mcp");
-    assert_eq!(payload["data"]["transport"], "legacy");
+    assert_eq!(payload["data"]["transport"], "mcp");
     assert_eq!(payload["data"]["mcp_port"], 9874);
     assert_eq!(
         payload["data"]["binary"].as_str().expect("binary"),
@@ -709,7 +709,7 @@ fn setup_mcp_project_with_logging_thin() -> (tempfile::TempDir, PathBuf, PathBuf
 }
 
 #[test]
-fn launch_mcp_legacy_transport_emits_runmcp_payload_and_legacy_envelope() {
+fn launch_mcp_transport_emits_runmcp_payload_and_mcp_envelope() {
     let (_dir, config_path, args_log) = setup_mcp_project_with_logging_thin();
     let output = v8_runner_command()
         .args([
@@ -719,7 +719,7 @@ fn launch_mcp_legacy_transport_emits_runmcp_payload_and_legacy_envelope() {
             "launch",
             "mcp",
             "--mcp-transport",
-            "legacy",
+            "mcp",
             "--mcp-port",
             "9999",
         ])
@@ -731,7 +731,7 @@ fn launch_mcp_legacy_transport_emits_runmcp_payload_and_legacy_envelope() {
         String::from_utf8_lossy(&output.stderr)
     );
     let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
-    assert_eq!(payload["data"]["transport"], "legacy");
+    assert_eq!(payload["data"]["transport"], "mcp");
     assert_eq!(payload["data"]["mcp_port"], 9999);
     assert!(payload["data"]["client_uid"].is_null());
 
@@ -832,7 +832,7 @@ fn launch_mcp_ws_required_fails_when_manager_unreachable() {
 }
 
 #[test]
-fn launch_mcp_auto_falls_back_to_legacy_when_manager_unreachable() {
+fn launch_mcp_auto_falls_back_to_mcp_when_manager_unreachable() {
     let (_dir, config_path, args_log) = setup_mcp_project_with_logging_thin();
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().expect("addr").port();
@@ -854,7 +854,7 @@ fn launch_mcp_auto_falls_back_to_legacy_when_manager_unreachable() {
         .expect("run command");
     assert!(output.status.success());
     let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
-    assert_eq!(payload["data"]["transport"], "legacy");
+    assert_eq!(payload["data"]["transport"], "mcp");
     let args = fs::read_to_string(args_log).expect("args log");
     assert!(args.contains("/C\"runMcp\""));
     assert!(!args.contains("mcpMode=ws"));

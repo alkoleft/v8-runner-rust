@@ -1194,8 +1194,8 @@ fn map_mcp_ws_args(
             Some(crate::use_cases::mcp_ws::McpClientTransport::Ws) => {
                 Some(McpClientTransportRequest::Ws)
             }
-            Some(crate::use_cases::mcp_ws::McpClientTransport::Legacy) => {
-                Some(McpClientTransportRequest::Legacy)
+            Some(crate::use_cases::mcp_ws::McpClientTransport::Mcp) => {
+                Some(McpClientTransportRequest::Mcp)
             }
             Some(crate::use_cases::mcp_ws::McpClientTransport::Auto) => {
                 Some(McpClientTransportRequest::Auto)
@@ -1203,7 +1203,7 @@ fn map_mcp_ws_args(
             None => {
                 return Err(UseCaseError::new(
                     UseCaseErrorKind::Validation,
-                    format!("--mcp-transport must be one of: ws, legacy, auto (got: {value})"),
+                    format!("--mcp-transport must be one of: ws, mcp, auto (got: {value})"),
                 ));
             }
         },
@@ -1225,6 +1225,12 @@ fn map_mcp_ws_args(
         ));
     }
     if let Some(url) = args.manager_url.as_deref() {
+        if !crate::use_cases::mcp_ws::is_payload_token_safe(url) {
+            return Err(UseCaseError::new(
+                UseCaseErrorKind::Validation,
+                "--manager-url must not contain ';' or '=' because the /C payload is semicolon-delimited",
+            ));
+        }
         if crate::use_cases::mcp_ws::parse_manager_addr(url).is_err() {
             return Err(UseCaseError::new(
                 UseCaseErrorKind::Validation,
@@ -1233,18 +1239,18 @@ fn map_mcp_ws_args(
         }
     }
     if let Some(uid) = args.client_uid.as_deref() {
-        if uid.contains(';') {
+        if !crate::use_cases::mcp_ws::is_payload_token_safe(uid) {
             return Err(UseCaseError::new(
                 UseCaseErrorKind::Validation,
-                "--client-uid must not contain ';' because the /C payload is semicolon-delimited",
+                "--client-uid must not contain ';' or '=' because the /C payload is semicolon-delimited",
             ));
         }
     }
     if let Some(corr) = args.corr_id.as_deref() {
-        if corr.contains(';') {
+        if !crate::use_cases::mcp_ws::is_payload_token_safe(corr) {
             return Err(UseCaseError::new(
                 UseCaseErrorKind::Validation,
-                "--corr-id must not contain ';' because the /C payload is semicolon-delimited",
+                "--corr-id must not contain ';' or '=' because the /C payload is semicolon-delimited",
             ));
         }
     }

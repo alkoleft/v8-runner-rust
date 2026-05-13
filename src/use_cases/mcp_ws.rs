@@ -1,11 +1,11 @@
 //! Shared helpers for assembling the WS-mode `/C` payload that connects
-//! 1C-clients to `v8-client-session-manager` instead of the legacy local
+//! 1C-clients to `v8-client-session-manager` instead of the local
 //! HTTP MCP server.
 //!
 //! The actual `/C` payload is parsed by the BSL extension `client_mcp` (see
 //! `Мсп_ПараметрыЗапускаКлиент`). This module is responsible for:
 //!
-//! * choosing between the new WS transport and the legacy HTTP transport,
+//! * choosing between the new WS transport and the local HTTP MCP transport,
 //! * probing the manager's TCP socket when the transport is `auto`,
 //! * generating per-launch `client_uid`/`corr_id` values,
 //! * and serializing the final `key=value;...` snippet.
@@ -13,7 +13,7 @@
 //! Higher layers (`launch_app`, `run_tests`) decide where this snippet is
 //! merged into the final `/C` value.
 
-use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::time::Duration;
 
 use uuid::Uuid;
@@ -33,9 +33,9 @@ pub const PROBE_TIMEOUT_MS: u64 = 200;
 pub enum McpClientTransport {
     /// Force WS-only mode. Resolution fails if the manager is unreachable.
     Ws,
-    /// Force the legacy local HTTP transport (`runMcp[=...][;mcpPort=...]`).
-    Legacy,
-    /// Probe the manager: WS when reachable, legacy otherwise.
+    /// Force the local HTTP MCP transport (`runMcp[=...][;mcpPort=...]`).
+    Mcp,
+    /// Probe the manager: WS when reachable, local HTTP MCP otherwise.
     #[default]
     Auto,
 }
@@ -44,7 +44,7 @@ impl McpClientTransport {
     pub fn from_str_value(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "ws" => Some(Self::Ws),
-            "legacy" => Some(Self::Legacy),
+            "mcp" => Some(Self::Mcp),
             "auto" => Some(Self::Auto),
             _ => None,
         }
@@ -75,7 +75,15 @@ const ALLOWED_LOG_LEVELS: &[&str] = &["off", "error", "warn", "info", "debug", "
 
 /// Returns `true` when the value is one of the levels accepted by the devkit.
 pub fn is_supported_log_level(level: &str) -> bool {
-    ALLOWED_LOG_LEVELS.contains(&level)
+    ALLOWED_LOG_LEVELS
+        .iter()
+        .any(|allowed| allowed.eq_ignore_ascii_case(level))
+}
+
+/// Returns `true` when a value can be embedded into the semicolon-delimited
+/// `/C` payload without changing its key/value structure.
+pub fn is_payload_token_safe(value: &str) -> bool {
+    !value.contains([';', '='])
 }
 
 /// Result of resolving the WS-mode connection parameters before launch.
@@ -95,14 +103,21 @@ impl WsLaunchParams {
     pub fn payload_snippet(&self) -> String {
         format!(
             "mcpMode=ws;manager_url={};client_uid={};kind={};corr_id={};mcp_log_level={};mcp_ws_timeout_ms={}",
-            self.manager_url,
-            self.client_uid,
+            encode_payload_token(&self.manager_url),
+            encode_payload_token(&self.client_uid),
             self.kind.as_str(),
-            self.corr_id,
-            self.log_level,
+            encode_payload_token(&self.corr_id),
+            encode_payload_token(&self.log_level),
             self.ws_timeout_ms
         )
     }
+}
+
+fn encode_payload_token(value: &str) -> String {
+    value
+        .replace('%', "%25")
+        .replace(';', "%3B")
+        .replace('=', "%3D")
 }
 
 /// Inputs to [`resolve_ws_params`]. Each field carries either an explicit
@@ -139,6 +154,7 @@ pub fn resolve_ws_params(kind: ClientKind, inputs: WsResolveInputs) -> WsLaunchP
     let log_level = inputs
         .log_level
         .filter(|l| !l.trim().is_empty())
+        .map(|level| level.to_ascii_lowercase())
         .unwrap_or_else(|| DEFAULT_MCP_LOG_LEVEL.to_owned());
     let ws_timeout_ms = inputs.ws_timeout_ms.unwrap_or(DEFAULT_MCP_WS_TIMEOUT_MS);
     WsLaunchParams {
@@ -152,7 +168,10 @@ pub fn resolve_ws_params(kind: ClientKind, inputs: WsResolveInputs) -> WsLaunchP
 }
 
 fn default_corr_id(client_uid: &str) -> String {
-    let short: String = client_uid.chars().filter(|c| *c != '-').take(8).collect();
+    let mut short: String = client_uid.chars().filter(|c| *c != '-').take(8).collect();
+    while short.len() < 8 {
+        short.push('0');
+    }
     format!("vr-{short}")
 }
 
@@ -169,7 +188,7 @@ pub enum WsResolveError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransportDecision {
     Ws,
-    Legacy,
+    Mcp,
 }
 
 /// Selects the effective transport given the requested mode and a `probe`
@@ -183,7 +202,7 @@ where
     F: FnOnce(SocketAddr) -> bool,
 {
     match requested {
-        McpClientTransport::Legacy => Ok(TransportDecision::Legacy),
+        McpClientTransport::Mcp => Ok(TransportDecision::Mcp),
         McpClientTransport::Ws => {
             let addr = parse_manager_addr(manager_url)?;
             if probe(addr) {
@@ -199,7 +218,7 @@ where
             if probe(addr) {
                 Ok(TransportDecision::Ws)
             } else {
-                Ok(TransportDecision::Legacy)
+                Ok(TransportDecision::Mcp)
             }
         }
     }
@@ -211,8 +230,11 @@ pub fn probe_tcp(addr: SocketAddr, timeout: Duration) -> bool {
     TcpStream::connect_timeout(&addr, timeout).is_ok()
 }
 
-/// Parses the `host:port` portion of a `ws://host:port/path` URL and resolves
-/// it to a usable [`SocketAddr`]. Falls back to lookup via `to_socket_addrs`.
+/// Parses the `host:port` portion of a `ws://host:port/path` URL.
+///
+/// Hostnames are intentionally rejected: transport auto-detection must stay
+/// bounded by the 200 ms TCP probe, and synchronous DNS lookup would not share
+/// that timeout budget.
 pub fn parse_manager_addr(url: &str) -> Result<SocketAddr, WsResolveError> {
     let trimmed = url.trim();
     if trimmed.is_empty() {
@@ -232,23 +254,26 @@ pub fn parse_manager_addr(url: &str) -> Result<SocketAddr, WsResolveError> {
             reason: "missing host:port".to_owned(),
         });
     }
-    if !host_port.contains(':') {
+    let Some((host, port)) = host_port.rsplit_once(':') else {
         return Err(WsResolveError::InvalidManagerUrl {
             url: url.to_owned(),
             reason: "missing :port".to_owned(),
         });
-    }
-    host_port
-        .to_socket_addrs()
+    };
+    let host = host.trim_matches(['[', ']']);
+    let ip = host
+        .parse::<IpAddr>()
+        .map_err(|_| WsResolveError::InvalidManagerUrl {
+            url: url.to_owned(),
+            reason: "host must be an IP address".to_owned(),
+        })?;
+    let port = port
+        .parse::<u16>()
         .map_err(|err| WsResolveError::InvalidManagerUrl {
             url: url.to_owned(),
             reason: err.to_string(),
-        })?
-        .next()
-        .ok_or_else(|| WsResolveError::InvalidManagerUrl {
-            url: url.to_owned(),
-            reason: "address resolved to empty set".to_owned(),
-        })
+        })?;
+    Ok(SocketAddr::new(ip, port))
 }
 
 #[cfg(test)]
@@ -263,9 +288,10 @@ mod tests {
             Some(McpClientTransport::Ws)
         );
         assert_eq!(
-            McpClientTransport::from_str_value("LEGACY"),
-            Some(McpClientTransport::Legacy)
+            McpClientTransport::from_str_value("MCP"),
+            Some(McpClientTransport::Mcp)
         );
+        assert_eq!(McpClientTransport::from_str_value("legacy"), None);
         assert_eq!(
             McpClientTransport::from_str_value("auto"),
             Some(McpClientTransport::Auto)
@@ -292,25 +318,25 @@ mod tests {
     }
 
     #[test]
-    fn select_transport_legacy_short_circuits() {
+    fn select_transport_mcp_short_circuits() {
         let decision = select_transport(
-            McpClientTransport::Legacy,
+            McpClientTransport::Mcp,
             "ws://127.0.0.1:4000/sessions",
             |_| panic!("probe must not be called"),
         )
-        .expect("legacy");
-        assert_eq!(decision, TransportDecision::Legacy);
+        .expect("mcp");
+        assert_eq!(decision, TransportDecision::Mcp);
     }
 
     #[test]
-    fn select_transport_auto_falls_back_to_legacy_when_unreachable() {
+    fn select_transport_auto_falls_back_to_mcp_when_unreachable() {
         let decision = select_transport(
             McpClientTransport::Auto,
             "ws://127.0.0.1:4000/sessions",
             |_| false,
         )
         .expect("auto-fallback");
-        assert_eq!(decision, TransportDecision::Legacy);
+        assert_eq!(decision, TransportDecision::Mcp);
     }
 
     #[test]
@@ -344,14 +370,8 @@ mod tests {
 
     #[test]
     fn probe_tcp_fails_when_no_listener() {
-        // Bind to an ephemeral port and immediately drop the listener; the OS
-        // will reject connections to that port until reuse, which is enough
-        // for a unit-test.
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral");
-        let addr = listener.local_addr().expect("local addr");
-        drop(listener);
-        // Allow a generous timeout — RST should arrive quickly.
-        let connected = probe_tcp(addr, Duration::from_millis(200));
+        let addr = SocketAddr::from(([127, 0, 0, 1], 1));
+        let connected = probe_tcp(addr, Duration::from_millis(50));
         assert!(!connected);
     }
 
@@ -386,6 +406,18 @@ mod tests {
     }
 
     #[test]
+    fn resolve_ws_params_pads_default_corr_id_for_short_uid() {
+        let params = resolve_ws_params(
+            ClientKind::V8RunnerClient,
+            WsResolveInputs {
+                client_uid: Some("abc".to_owned()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(params.corr_id, "vr-abc00000");
+    }
+
+    #[test]
     fn payload_snippet_contains_all_keys_in_order() {
         let params = WsLaunchParams {
             manager_url: "ws://m:1/s".to_owned(),
@@ -402,10 +434,27 @@ mod tests {
     }
 
     #[test]
+    fn payload_snippet_encodes_delimiters() {
+        let params = WsLaunchParams {
+            manager_url: "ws://127.0.0.1:1/s".to_owned(),
+            client_uid: "uid=1".to_owned(),
+            kind: ClientKind::V8RunnerClient,
+            corr_id: "corr;1".to_owned(),
+            log_level: "info".to_owned(),
+            ws_timeout_ms: 1000,
+        };
+        assert_eq!(
+            params.payload_snippet(),
+            "mcpMode=ws;manager_url=ws://127.0.0.1:1/s;client_uid=uid%3D1;kind=v8_runner_client;corr_id=corr%3B1;mcp_log_level=info;mcp_ws_timeout_ms=1000"
+        );
+    }
+
+    #[test]
     fn is_supported_log_level_accepts_known_values() {
         for level in ["off", "error", "warn", "info", "debug", "trace"] {
             assert!(is_supported_log_level(level), "expected {level} supported");
         }
+        assert!(is_supported_log_level("INFO"));
         assert!(!is_supported_log_level("verbose"));
     }
 

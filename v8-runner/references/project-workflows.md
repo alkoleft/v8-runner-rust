@@ -135,17 +135,17 @@ For `launch mcp va`, read `testing.md`; it is part of the Vanessa Automation deb
 
 ## WS-режим к session-manager
 
-Когда рядом с проектом запущен [`v8-client-session-manager`](https://github.com/SteelMorgan/v8-client-session-manager), 1С-клиент может подключаться к нему по WebSocket вместо локального HTTP MCP-сервера (legacy `runMcp`-режим). v8-runner делает выбор автоматически.
+Когда рядом с проектом запущен [`v8-client-session-manager`](https://github.com/SteelMorgan/v8-client-session-manager), 1С-клиент может подключаться к нему по WebSocket вместо локального HTTP MCP-сервера (`runMcp`-режим). v8-runner делает выбор автоматически.
 
 ### Транспорт и автоопределение
 
 `tools.client_mcp.transport`:
 
-- `auto` (по умолчанию) — короткий TCP-probe (200 ms) на хост:порт из `manager_url`. Слышим listener → WS, нет → legacy.
+- `auto` (по умолчанию) — короткий TCP-probe (200 ms) на IP:порт из `manager_url`. Слышим listener → WS, нет → MCP.
 - `ws` — строго WS, при недоступности менеджера запуск падает с `session-manager unreachable at <url>`.
-- `legacy` — старый HTTP-режим без probe.
+- `mcp` — локальный HTTP MCP-режим без probe.
 
-Override через `--mcp-transport={ws|legacy|auto}`. CLI приоритет конфига.
+Override через `--mcp-transport={ws|mcp|auto}`. CLI приоритет конфига.
 
 ### Что v8-runner подставляет в `/C` в WS-ветке
 
@@ -187,13 +187,13 @@ WS-ветка:
 ```json
 { "transport": "ws", "client_uid": "...", "kind": "...", "manager_url": "...", "corr_id": "..." }
 ```
-Legacy-ветка:
+MCP-ветка:
 ```json
-{ "transport": "legacy", "mcp_port": 9874 }
+{ "transport": "mcp", "mcp_port": 9874 }
 ```
 
 Внешний оркестратор (CI, AI-агент) использует `client_uid` для поиска сессии в `session_list` менеджера.
 
 ### Менеджер не запускается из v8-runner
 
-v8-runner только подключается к запущенному менеджеру. Подъём менеджера — отдельный шаг (`cargo run --release` в репо `v8-client-session-manager`, либо systemd-юнит `systemd/v8-session-manager.service`, либо Docker-compose). Если менеджер не нужен — `--mcp-transport=legacy` форсирует старый flow.
+v8-runner только подключается к запущенному менеджеру. Подъём менеджера — отдельный шаг (`cargo run --release` в репо `v8-client-session-manager`, либо systemd-юнит `systemd/v8-session-manager.service`, либо Docker-compose). Если менеджер не нужен — `--mcp-transport=mcp` форсирует локальный MCP flow.
