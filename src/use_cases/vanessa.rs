@@ -226,15 +226,27 @@ fn apply_test_overlay(object: &mut Map<String, Value>, artifacts: VanessaTestArt
         Value::Bool(true),
     );
     object.insert("ДелатьОтчетВФорматеjUnit".to_owned(), Value::Bool(true));
+    let junit_dir = Value::String(artifacts.junit_dir.display().to_string());
     object.insert(
         "КаталогВыгрузкиJUnit".to_owned(),
-        Value::String(artifacts.junit_dir.display().to_string()),
+        junit_dir.clone(),
     );
+    ensure_object(object, "ОтчетJUnit").insert("КаталогВыгрузкиJUnit".to_owned(), junit_dir);
     apply_logging_overlay(
         object,
         artifacts.runner_log,
         &artifacts.run_dir.join("va-status.log"),
     );
+}
+
+fn ensure_object<'a>(object: &'a mut Map<String, Value>, key: &str) -> &'a mut Map<String, Value> {
+    if !object.get(key).is_some_and(Value::is_object) {
+        object.insert(key.to_owned(), Value::Object(Map::new()));
+    }
+    object
+        .get_mut(key)
+        .and_then(Value::as_object_mut)
+        .expect("object value was just inserted")
 }
 
 fn apply_logging_overlay(

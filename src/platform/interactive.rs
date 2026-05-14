@@ -1049,7 +1049,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
     use tempfile::tempdir;
 
     #[cfg(unix)]
@@ -1295,12 +1295,40 @@ mod tests {
 
     #[cfg(unix)]
     fn is_process_alive(pid: u32) -> bool {
+        if process_is_zombie(pid) {
+            return false;
+        }
+
         Command::new("kill")
             .args(["-0", &pid.to_string()])
             .stderr(std::process::Stdio::null())
             .status()
             .map(|status| status.success())
             .unwrap_or(false)
+    }
+
+    #[cfg(unix)]
+    fn process_is_zombie(pid: u32) -> bool {
+        let stat_path = format!("/proc/{pid}/stat");
+        let Ok(stat) = fs::read_to_string(stat_path) else {
+            return false;
+        };
+        let Some(after_name) = stat.rsplit_once(") ") else {
+            return false;
+        };
+        after_name.1.starts_with("Z ")
+    }
+
+    #[cfg(unix)]
+    fn wait_until_process_exits(pid: u32, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if !is_process_alive(pid) {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        !is_process_alive(pid)
     }
 
     #[cfg(unix)]
@@ -1616,9 +1644,8 @@ mod tests {
         assert!(is_process_alive(child_pid));
 
         executor.kill().expect("kill executor");
-        thread::sleep(Duration::from_millis(50));
 
-        assert!(!is_process_alive(child_pid));
+        assert!(wait_until_process_exits(child_pid, Duration::from_secs(2)));
     }
 
     #[cfg(unix)]

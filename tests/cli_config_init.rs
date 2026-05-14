@@ -91,6 +91,8 @@ fn config_init_creates_yaml_with_detected_designer_sources() {
     assert!(config.contains("format: DESIGNER"));
     assert!(!config.contains("basePath:"));
     assert!(config.contains("workPath: 'build'"));
+    assert!(config.contains("# Maximum execution time for a v8-runner command, in milliseconds."));
+    assert!(config.contains("execution_timeout: 3600000"));
     assert!(config.contains("infobase:"));
     assert!(config.contains("  connection: 'File=build/ib'"));
     assert!(config.contains("path: 'src/configuration'"));

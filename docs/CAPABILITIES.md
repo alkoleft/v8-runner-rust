@@ -184,7 +184,7 @@ v8-runner test va --feature login --filter-tag @smoke
 ```bash
 v8-runner syntax designer-config [FLAGS]
 v8-runner syntax designer-modules [FLAGS]
-v8-runner syntax edt [--project <PROJECT>...]
+v8-runner syntax edt [--project <SOURCE_SET>...] [--exception-file <PATH>]
 ```
 
 `designer-config`:
@@ -202,8 +202,10 @@ v8-runner syntax edt [--project <PROJECT>...]
 `edt`:
 
 - Только `builder=DESIGNER`, `format=EDT`.
-- Повторяемый `--project`.
-- Без `--project` использует дефолтный набор EDT-проектов из конфига.
+- Повторяемый `--project`; значение выбирается из `source-set[].name` в `v8project.yaml`.
+- Без `--project` использует все EDT source-set из конфига.
+- `--exception-file` читает legacy-файл исключений: каждая непустая строка исключает
+  совпавшую EDT issue после нормализации регистра, пробелов и пунктуации.
 
 ## Файлы и артефакты
 
@@ -271,16 +273,16 @@ v8-runner launch mcp [va] [--mode <thin|thick|ordinary>] [FLAGS]
 - `designer` использует `1cv8`.
 - `thin` использует `1cv8c`.
 - `thick` и `ordinary` используют `1cv8`.
-- `mcp` запускает клиентский MCP-сервер onec-client-mcp-devkit через `/C"runMcp"`.
+- `mcp` запускает клиентский MCP-сервер onec-client-mcp-devkit через `/C runMcp`.
 - `launch mcp` по умолчанию использует `--mode thin` и `1cv8c`.
 - `launch mcp --mode thick` использует `1cv8`; `launch mcp --mode ordinary` использует `1cv8`
   и добавляет `/RunModeOrdinaryApplication`.
 - `launch mcp va` дополнительно запускает Vanessa Automation из `tools.va` через `/Execute <epf>`
   и передаёт `VAParams=<runtime params>` без `StartFeaturePlayer`.
-- Любой управляемый runner payload для ключа `/C` передаётся как один аргумент
-  `/C"<payload>"`: это касается `launch --c`, `launch mcp`, `test yaxunit` и `test va`.
+- Любой управляемый runner payload для ключа `/C` передаётся отдельным аргументом
+  после `/C`: это касается `launch --c`, `launch mcp`, `test yaxunit` и `test va`.
 - Для `mcp` доступны typed flags `--mcp-config <FILE>` и `--mcp-port <PORT>`;
-  итоговый payload: `/C"runMcp[=<FILE>][;mcpPort=<PORT>]"`.
+  итоговый payload: `/C runMcp[=<FILE>][;mcpPort=<PORT>]`.
 - Если `--mcp-port` не указан, используется `tools.client_mcp.port` из `v8project.yaml`.
 - Если настроено `tools.client_mcp.extension`, `launch mcp` не устанавливает и не обновляет его;
   подготовка выполняется командой `v8-runner build`.

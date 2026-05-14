@@ -333,9 +333,13 @@ pub enum SyntaxTarget {
     DesignerModules(DesignerModulesSyntaxArgs),
     /// Check via EDT validate
     Edt {
-        /// EDT project names
+        /// EDT source-set names from v8project.yaml
         #[arg(long = "project")]
         projects: Vec<String>,
+
+        /// File with syntax issue exception lines
+        #[arg(long = "exception-file")]
+        exception_file: Option<std::path::PathBuf>,
     },
 }
 
@@ -357,11 +361,11 @@ pub struct LaunchArgs {
     #[command(flatten)]
     pub launch: LaunchOptionsArgs,
 
-    /// JSON config path for onec-client-mcp-devkit `/C"runMcp=<FILE>"`
+    /// JSON config path for onec-client-mcp-devkit `/C runMcp=<FILE>`
     #[arg(long = "mcp-config")]
     pub mcp_config: Option<String>,
 
-    /// Port override for onec-client-mcp-devkit `/C"...;mcpPort=<PORT>"`
+    /// Port override for onec-client-mcp-devkit `/C` payload.
     #[arg(long = "mcp-port")]
     pub mcp_port: Option<u16>,
 }

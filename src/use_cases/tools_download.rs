@@ -31,6 +31,9 @@ const CLIENT_MCP_REPO: &str = "1c-neurofish/onec-client-mcp-devkit";
 const YAXUNIT_SOURCE_PREFIX: &str = "exts/yaxunit/";
 const CLIENT_MCP_SOURCE_PREFIX: &str = "exts/client-mcp/";
 const DOWNLOAD_MARKER_FILE: &str = ".v8-runner-tools-download.json";
+const DEFAULT_VANESSA_VA_FIELDS: &str = "  va:\n    params_path: 'tools\\VAParams.json'\n    profile: 'all'\n    timeouts:\n      total_ms: 3600000\n    profiles:\n      all:\n        feature_path: 'features'\n        ignore_tags:\n          - 'IgnoreOnCIMainBuild'\n";
+const DEFAULT_VANESSA_TESTS_FIELDS: &str = "  execution_timeout_seconds: 3600\n  va:\n    params_path: 'tools\\VAParams.json'\n    profile: 'all'\n    timeouts:\n      total_ms: 3600000\n    profiles:\n      all:\n        feature_path: 'features'\n        ignore_tags:\n          - 'IgnoreOnCIMainBuild'\n";
+const DEFAULT_VANESSA_TESTS_CONFIG: &str = "tests:\n  execution_timeout_seconds: 3600\n  va:\n    params_path: 'tools\\VAParams.json'\n    profile: 'all'\n    timeouts:\n      total_ms: 3600000\n    profiles:\n      all:\n        feature_path: 'features'\n        ignore_tags:\n          - 'IgnoreOnCIMainBuild'\n";
 
 pub fn execute(
     context: &ExecutionContext,
@@ -662,6 +665,7 @@ fn update_config_for_download(
         }
         ToolDownloadTarget::Yaxunit => {}
         ToolDownloadTarget::VanessaAutomationSingle => {
+            add_default_vanessa_tests_config(context, config_path)?;
             let local_overlay = render_vanessa_local_overlay(local_config_path, destinations)?;
             publish_bytes(context, local_overlay.as_bytes(), local_config_path)?;
         }
@@ -765,6 +769,123 @@ fn insert_yaxunit_source_set_text(content: &str) -> Result<String, AppError> {
     rendered.push_str("  - name: tests\n    type: EXTENSION\n    path: tests\n");
     rendered.push_str(&content[insertion_offset..]);
     Ok(rendered)
+}
+
+fn add_default_vanessa_tests_config(
+    context: &ExecutionContext,
+    config_path: &Path,
+) -> Result<(), AppError> {
+    let content = fs::read_to_string(config_path).map_err(io_error("failed to read config"))?;
+    let root: serde_yaml::Value = serde_yaml::from_str(&content)
+        .map_err(|error| AppError::Runtime(format!("failed to parse config YAML: {error}")))?;
+    let mapping = root
+        .as_mapping()
+        .ok_or_else(|| AppError::Validation("expected a YAML mapping at config root".to_owned()))?;
+    let tests_key = serde_yaml::Value::String("tests".to_owned());
+    if let Some(tests) = mapping.get(&tests_key) {
+        let tests_mapping = tests.as_mapping().ok_or_else(|| {
+            AppError::Validation(
+                "config tests section must use block mapping style before tools download can update it"
+                    .to_owned(),
+            )
+        })?;
+        let has_execution_timeout = tests_mapping.contains_key(serde_yaml::Value::String(
+            "execution_timeout_seconds".to_owned(),
+        ));
+        let has_va = tests_mapping.contains_key(serde_yaml::Value::String("va".to_owned()));
+        if has_execution_timeout && has_va {
+            return Ok(());
+        }
+        let rendered =
+            insert_missing_vanessa_tests_fields_text(&content, has_execution_timeout, has_va)?;
+        return publish_bytes(context, rendered.as_bytes(), config_path);
+    }
+
+    let rendered = insert_top_level_vanessa_tests_config_text(&content)?;
+    publish_bytes(context, rendered.as_bytes(), config_path)
+}
+
+fn insert_top_level_vanessa_tests_config_text(content: &str) -> Result<String, AppError> {
+    let insertion_offset = find_top_level_insertion_offset(content, "source-set:")
+        .or_else(|| find_top_level_insertion_offset(content, "tools:"))
+        .unwrap_or(content.len());
+    let mut rendered = String::with_capacity(content.len() + DEFAULT_VANESSA_TESTS_CONFIG.len());
+    rendered.push_str(&content[..insertion_offset]);
+    if !rendered.ends_with('\n') {
+        rendered.push('\n');
+    }
+    rendered.push_str(DEFAULT_VANESSA_TESTS_CONFIG);
+    rendered.push_str(&content[insertion_offset..]);
+    Ok(rendered)
+}
+
+fn insert_missing_vanessa_tests_fields_text(
+    content: &str,
+    has_execution_timeout: bool,
+    has_va: bool,
+) -> Result<String, AppError> {
+    let tests_start = content
+        .lines()
+        .position(|line| line.trim_end() == "tests:")
+        .ok_or_else(|| {
+            AppError::Validation(
+                "config tests section must use block style before tools download can update it"
+                    .to_owned(),
+            )
+        })?;
+
+    let mut insertion_offset = content.len();
+    let mut offset = 0usize;
+    for (index, line) in content.split_inclusive('\n').enumerate() {
+        let line_start = offset;
+        offset += line.len();
+        if index <= tests_start {
+            continue;
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let is_top_level = line
+            .chars()
+            .next()
+            .is_some_and(|first| !first.is_whitespace());
+        if is_top_level {
+            insertion_offset = line_start;
+            break;
+        }
+    }
+
+    let mut rendered = String::with_capacity(content.len() + DEFAULT_VANESSA_TESTS_FIELDS.len());
+    rendered.push_str(&content[..insertion_offset]);
+    if !rendered.ends_with('\n') {
+        rendered.push('\n');
+    }
+    if !has_execution_timeout {
+        rendered.push_str("  execution_timeout_seconds: 3600\n");
+    }
+    if !has_va {
+        rendered.push_str(DEFAULT_VANESSA_VA_FIELDS);
+    }
+    rendered.push_str(&content[insertion_offset..]);
+    Ok(rendered)
+}
+
+fn find_top_level_insertion_offset(content: &str, marker: &str) -> Option<usize> {
+    let mut offset = 0usize;
+    for line in content.split_inclusive('\n') {
+        let line_start = offset;
+        offset += line.len();
+        if line.trim_end() == marker
+            && line
+                .chars()
+                .next()
+                .is_some_and(|first| !first.is_whitespace())
+        {
+            return Some(line_start);
+        }
+    }
+    None
 }
 
 fn render_vanessa_local_overlay(
@@ -1067,5 +1188,32 @@ mod tests {
             source_archive_url(&release),
             "http://127.0.0.1:1234/archive.zip"
         );
+    }
+
+    #[test]
+    fn inserts_default_vanessa_tests_config_before_source_sets() {
+        let content = "workPath: build\nformat: DESIGNER\nsource-set:\n  - name: main\n";
+
+        let rendered = insert_top_level_vanessa_tests_config_text(content).expect("render config");
+
+        assert!(rendered.contains(
+            "tests:\n  execution_timeout_seconds: 3600\n  va:\n    params_path: 'tools\\VAParams.json'\n    profile: 'all'\n"
+        ));
+        assert!(rendered.contains("      total_ms: 3600000\n"));
+        assert!(rendered.contains("        feature_path: 'features'\n"));
+        assert!(rendered.contains("          - 'IgnoreOnCIMainBuild'\nsource-set:"));
+    }
+
+    #[test]
+    fn inserts_missing_vanessa_fields_without_replacing_existing_tests() {
+        let content = "workPath: build\ntests:\n  yaxunit:\n    report_path: build/report.xml\nsource-set:\n  - name: main\n";
+
+        let rendered =
+            insert_missing_vanessa_tests_fields_text(content, false, false).expect("render config");
+
+        assert!(rendered.contains("  yaxunit:\n    report_path: build/report.xml\n"));
+        assert!(rendered.contains("  execution_timeout_seconds: 3600\n  va:\n"));
+        assert!(rendered.contains("    profile: 'all'\n"));
+        assert!(rendered.contains("source-set:\n  - name: main\n"));
     }
 }
