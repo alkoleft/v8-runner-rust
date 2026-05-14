@@ -333,9 +333,13 @@ pub enum SyntaxTarget {
     DesignerModules(DesignerModulesSyntaxArgs),
     /// Check via EDT validate
     Edt {
-        /// EDT project names
+        /// EDT source-set names from v8project.yaml
         #[arg(long = "project")]
         projects: Vec<String>,
+
+        /// File with syntax issue exception lines
+        #[arg(long = "exception-file")]
+        exception_file: Option<std::path::PathBuf>,
     },
 }
 

@@ -2,9 +2,9 @@
 
 ## Цель
 
-Начиная с `2026-04-22`, source of truth для real-env happy-path является GitHub Actions workflow [`ci.yml`](../.github/workflows/ci.yml) с matrix на `ubuntu-latest` и `windows-latest`, а локальные скрипты в `scripts/test/*` остаются helper/entrypoint-слоем для этого workflow.
+Начиная с `2026-04-22`, source of truth для real-env happy-path является GitHub Actions workflow [`ci.yml`](../.github/workflows/ci.yml), а локальные скрипты в `scripts/test/*` остаются helper/entrypoint-слоем для этого workflow.
 
-Обязательный smoke-контур для обеих ОС один и тот же:
+Обязательный smoke-контур:
 
 1. `build`
 2. `syntax/check`
@@ -47,9 +47,9 @@ bash scripts/test/ci-rust.sh
 - `V8_RUNNER_CI_SCOPE=runtime-locks` запускает только lock-focused regression subset
 - `V8_RUNNER_CI_SCOPE=happy-path` запускает обязательную цепочку `build -> syntax/check -> test -> package -> deploy-ready artifacts`
 
-### 2. Mandatory Linux/Windows happy-path
+### 2. Mandatory happy-path
 
-Назначение: одинаково обязательный smoke для `Linux` и `Windows` на trusted контексте.
+Назначение: обязательный smoke на trusted контексте. Blocking GitHub Actions runner сейчас `ubuntu-latest`; Windows full-test/live path остается TODO до hardening существующих Unix-assumptive тестов и helper-фикстур.
 
 Canonical entrypoint:
 
@@ -64,7 +64,7 @@ V8_RUNNER_CI_SCOPE=happy-path bash scripts/test/ci-rust.sh
 3. `cargo test --locked`
 4. `bash scripts/test/live-cli-fixture.sh`
 
-`scripts/test/live-cli-fixture.sh` в mandatory профиле обязан выполнить одинаковые стадии для обеих ОС:
+`scripts/test/live-cli-fixture.sh` в mandatory профиле обязан выполнить стадии:
 
 1. `init/setup infobase`
 2. `build --full-rebuild`
@@ -158,9 +158,9 @@ python3 scripts/test/live-mcp-http.py
 bash scripts/test/live-cli-ibcmd.sh
 ```
 
-### GitHub Actions matrix
+### GitHub Actions
 
-Для `ubuntu-latest` и `windows-latest` blocking использует один и тот же entrypoint:
+Blocking path использует entrypoint:
 
 ```bash
 V8_RUNNER_CI_SCOPE=happy-path bash scripts/test/ci-rust.sh
@@ -168,9 +168,9 @@ V8_RUNNER_CI_SCOPE=happy-path bash scripts/test/ci-rust.sh
 
 Текущая реализация workflow wiring:
 
-- `.github/workflows/ci.yml` публикует два matrix job: `contract` и `happy-path`
-- `contract` всегда запускает `bash scripts/test/ci-rust.sh` с `V8_RUNNER_CI_SCOPE=contract`
-- `happy-path` всегда запускает `V8_RUNNER_CI_SCOPE=happy-path bash scripts/test/ci-rust.sh`
+- `.github/workflows/ci.yml` публикует два job: `contract` и `happy-path`
+- `contract` запускает `bash scripts/test/ci-rust.sh` с `V8_RUNNER_CI_SCOPE=contract`
+- `happy-path` запускает `V8_RUNNER_CI_SCOPE=happy-path bash scripts/test/ci-rust.sh`; без platform bundle secrets workflow передает `V8TR_DESIGNER_ALLOW_MISSING_CONFIG=1`, поэтому Rust build/check/test остаются blocking, а live fixture завершается soft-skip
 - trusted path использует `scripts/test/ci-platform-install.sh`, `scripts/test/ci-designer-config.sh` и `scripts/test/ci-ibsrv.sh`
 - upload deploy-ready артефактов делает только trusted happy-path после успешной non-empty validation в `live-cli-fixture.sh`
 
@@ -194,8 +194,8 @@ Windows runner contract for this helper layer is explicit:
 
 | Контур | Linux | Windows | Blocking | Build | Syntax/check | Test | Package | Deploy-ready artifacts |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `ci-rust contract` | yes | yes | yes | Rust | Rust | Rust | no | no |
-| `ci-rust happy-path` | yes | yes | yes on trusted | Rust + real 1C | real | Rust by default; real 1C opt-in | real | real |
+| `ci-rust contract` | yes | planned | yes | Rust | Rust | Rust | no | no |
+| `ci-rust happy-path` | yes | planned | yes on trusted | Rust + real 1C | real | Rust by default; real 1C opt-in | real | real |
 | `live-mcp-http` | optional | optional | no | real via MCP | real via MCP | real via MCP | n/a | n/a |
 | `live-cli-ibcmd` | optional | optional | no | real (`IBCMD`) | n/a | n/a | diagnostic dump/export only | n/a |
 | `live-cli-designer` | optional | optional | no | real (`DESIGNER`) | real | real opt-in | real | real |
@@ -207,3 +207,4 @@ Windows runner contract for this helper layer is explicit:
 - `live-cli-fixture` по умолчанию не запускает 1С test-stage; `va`, `yaxunit-all` и `module` остаются opt-in режимами для стендов, где установлен и проверен соответствующий headless runner.
 - `live-mcp-http` и `live-cli-ibcmd` остаются отдельными non-blocking контурами.
 - Mandatory designer smoke requires `V8TR_DESIGNER_REAL_CONFIG`; `V8TR_DESIGNER_ALLOW_MISSING_CONFIG=1` is reserved for fork/non-blocking soft-skip contexts.
+- Windows GitHub Actions full-test/live path is intentionally not blocking yet; current TODO is to remove Unix-only path and fake-executable assumptions from tests before re-enabling Windows as blocking.

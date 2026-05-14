@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -16,6 +17,7 @@ use crate::platform::locator::UtilityType;
 use crate::platform::result::PlatformCommandResult;
 use crate::platform::utilities::PlatformUtilities;
 use crate::support::error::AppError;
+use crate::support::fs::clean_dir;
 use crate::support::temp::platform_logs_dir;
 #[cfg(test)]
 use crate::use_cases::context::CommandName;
@@ -88,8 +90,18 @@ fn run_syntax_with_context(
     if let Some(failure) = interrupted_syntax_failure(context, "syntax", started, None) {
         return Err(failure);
     }
-    if let SyntaxTarget::Edt { projects } = &args.target {
-        return run_edt_syntax(context, config, projects, started);
+    if let SyntaxTarget::Edt {
+        projects,
+        exception_file,
+    } = &args.target
+    {
+        return run_edt_syntax(
+            context,
+            config,
+            projects,
+            exception_file.as_deref(),
+            started,
+        );
     }
 
     let invocation = match normalize_invocation(args) {
@@ -415,6 +427,7 @@ fn run_edt_syntax(
     context: &ExecutionContext,
     config: &AppConfig,
     projects: &[String],
+    exception_file: Option<&Path>,
     started: Instant,
 ) -> UseCaseResult<SyntaxCheckResult> {
     if let Some(failure) = interrupted_syntax_failure(context, "edt", started, None) {
@@ -503,14 +516,58 @@ fn run_edt_syntax(
             ));
         }
     };
+    let exceptions = match load_syntax_exceptions(exception_file) {
+        Ok(exceptions) => exceptions,
+        Err(error) => {
+            let app_error = AppError::Runtime(error);
+            let message = app_error.to_string();
+            return Err(SyntaxExecutionFailure::with_payload(
+                app_error,
+                failed_result(
+                    "edt",
+                    SyntaxCheckStatus::ToolFailed,
+                    -1,
+                    started,
+                    vec![],
+                    None,
+                    Some(message),
+                    None,
+                ),
+            ));
+        }
+    };
 
     let edt_binary = location.path;
+    let syntax_workspace = match prepare_edt_syntax_workspace(&config.work_path) {
+        Ok(workspace) => workspace,
+        Err(error) => {
+            let app_error = AppError::Runtime(format!(
+                "failed to prepare EDT syntax workspace '{}': {error}",
+                config.work_path.join("edt-syntax-workspace").display()
+            ));
+            let message = app_error.to_string();
+            return Err(SyntaxExecutionFailure::with_payload(
+                app_error,
+                failed_result(
+                    "edt",
+                    SyntaxCheckStatus::ToolFailed,
+                    -1,
+                    started,
+                    vec![],
+                    None,
+                    Some(message),
+                    None,
+                ),
+            ));
+        }
+    };
     let interactive_dsl = if config.tools.edt_cli.interactive_mode {
-        match EdtSessionManager::for_config(config, EdtSessionHostOptions::for_cli_command(config))
-        {
+        let mut options = EdtSessionHostOptions::for_cli_command(config);
+        options.workspace = syntax_workspace.clone();
+        match EdtSessionManager::for_config(config, options) {
             Ok(manager) => match EdtDsl::new_shared_session(
                 edt_binary.clone(),
-                config.work_path.join("edt-workspace"),
+                syntax_workspace.clone(),
                 Arc::new(manager),
                 Duration::from_millis(config.tools.edt_cli.startup_timeout_ms),
                 Duration::from_millis(config.tools.edt_cli.command_timeout_ms),
@@ -586,7 +643,7 @@ fn run_edt_syntax(
         } else {
             EdtDsl::new(
                 edt_binary.clone(),
-                config.work_path.join("edt-workspace"),
+                syntax_workspace.clone(),
                 utilities.runner_for(UtilityType::EdtCli),
             )
             .with_timeout(context.edt_timeout())
@@ -636,7 +693,13 @@ fn run_edt_syntax(
             .as_deref()
             .map(edt_validation::parse)
             .unwrap_or_default();
-        let project_status = edt_status_from_result(result.process.exit_code, &project_issues);
+        let had_project_issues_before_exceptions = !project_issues.is_empty();
+        let project_issues = filter_syntax_exceptions(project_issues, &exceptions);
+        let project_status = edt_status_from_result(
+            result.process.exit_code,
+            &project_issues,
+            had_project_issues_before_exceptions,
+        );
         status = combine_status(status, project_status);
 
         if result.process.exit_code != 0
@@ -645,7 +708,10 @@ fn run_edt_syntax(
             exit_code = result.process.exit_code;
         }
 
-        if result.process.exit_code != 0 && project_issues.is_empty() {
+        if result.process.exit_code != 0
+            && project_issues.is_empty()
+            && project_status == SyntaxCheckStatus::ToolFailed
+        {
             issues.push(fallback_edt_issue(
                 &source_set.name,
                 result.process.exit_code,
@@ -755,7 +821,7 @@ fn resolve_edt_source_sets<'a>(
 
     if !unknown.is_empty() {
         return Err(AppError::Validation(format!(
-            "unknown EDT project(s): {}",
+            "unknown EDT source-set(s): {}",
             unknown.join(", ")
         )));
     }
@@ -763,8 +829,210 @@ fn resolve_edt_source_sets<'a>(
     Ok(selected)
 }
 
-fn edt_status_from_result(exit_code: i32, issues: &[Issue]) -> SyntaxCheckStatus {
+fn prepare_edt_syntax_workspace(work_path: &Path) -> std::io::Result<PathBuf> {
+    let workspace = work_path.join("edt-syntax-workspace");
+    clean_dir(&workspace)?;
+    std::fs::create_dir_all(&workspace)?;
+    Ok(workspace)
+}
+
+#[derive(Default)]
+struct SyntaxExceptions {
+    exact: HashSet<String>,
+    fuzzy: Vec<String>,
+}
+
+impl SyntaxExceptions {
+    fn is_empty(&self) -> bool {
+        self.exact.is_empty()
+    }
+}
+
+fn load_syntax_exceptions(path: Option<&Path>) -> Result<SyntaxExceptions, String> {
+    let Some(path) = path else {
+        return Ok(SyntaxExceptions::default());
+    };
+    let content = std::fs::read_to_string(path).map_err(|error| {
+        format!(
+            "failed to read syntax exception file '{}': {error}",
+            path.display()
+        )
+    })?;
+
+    let mut exceptions = SyntaxExceptions::default();
+    let mut generated_baseline = false;
+    for line in content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        if line.starts_with('#') {
+            if line.contains("Added from EDT syntax log") {
+                generated_baseline = true;
+            }
+            continue;
+        }
+        let normalized = normalize_exception_text(line);
+        if normalized.is_empty() {
+            continue;
+        }
+        let inserted = exceptions.exact.insert(normalized.clone());
+        if let Some(signature) = syntax_exception_signature(&normalized) {
+            exceptions.exact.insert(signature);
+        }
+        if inserted && !generated_baseline {
+            exceptions.fuzzy.push(normalized);
+        }
+    }
+
+    Ok(exceptions)
+}
+
+fn filter_syntax_exceptions(issues: Vec<Issue>, exceptions: &SyntaxExceptions) -> Vec<Issue> {
+    if exceptions.is_empty() {
+        return issues;
+    }
+
+    issues
+        .into_iter()
+        .filter(|issue| !is_syntax_exception(issue, exceptions))
+        .collect()
+}
+
+fn is_syntax_exception(issue: &Issue, exceptions: &SyntaxExceptions) -> bool {
+    let candidates = issue_exception_candidates(issue);
+    if candidates
+        .iter()
+        .any(|candidate| exceptions.exact.contains(candidate))
+    {
+        return true;
+    }
+
+    exceptions.fuzzy.iter().any(|exception| {
+        candidates.iter().any(|candidate| {
+            candidate.contains(exception)
+                || exception.contains(candidate)
+                || normalized_words_match(candidate, exception)
+        })
+    })
+}
+
+fn issue_exception_candidates(issue: &Issue) -> Vec<String> {
+    let mut candidates = Vec::new();
+    match issue {
+        Issue::Module(issue) => {
+            push_exception_candidate(&mut candidates, format!("{} {}", issue.path, issue.message));
+            push_exception_candidate(
+                &mut candidates,
+                format!(
+                    "{} {} {}",
+                    render_issue_severity(&issue.severity),
+                    issue.path,
+                    issue.message
+                ),
+            );
+        }
+        Issue::Object(issue) => {
+            push_exception_candidate(
+                &mut candidates,
+                format!("{} {}", issue.object, issue.message),
+            );
+            push_exception_candidate(
+                &mut candidates,
+                format!(
+                    "{} {} {}",
+                    render_issue_severity(&issue.severity),
+                    issue.object,
+                    issue.message
+                ),
+            );
+        }
+        Issue::Edt(issue) => {
+            push_exception_candidate(&mut candidates, format!("{} {}", issue.path, issue.message));
+            if let Some(line) = issue.line {
+                push_exception_candidate(
+                    &mut candidates,
+                    format!("{} {} {}", issue.path, line, issue.message),
+                );
+                push_exception_candidate(
+                    &mut candidates,
+                    format!("{} строка {} {}", issue.path, line, issue.message),
+                );
+            }
+            if let Some(check) = issue.check.as_deref() {
+                push_exception_candidate(
+                    &mut candidates,
+                    format!("{} {} {}", issue.path, check, issue.message),
+                );
+            }
+            push_exception_candidate(
+                &mut candidates,
+                format!(
+                    "{} {} {}",
+                    render_issue_severity(&issue.severity),
+                    issue.path,
+                    issue.message
+                ),
+            );
+        }
+    }
+    candidates
+}
+
+fn push_exception_candidate(candidates: &mut Vec<String>, value: String) {
+    let normalized = normalize_exception_text(&value);
+    if !normalized.is_empty() && !candidates.contains(&normalized) {
+        if let Some(signature) = syntax_exception_signature(&normalized) {
+            candidates.push(signature);
+        }
+        candidates.push(normalized);
+    }
+}
+
+fn normalize_exception_text(value: &str) -> String {
+    let mut normalized = String::new();
+    let mut previous_space = true;
+    for ch in value.chars().flat_map(char::to_lowercase) {
+        let keep = ch.is_alphanumeric() || matches!(ch, '_' | '.' | '"' | '\'' | ':' | '-' | '/');
+        if keep {
+            normalized.push(ch);
+            previous_space = false;
+        } else if !previous_space {
+            normalized.push(' ');
+            previous_space = true;
+        }
+    }
+    normalized.trim().to_owned()
+}
+
+fn normalized_words_match(candidate: &str, exception: &str) -> bool {
+    let mut cursor = 0usize;
+    let mut matched = false;
+    for word in exception.split_whitespace().filter(|word| word.len() > 2) {
+        let Some(offset) = candidate[cursor..].find(word) else {
+            return false;
+        };
+        matched = true;
+        cursor += offset + word.len();
+    }
+    matched
+}
+
+fn syntax_exception_signature(normalized: &str) -> Option<String> {
+    let marker = " не содержит возвращаемые типы ";
+    normalized
+        .find(marker)
+        .map(|index| normalized[..index + marker.trim_end().len()].to_owned())
+}
+
+fn edt_status_from_result(
+    exit_code: i32,
+    issues: &[Issue],
+    had_issues_before_exceptions: bool,
+) -> SyntaxCheckStatus {
     if exit_code == 0 && issues.is_empty() {
+        SyntaxCheckStatus::Clean
+    } else if issues.is_empty() && had_issues_before_exceptions {
         SyntaxCheckStatus::Clean
     } else if !issues.is_empty() {
         SyntaxCheckStatus::IssuesFound
@@ -903,6 +1171,14 @@ fn issue_severity(issue: &Issue) -> &IssueSeverity {
     }
 }
 
+fn render_issue_severity(severity: &IssueSeverity) -> &'static str {
+    match severity {
+        IssueSeverity::Error => "ERROR",
+        IssueSeverity::Warning => "WARNING",
+        IssueSeverity::Info => "INFO",
+    }
+}
+
 fn fallback_issue(
     exit_code: i32,
     stderr: Option<&str>,
@@ -974,14 +1250,15 @@ fn fallback_edt_issue(
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_config_flags, normalize_modules_flags, run_syntax, run_syntax_with_context,
-        status_from_exit_code,
+        filter_syntax_exceptions, normalize_config_flags, normalize_exception_text,
+        normalize_modules_flags, run_syntax, run_syntax_with_context, status_from_exit_code,
+        syntax_exception_signature, SyntaxExceptions,
     };
     use crate::config::model::{
         AppConfig, BuildConfig, BuilderBackend, SourceFormat, SourceSetConfig, SourceSetPurpose,
         TestsConfig, ToolsConfig,
     };
-    use crate::domain::issue::Issue;
+    use crate::domain::issue::{EdtIssue, Issue, IssueSeverity};
     use crate::domain::syntax::SyntaxCheckStatus;
     use crate::use_cases::context::{CommandName, ExecutionContext};
     use crate::use_cases::request::{
@@ -992,15 +1269,23 @@ mod tests {
     };
     use crate::use_cases::result::UseCaseErrorKind;
     use std::fs;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
     use std::time::{Duration, Instant};
     use tempfile::tempdir;
 
     fn make_executable(path: &Path) {
-        let mut perms = fs::metadata(path).expect("metadata").permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(path, perms).expect("chmod");
+        #[cfg(unix)]
+        {
+            let mut perms = fs::metadata(path).expect("metadata").permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(path, perms).expect("chmod");
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = path;
+        }
     }
 
     fn write_script(path: &Path, body: &str) {
@@ -1169,11 +1454,120 @@ mod tests {
         }
     }
 
+    fn edt_args(projects: Vec<String>) -> SyntaxArgs {
+        SyntaxArgs {
+            target: SyntaxTarget::Edt {
+                projects,
+                exception_file: None,
+            },
+        }
+    }
+
     #[test]
     fn status_mapping_matches_designer_exit_codes() {
         assert_eq!(status_from_exit_code(0), SyntaxCheckStatus::Clean);
         assert_eq!(status_from_exit_code(101), SyntaxCheckStatus::IssuesFound);
         assert_eq!(status_from_exit_code(1), SyntaxCheckStatus::ToolFailed);
+    }
+
+    #[test]
+    fn syntax_exception_filter_matches_legacy_lines() {
+        let issues = vec![
+            Issue::Edt(EdtIssue {
+                path: "ОбщийМодуль.УИ_РегламентныеЗаданияСлужебный.Модуль".to_owned(),
+                line: None,
+                column: None,
+                message: "Возможно ошибочное свойство: \"СтандартныеПодсистемы\"".to_owned(),
+                severity: IssueSeverity::Warning,
+                check: None,
+            }),
+            Issue::Edt(EdtIssue {
+                path: "ОбщийМодуль.Другой.Модуль".to_owned(),
+                line: None,
+                column: None,
+                message: "Новая ошибка".to_owned(),
+                severity: IssueSeverity::Error,
+                check: None,
+            }),
+        ];
+        let mut exceptions = SyntaxExceptions::default();
+        let exception = normalize_exception_text(
+            "УниверсальныеИнструменты ОбщийМодуль.УИ_РегламентныеЗаданияСлужебный.Модуль Возможно ошибочное свойство: \"СтандартныеПодсистемы\"",
+        );
+        exceptions.exact.insert(exception.clone());
+        exceptions.fuzzy.push(exception);
+
+        let filtered = filter_syntax_exceptions(issues, &exceptions);
+
+        assert_eq!(filtered.len(), 1);
+        match &filtered[0] {
+            Issue::Edt(issue) => assert_eq!(issue.path, "ОбщийМодуль.Другой.Модуль"),
+            _ => panic!("expected edt issue"),
+        }
+    }
+
+    #[test]
+    fn syntax_exception_filter_matches_line_scoped_edt_lines() {
+        let issues = vec![
+            Issue::Edt(EdtIssue {
+                path: "ОбщийМодуль.КалендарныеГрафики.Модуль".to_owned(),
+                line: Some(1357),
+                column: None,
+                message: "Возможно Поле указано в описании".to_owned(),
+                severity: IssueSeverity::Info,
+                check: Some(
+                    "com.e1c.v8codestyle.bsl:doc-comment-field-in-description-suggestion"
+                        .to_owned(),
+                ),
+            }),
+            Issue::Edt(EdtIssue {
+                path: "ОбщийМодуль.КалендарныеГрафики.Модуль".to_owned(),
+                line: Some(1358),
+                column: None,
+                message: "Возможно Поле указано в описании".to_owned(),
+                severity: IssueSeverity::Info,
+                check: Some(
+                    "com.e1c.v8codestyle.bsl:doc-comment-field-in-description-suggestion"
+                        .to_owned(),
+                ),
+            }),
+        ];
+        let mut exceptions = SyntaxExceptions::default();
+        exceptions.exact.insert(normalize_exception_text(
+            "ОбщийМодуль.КалендарныеГрафики.Модуль строка 1357 Возможно Поле указано в описании",
+        ));
+
+        let filtered = filter_syntax_exceptions(issues, &exceptions);
+
+        assert_eq!(filtered.len(), 1);
+        match &filtered[0] {
+            Issue::Edt(issue) => assert_eq!(issue.line, Some(1358)),
+            _ => panic!("expected edt issue"),
+        }
+    }
+
+    #[test]
+    fn syntax_exception_filter_matches_return_type_order_changes() {
+        let issues = vec![Issue::Edt(EdtIssue {
+            path: "ОбщийМодуль.Модуль.Модуль".to_owned(),
+            line: Some(10),
+            column: None,
+            message: "Декларируемое свойство \"Значение\" с типом: \"Строка\" не содержит возвращаемые типы \"ТипБ, ТипА\"".to_owned(),
+            severity: IssueSeverity::Error,
+            check: Some("com.e1c.v8codestyle.bsl:constructor-function-return-section".to_owned()),
+        })];
+        let mut exceptions = SyntaxExceptions::default();
+        let exception = normalize_exception_text(
+            "ОбщийМодуль.Модуль.Модуль строка 10 Декларируемое свойство \"Значение\" с типом: \"Строка\" не содержит возвращаемые типы \"ТипА, ТипБ\"",
+        );
+        exceptions.exact.insert(exception.clone());
+        exceptions
+            .exact
+            .insert(syntax_exception_signature(&exception).expect("signature"));
+
+        let filtered = filter_syntax_exceptions(issues, &exceptions);
+
+        assert!(filtered.is_empty());
     }
 
     #[test]
@@ -1369,9 +1763,7 @@ mod tests {
             1,
         );
         let config = sample_edt_config(&base, &work, &binary);
-        let args = SyntaxArgs {
-            target: SyntaxTarget::Edt { projects: vec![] },
-        };
+        let args = edt_args(vec![]);
 
         let failure = run_syntax(&config, &args).expect_err("expected issues");
         let result = failure
@@ -1385,7 +1777,35 @@ mod tests {
     }
 
     #[test]
-    fn syntax_edt_rejects_unknown_project_names() {
+    fn syntax_edt_uses_clean_syntax_workspace_instead_of_build_workspace() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let main_dir = base.join("main-edt");
+        let ext_dir = base.join("ext-edt");
+        let binary = dir.path().join("edt").join("1cedtcli");
+        let calls_log = dir.path().join("edt.calls.log");
+        let stale_marker = work.join("edt-syntax-workspace").join("stale.marker");
+        fs::create_dir_all(&work).expect("work");
+        fs::create_dir_all(&main_dir).expect("main");
+        fs::create_dir_all(&ext_dir).expect("ext");
+        fs::create_dir_all(stale_marker.parent().expect("stale parent")).expect("syntax ws");
+        fs::write(&stale_marker, "stale").expect("stale marker");
+        write_edt_script_with_calls(&binary, &calls_log);
+        let config = sample_edt_config(&base, &work, &binary);
+        let args = edt_args(vec!["main".to_owned()]);
+
+        let result = run_syntax(&config, &args).expect("clean run");
+
+        assert_eq!(result.status, SyntaxCheckStatus::Clean);
+        assert!(!stale_marker.exists());
+        let calls = fs::read_to_string(&calls_log).expect("calls");
+        assert!(calls.contains("edt-syntax-workspace"));
+        assert!(!calls.contains("edt-workspace"));
+    }
+
+    #[test]
+    fn syntax_edt_rejects_unknown_source_set_names() {
         let dir = tempdir().expect("tempdir");
         let base = dir.path().join("base");
         let work = dir.path().join("work");
@@ -1397,11 +1817,7 @@ mod tests {
         fs::create_dir_all(&ext_dir).expect("ext");
         write_edt_script(&binary, None, None, 0);
         let config = sample_edt_config(&base, &work, &binary);
-        let args = SyntaxArgs {
-            target: SyntaxTarget::Edt {
-                projects: vec!["unknown".to_owned()],
-            },
-        };
+        let args = edt_args(vec!["unknown".to_owned()]);
 
         let failure = run_syntax(&config, &args).expect_err("expected validation failure");
 
@@ -1409,7 +1825,7 @@ mod tests {
         assert!(failure
             .error
             .to_string()
-            .contains("unknown EDT project(s): unknown"));
+            .contains("unknown EDT source-set(s): unknown"));
     }
 
     #[test]
@@ -1428,9 +1844,7 @@ mod tests {
             "out=\"\"\nargs=\"$*\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"--file\" ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif printf '%s' \"$args\" | grep -q -- 'main-edt'; then\n  if [ -n \"$out\" ]; then printf 'ERROR\\tCatalogs.Items\\t1\\t1\\tRule\\tmsg\\n' > \"$out\"; fi\n  exit 1\nfi\nexit 17",
         );
         let config = sample_edt_config(&base, &work, &binary);
-        let args = SyntaxArgs {
-            target: SyntaxTarget::Edt { projects: vec![] },
-        };
+        let args = edt_args(vec![]);
 
         let failure = run_syntax(&config, &args).expect_err("expected failure");
         let result = failure
@@ -1455,11 +1869,7 @@ mod tests {
         write_script(&binary, "sleep 1\nexit 0");
         let mut config = sample_edt_config(&base, &work, &binary);
         config.tools.edt_cli.command_timeout_ms = 20;
-        let args = SyntaxArgs {
-            target: SyntaxTarget::Edt {
-                projects: vec!["main".to_owned()],
-            },
-        };
+        let args = edt_args(vec!["main".to_owned()]);
         let context = ExecutionContext::mcp_stdio(CommandName::Syntax)
             .with_edt_timeout(Some(Duration::from_millis(20)));
 
@@ -1488,9 +1898,7 @@ mod tests {
         fs::create_dir_all(&ext_dir).expect("ext");
         write_script(&binary, "sleep 0.06\nexit 0");
         let config = sample_edt_config(&base, &work, &binary);
-        let args = SyntaxArgs {
-            target: SyntaxTarget::Edt { projects: vec![] },
-        };
+        let args = edt_args(vec![]);
         let context = ExecutionContext::mcp_stdio(CommandName::Syntax)
             .with_deadline(Some(Instant::now() + Duration::from_millis(80)));
 
@@ -1521,11 +1929,7 @@ mod tests {
         write_edt_script_with_calls(&binary, &calls_log);
         let mut config = sample_edt_config(&base, &work, &binary);
         config.tools.edt_cli.interactive_mode = false;
-        let args = SyntaxArgs {
-            target: SyntaxTarget::Edt {
-                projects: vec!["main".to_owned()],
-            },
-        };
+        let args = edt_args(vec!["main".to_owned()]);
 
         let result = run_syntax(&config, &args).expect("syntax");
         let calls = fs::read_to_string(&calls_log).expect("calls log");
@@ -1551,11 +1955,7 @@ mod tests {
         write_interactive_edt_script_with_calls(&binary, &calls_log);
         let mut config = sample_edt_config(&base, &work, &binary);
         config.tools.edt_cli.interactive_mode = true;
-        let args = SyntaxArgs {
-            target: SyntaxTarget::Edt {
-                projects: vec!["main".to_owned()],
-            },
-        };
+        let args = edt_args(vec!["main".to_owned()]);
 
         let result = run_syntax(&config, &args).expect("syntax");
         let calls = fs::read_to_string(&calls_log).expect("calls log");

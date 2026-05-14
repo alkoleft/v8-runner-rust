@@ -84,6 +84,19 @@ v8-runner syntax designer-modules --server
 Команда запускает Designer syntax check (проверку синтаксиса Конфигуратором) для серверного
 контекста.
 
+Если проект хранится в EDT-формате, используйте EDT syntax check:
+
+```bash
+v8-runner syntax edt
+v8-runner syntax edt --project <SOURCE_SET>
+v8-runner syntax edt --project <SOURCE_SET> --exception-file tools/syntax-check-exception-file.txt
+```
+
+Без `--project` проверяются все EDT `source-set` из `v8project.yaml`. Значение
+`--project <SOURCE_SET>` берется из `source-set[].name`. Флаг `--exception-file` доступен
+только для `syntax edt` и подключает legacy-файл исключений для известных EDT diagnostics
+(диагностик).
+
 ### Запустите YAxUnit-тесты:
 
 ```bash

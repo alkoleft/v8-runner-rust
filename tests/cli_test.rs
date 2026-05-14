@@ -1095,7 +1095,10 @@ fn test_module_edt_extension_build_uses_full_load_before_enterprise_launch() {
 
     assert!(build_calls_text.contains("-Extension client_mcp"));
     assert!(!build_calls_text.contains("-partial"));
-    assert!(edt_calls_text.contains("export --project-name client_mcp"));
+    assert!(edt_calls_text.contains(&format!(
+        "export --project {}",
+        base_path.join("exts").join("client-mcp").display()
+    )));
     assert!(test_calls_text.contains("RunUnitTests="));
     assert_eq!(payload["ok"], true);
     assert_eq!(

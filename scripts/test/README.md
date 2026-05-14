@@ -152,6 +152,10 @@ live-mcp-http.py
 bash scripts/test/ci-rust.sh
 ```
 
+GitHub Actions currently runs this blocking contract on `ubuntu-latest`.
+Re-enabling Windows as blocking requires hardening the existing Unix-assumptive
+unit/helper tests first.
+
 ### Happy-path CI helper
 
 ```bash

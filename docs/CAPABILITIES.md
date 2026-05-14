@@ -184,7 +184,7 @@ v8-runner test va --feature login --filter-tag @smoke
 ```bash
 v8-runner syntax designer-config [FLAGS]
 v8-runner syntax designer-modules [FLAGS]
-v8-runner syntax edt [--project <PROJECT>...]
+v8-runner syntax edt [--project <SOURCE_SET>...] [--exception-file <PATH>]
 ```
 
 `designer-config`:
@@ -202,8 +202,10 @@ v8-runner syntax edt [--project <PROJECT>...]
 `edt`:
 
 - Только `builder=DESIGNER`, `format=EDT`.
-- Повторяемый `--project`.
-- Без `--project` использует дефолтный набор EDT-проектов из конфига.
+- Повторяемый `--project`; значение выбирается из `source-set[].name` в `v8project.yaml`.
+- Без `--project` использует все EDT source-set из конфига.
+- `--exception-file` читает legacy-файл исключений: каждая непустая строка исключает
+  совпавшую EDT issue после нормализации регистра, пробелов и пунктуации.
 
 ## Файлы и артефакты
 

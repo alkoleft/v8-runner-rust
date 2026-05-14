@@ -1185,8 +1185,12 @@ fn map_syntax_request(args: &SyntaxArgs) -> Result<SyntaxRequest, UseCaseError> 
             SyntaxTarget::DesignerModules(modules) => {
                 SyntaxTargetRequest::DesignerModules(map_designer_modules_request(modules)?)
             }
-            SyntaxTarget::Edt { projects } => SyntaxTargetRequest::Edt {
+            SyntaxTarget::Edt {
+                projects,
+                exception_file,
+            } => SyntaxTargetRequest::Edt {
                 projects: projects.clone(),
+                exception_file: exception_file.clone(),
             },
         },
     })
