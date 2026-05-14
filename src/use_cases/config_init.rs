@@ -7,7 +7,7 @@ use crate::config::schema::main_config_schema_url;
 use crate::domain::config_init::{ConfigInitResult, ConfigInitSourceSet};
 use crate::support::edt_project::{self, EdtProjectKind};
 use crate::support::error::AppError;
-use crate::support::path::is_safe_path_segment;
+use crate::support::path::{is_safe_path_segment, strip_windows_verbatim_prefix};
 use crate::support::source_descriptor::{
     self, SourceDescriptorParseError, SourceDescriptorPurpose, SourceSetRootScanError,
 };
@@ -100,9 +100,9 @@ pub fn execute(request: &ConfigInitRequest) -> Result<ConfigInitResult, AppError
 
     Ok(ConfigInitResult {
         ok: true,
-        path: output_path.display().to_string(),
-        local_path: local_path.display().to_string(),
-        gitignore_path: gitignore_path.display().to_string(),
+        path: display_path(&output_path),
+        local_path: display_path(&local_path),
+        gitignore_path: display_path(&gitignore_path),
         format: format.as_yaml().to_owned(),
         builder: request.builder.as_yaml().to_owned(),
         platform_version,
@@ -791,7 +791,7 @@ fn relative_path(root: &Path, path: &Path) -> String {
         .ok()
         .filter(|relative| !relative.as_os_str().is_empty())
     {
-        return relative.display().to_string();
+        return logical_path(relative);
     }
 
     let root_components = normalized_components(root);
@@ -813,8 +813,19 @@ fn relative_path(root: &Path, path: &Path) -> String {
     if relative.as_os_str().is_empty() {
         ".".to_owned()
     } else {
-        relative.display().to_string()
+        logical_path(&relative)
     }
+}
+
+fn display_path(path: &Path) -> String {
+    strip_windows_verbatim_prefix(&path.display().to_string())
+}
+
+fn logical_path(path: &Path) -> String {
+    path.components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn normalized_components(path: &Path) -> Vec<OsString> {
