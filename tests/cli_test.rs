@@ -773,6 +773,10 @@ fn test_va_builds_vanessa_command_and_overlay() {
         .as_str()
         .expect("КаталогВыгрузкиJUnit")
         .contains("/junit"));
+    assert!(params["ОтчетJUnit"]["КаталогВыгрузкиJUnit"]
+        .as_str()
+        .expect("ОтчетJUnit.КаталогВыгрузкиJUnit")
+        .contains("/junit"));
     assert_eq!(params["ДелатьЛогВыполненияСценариевВТекстовыйФайл"], true);
     assert_eq!(params["ВыводитьВЛогВыполнениеШагов"], true);
     assert_eq!(params["ПодробныйЛогВыполненияСценариев"], 1);
