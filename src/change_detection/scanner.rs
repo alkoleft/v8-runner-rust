@@ -83,6 +83,12 @@ pub fn scan(
     let mut candidates = Vec::new();
 
     let cutoff = watermark.map(|w| w.saturating_sub(COARSE_MARGIN_NS));
+    tracing::debug!(
+        root = %root.display(),
+        watermark,
+        stored_files = stored_keys.len(),
+        "starting filesystem scan"
+    );
     for entry in WalkDir::new(root)
         .follow_links(false)
         .into_iter()
@@ -143,8 +149,23 @@ pub fn scan(
             });
         }
         seen_files.push(seen);
+        if seen_files.len() % 1000 == 0 {
+            tracing::debug!(
+                root = %root.display(),
+                seen_files = seen_files.len(),
+                candidate_files = candidates.len(),
+                current_file = %path.display(),
+                "filesystem scan progress"
+            );
+        }
     }
 
+    tracing::debug!(
+        root = %root.display(),
+        seen_files = seen_files.len(),
+        candidate_files = candidates.len(),
+        "finished filesystem scan"
+    );
     Ok(ScanSnapshot {
         scan_started_at,
         seen_files,

@@ -281,7 +281,7 @@ impl Default for McpConfig {
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default, rename_all = "snake_case")]
 pub struct ClientMcpToolConfig {
-    /// Default port passed to onec-client-mcp-devkit via `/C"...;mcpPort=<PORT>"`.
+    /// Default port passed to onec-client-mcp-devkit via `/C` payload.
     pub port: Option<u16>,
 
     /// Optional tool extension prepared by `build` for client MCP launches.

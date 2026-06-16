@@ -447,7 +447,7 @@ runtime identity и не добавляет отдельное поле конф
 - `port`, опциональный порт клиентского MCP-сервера onec-client-mcp-devkit.
 - `extension`, опциональное tool extension для клиентского MCP-сервера.
 
-`launch mcp` передаёт это значение как `mcpPort` внутри `/C"runMcp..."`
+`launch mcp` передаёт это значение как `mcpPort` внутри payload после `/C`
 если CLI не указал `--mcp-port`.
 
 `extension` поддерживает:

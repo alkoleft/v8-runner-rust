@@ -252,10 +252,9 @@ fn lock_holder_is_live(_pid: u32) -> bool {
 }
 
 pub fn best_effort_fsync_dir(path: &Path) -> std::io::Result<()> {
-    let dir = File::open(path)?;
-
     #[cfg(unix)]
     unsafe {
+        let dir = File::open(path)?;
         let rc = libc::fsync(std::os::fd::AsRawFd::as_raw_fd(&dir));
         if rc == 0 {
             return Ok(());
@@ -270,7 +269,7 @@ pub fn best_effort_fsync_dir(path: &Path) -> std::io::Result<()> {
 
     #[cfg(not(unix))]
     {
-        let _ = dir;
+        let _ = path;
         Ok(())
     }
 }

@@ -191,9 +191,10 @@ pub struct SyntaxRequest {
 pub enum SyntaxTargetRequest {
     DesignerConfig(DesignerConfigSyntaxRequest),
     DesignerModules(DesignerModulesSyntaxRequest),
-    /// Runs EDT validation for selected projects or all EDT projects when empty.
+    /// Runs EDT validation for selected source-sets or all EDT source-sets when empty.
     Edt {
         projects: Vec<String>,
+        exception_file: Option<std::path::PathBuf>,
     },
 }
 

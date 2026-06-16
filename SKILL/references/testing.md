@@ -73,7 +73,14 @@ EDT syntax:
 
 ```bash
 v8-runner syntax edt
+v8-runner syntax edt --project <SOURCE_SET>
+v8-runner syntax edt --project <SOURCE_SET> --exception-file tools/syntax-check-exception-file.txt
 ```
+
+Use `--project <SOURCE_SET>` to check one configured EDT source-set by `source-set[].name`
+from `v8project.yaml`; it is not the EDT `.project` display name.
+Use `--exception-file <PATH>` when a project keeps a legacy syntax exception list; each
+non-empty line is matched against parsed EDT issues after normalization.
 
 ## Artifacts
 

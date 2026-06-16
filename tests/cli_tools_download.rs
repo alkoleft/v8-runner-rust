@@ -313,6 +313,12 @@ fn tools_download_sources_writes_source_set_and_local_tool_settings() {
     assert!(config.contains("name: tests"));
     assert!(config.contains("type: EXTENSION"));
     assert!(config.contains("path: tests"));
+    assert!(config.contains("tests:\n  execution_timeout_seconds: 3600\n  va:"));
+    assert!(config.contains("    params_path: 'tools\\VAParams.json'"));
+    assert!(config.contains("    profile: 'all'"));
+    assert!(config.contains("      total_ms: 3600000"));
+    assert!(config.contains("        feature_path: 'features'"));
+    assert!(config.contains("          - 'IgnoreOnCIMainBuild'"));
     assert!(dir
         .path()
         .join("tests/src/Configuration/Configuration.mdo")

@@ -773,6 +773,10 @@ fn test_va_builds_vanessa_command_and_overlay() {
         .as_str()
         .expect("КаталогВыгрузкиJUnit")
         .contains("/junit"));
+    assert!(params["ОтчетJUnit"]["КаталогВыгрузкиJUnit"]
+        .as_str()
+        .expect("ОтчетJUnit.КаталогВыгрузкиJUnit")
+        .contains("/junit"));
     assert_eq!(params["ДелатьЛогВыполненияСценариевВТекстовыйФайл"], true);
     assert_eq!(params["ВыводитьВЛогВыполнениеШагов"], true);
     assert_eq!(params["ПодробныйЛогВыполненияСценариев"], 1);
@@ -1095,7 +1099,10 @@ fn test_module_edt_extension_build_uses_full_load_before_enterprise_launch() {
 
     assert!(build_calls_text.contains("-Extension client_mcp"));
     assert!(!build_calls_text.contains("-partial"));
-    assert!(edt_calls_text.contains("export --project-name client_mcp"));
+    assert!(edt_calls_text.contains(&format!(
+        "export --project {}",
+        base_path.join("exts").join("client-mcp").display()
+    )));
     assert!(test_calls_text.contains("RunUnitTests="));
     assert_eq!(payload["ok"], true);
     assert_eq!(

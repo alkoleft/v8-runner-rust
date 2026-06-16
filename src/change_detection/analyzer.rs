@@ -78,6 +78,12 @@ pub enum ChangeDetectionError {
 /// Analyze one source-set context and produce either concrete changes or a safe fallback.
 pub fn analyze_context(context: &SourceSetContext, work_path: &Path) -> ContextAnalysis {
     let storage = HashStorage::new(context.storage_path(work_path));
+    tracing::debug!(
+        source_set = %context.name(),
+        source_path = %context.path().display(),
+        storage_path = %storage.path().display(),
+        "starting change analysis"
+    );
     let snapshot = match storage.load_snapshot() {
         Ok(snapshot) => snapshot,
         Err(e) => {
@@ -100,6 +106,13 @@ pub fn analyze_context(context: &SourceSetContext, work_path: &Path) -> ContextA
     };
 
     let stored_keys: HashSet<String> = snapshot.entries.keys().cloned().collect();
+    tracing::debug!(
+        source_set = %context.name(),
+        stored_files = stored_keys.len(),
+        watermark = snapshot.watermark,
+        generation = snapshot.generation,
+        "loaded change-detection snapshot"
+    );
     let scan = match scanner::scan(context.path(), snapshot.watermark, &stored_keys) {
         Ok(scan) => scan,
         Err(e) => {
@@ -114,6 +127,12 @@ pub fn analyze_context(context: &SourceSetContext, work_path: &Path) -> ContextA
             };
         }
     };
+    tracing::debug!(
+        source_set = %context.name(),
+        seen_files = scan.seen_files.len(),
+        candidate_files = scan.candidates.len(),
+        "finished source scan"
+    );
 
     let mut changes = detect_changes(&scan.candidates, &snapshot.entries);
     let seen_rel: HashSet<&str> = scan
