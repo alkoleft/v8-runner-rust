@@ -1,3 +1,4 @@
+use crate::domain::sync_receipt::SyncReceipt;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -14,6 +15,8 @@ pub struct BuildStep {
     pub ok: bool,
     pub message: Option<String>,
     pub duration_ms: u64,
+    #[serde(default)]
+    pub receipt: SyncReceipt,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

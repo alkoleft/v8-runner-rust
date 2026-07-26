@@ -27,7 +27,14 @@ use crate::use_cases::external_artifacts::{
 };
 use crate::use_cases::request::BuildRequest as BuildArgs;
 use crate::use_cases::result::{UseCaseFailure, UseCaseResult};
+use crate::use_cases::runtime_state::{
+    cleanup_orphan_designer_transactions, commit_designer_state_with_lock,
+    designer_full_rebuild_required, inspect_private_cdfi, lock_designer_state,
+    recover_designer_state, recover_designer_state_with_lock, require_designer_full_rebuild,
+    PrivateCdfiState, ValidatedCdfi,
+};
 use crate::use_cases::source_inventory::SourceSetInventory;
+use crate::use_cases::source_transaction::{CdfiSeed, DesignerSourceTransaction};
 use crate::use_cases::tool_extension;
 use tempfile::NamedTempFile;
 use tracing::debug;
@@ -37,10 +44,12 @@ mod helpers;
 
 pub(crate) use self::helpers::ensure_platform_success;
 use self::helpers::{
-    build_designer_dsl, build_ibcmd_dsl, commit_step_state, deferred_interruption_warning,
-    extension_name, fail_from_source_set_index, interruption_before_safe_point, map_ibcmd_error,
-    merge_step_message, plan_configurator_load_step, plan_edt_export_step,
-    plan_generated_designer_load_step, push_build_step, remove_storage_path, StepCommit, StepPlan,
+    attach_failed_plan_receipt, attach_failed_receipt, build_designer_dsl, build_ibcmd_dsl,
+    commit_step_state, deferred_interruption_warning, extension_name, fail_from_source_set_index,
+    interruption_before_safe_point, map_ibcmd_error, merge_step_message,
+    plan_configurator_load_step, plan_edt_export_step, plan_generated_designer_load_step,
+    push_build_step, push_build_step_with_receipt, receipt_after_success, remove_storage_path,
+    PlannedReceipt, StepCommit, StepPlan,
 };
 
 #[cfg(test)]
@@ -49,6 +58,57 @@ const SUPPORTED_DESIGNER_BUILD_ERROR: &str =
     "build currently supports only builder=DESIGNER or IBCMD with format=DESIGNER";
 const SUPPORTED_EDT_BUILD_ERROR: &str =
     "build with format=EDT currently supports only builder=DESIGNER or IBCMD";
+
+#[derive(Debug, Clone)]
+enum DesignerCdfiPlan {
+    ForcedUnseeded,
+    Seeded(ValidatedCdfi),
+    IbcmdNormal,
+    IbcmdFull,
+}
+
+impl DesignerCdfiPlan {
+    const fn forces_full_rebuild(&self) -> bool {
+        matches!(self, Self::ForcedUnseeded | Self::IbcmdFull)
+    }
+}
+
+fn resolve_designer_cdfi_plan(
+    context: &SourceSetContext,
+    explicit_full_rebuild: bool,
+) -> Result<DesignerCdfiPlan, AppError> {
+    let state_lock =
+        lock_designer_state(context).map_err(|error| AppError::Runtime(error.to_string()))?;
+    recover_designer_state_with_lock(context, &state_lock)
+        .map_err(|error| AppError::Runtime(error.to_string()))?;
+    cleanup_orphan_designer_transactions(context, &state_lock)
+        .map_err(|error| AppError::Runtime(error.to_string()))?;
+    if explicit_full_rebuild {
+        return Ok(DesignerCdfiPlan::ForcedUnseeded);
+    }
+    if designer_full_rebuild_required(context)
+        .map_err(|error| AppError::Runtime(error.to_string()))?
+    {
+        debug!(
+            source_set = context.name(),
+            "previous Designer result was ambiguous; forcing an unseeded full load"
+        );
+        return Ok(DesignerCdfiPlan::ForcedUnseeded);
+    }
+    match inspect_private_cdfi(&context.private_cdfi_path())
+        .map_err(|error| AppError::Runtime(error.to_string()))?
+    {
+        PrivateCdfiState::Valid(cdfi) => Ok(DesignerCdfiPlan::Seeded(cdfi)),
+        PrivateCdfiState::Missing => Ok(DesignerCdfiPlan::ForcedUnseeded),
+        PrivateCdfiState::Corrupt(reason) => {
+            debug!(
+                source_set = context.name(),
+                reason, "private CDFI is invalid; forcing an unseeded full Designer load"
+            );
+            Ok(DesignerCdfiPlan::ForcedUnseeded)
+        }
+    }
+}
 
 pub fn execute(
     context: &ExecutionContext,
@@ -428,6 +488,7 @@ fn execute_source_set_step(
     step_index: usize,
     partial_paths: Option<&[PathBuf]>,
     commit: &StepCommit,
+    cdfi_plan: &DesignerCdfiPlan,
 ) -> Result<Vec<String>, AppError> {
     if let Some(error) = interruption_before_safe_point(
         context,
@@ -452,6 +513,42 @@ fn execute_source_set_step(
             TimelineStageStatus::Running,
         );
     }
+    let state_lock = lock_designer_state(commit_context)
+        .map_err(|error| AppError::Runtime(error.to_string()))?;
+    recover_designer_state_with_lock(commit_context, &state_lock)
+        .map_err(|error| AppError::Runtime(error.to_string()))?;
+    if let DesignerCdfiPlan::Seeded(expected) = cdfi_plan {
+        let current = inspect_private_cdfi(&commit_context.private_cdfi_path())
+            .map_err(|error| AppError::Runtime(error.to_string()))?;
+        if !matches!(current, PrivateCdfiState::Valid(ref actual) if actual.bytes() == expected.bytes())
+        {
+            return Err(AppError::Runtime(format!(
+                "private CDFI changed before Designer staging for source-set '{}'",
+                commit_context.name()
+            )));
+        }
+    }
+    cleanup_orphan_designer_transactions(commit_context, &state_lock)
+        .map_err(|error| AppError::Runtime(error.to_string()))?;
+    let cdfi_seed = match cdfi_plan {
+        DesignerCdfiPlan::ForcedUnseeded => CdfiSeed::None,
+        DesignerCdfiPlan::Seeded(cdfi) => CdfiSeed::Validated(cdfi),
+        DesignerCdfiPlan::IbcmdNormal | DesignerCdfiPlan::IbcmdFull => {
+            return Err(AppError::Runtime(
+                "IBCMD CDFI plan cannot execute a Designer load".to_owned(),
+            ));
+        }
+    };
+    let source_transaction = DesignerSourceTransaction::create(
+        load_context.path(),
+        load_context.excluded_roots(),
+        &commit_context.transactions_dir(),
+        cdfi_seed,
+    )
+    .map_err(|error| AppError::Runtime(error.to_string()))?;
+    source_transaction
+        .verify_snapshot(commit.prepared_state())
+        .map_err(|error| AppError::Runtime(error.to_string()))?;
     let load_result = if let Some(paths) = partial_paths {
         let list_file = partial_list_file(&config.work_path).map_err(|error| {
             AppError::Runtime(format!("failed to create partial list file: {error}"))
@@ -473,8 +570,16 @@ fn execute_source_set_step(
                 return Err(attach_partial_load_list_path(error, partial_list));
             }
         };
+        if let Some(error) = interruption_before_safe_point(
+            context,
+            format!("Designer load for source-set '{}'", source_set.name),
+        ) {
+            return Err(error);
+        }
+        require_designer_full_rebuild(commit_context)
+            .map_err(|error| AppError::Runtime(error.to_string()))?;
         let load_result = designer_dsl.load_config_from_files_partial(
-            load_context.path(),
+            source_transaction.load_root(),
             list_file.path(),
             extension_name(source_set),
         );
@@ -495,7 +600,7 @@ fn execute_source_set_step(
             }
         }
     } else {
-        build_designer_dsl(
+        let designer_dsl = build_designer_dsl(
             context,
             config,
             binary,
@@ -504,9 +609,18 @@ fn execute_source_set_step(
             step_index,
             "load",
             InterruptionSafetyClass::CriticalNonAbortable,
-        )?
-        .load_config_from_files_full(load_context.path(), extension_name(source_set))
-        .map_err(AppError::from)?
+        )?;
+        if let Some(error) = interruption_before_safe_point(
+            context,
+            format!("Designer load for source-set '{}'", source_set.name),
+        ) {
+            return Err(error);
+        }
+        require_designer_full_rebuild(commit_context)
+            .map_err(|error| AppError::Runtime(error.to_string()))?;
+        designer_dsl
+            .load_config_from_files_full(source_transaction.load_root(), extension_name(source_set))
+            .map_err(AppError::from)?
     };
     ensure_platform_success("load", source_set, &load_result)?;
 
@@ -541,7 +655,17 @@ fn execute_source_set_step(
     .map_err(AppError::from)?;
     ensure_platform_success("update_db_cfg", source_set, &update_result)?;
 
-    commit_step_state(source_set, commit_context, &config.work_path, commit)?;
+    let prepared = commit.prepared_state();
+    commit_designer_state_with_lock(
+        commit_context,
+        &state_lock,
+        prepared,
+        &source_transaction.load_root().join("ConfigDumpInfo.xml"),
+    )
+    .map_err(|error| AppError::Runtime(error.to_string()))?;
+    source_transaction
+        .close()
+        .map_err(|error| AppError::Runtime(error.to_string()))?;
 
     Ok([
         deferred_interruption_warning("load", &load_result),
@@ -688,7 +812,7 @@ fn execute_source_set_step_ibcmd(
         .map_err(map_ibcmd_error)?;
     ensure_platform_success("apply", source_set, &apply_result)?;
 
-    commit_step_state(source_set, commit_context, &config.work_path, commit)?;
+    commit_step_state(source_set, commit_context, commit)?;
 
     Ok([
         deferred_interruption_warning("ibcmd_import", &load_result),
@@ -701,7 +825,11 @@ fn execute_source_set_step_ibcmd(
 
 #[cfg(test)]
 mod tests {
+    use super::helpers::{
+        commit_step_state, plan_configurator_load_step, receipt_after_success, StepPlan,
+    };
     use super::{run_build, BUILD_COMMAND};
+    use crate::change_detection::analyzer::{self, AnalysisOutcome};
     use crate::change_detection::hash_storage::{HashStorage, FILES_MTIME};
     use crate::change_detection::source_sets::SourceSetsService;
     use crate::config::model::{
@@ -710,7 +838,6 @@ mod tests {
         ToolExtensionInput, ToolExtensionSourceConfig, ToolsConfig,
     };
     use crate::domain::build::BuildMode;
-    use crate::domain::source_set::SourceSetContext;
     use crate::use_cases::context::{CommandName, ExecutionContext};
     use crate::use_cases::request::BuildRequest as BuildArgs;
     use crate::use_cases::result::UseCaseErrorKind;
@@ -742,7 +869,7 @@ mod tests {
             })
             .unwrap_or_default();
         let body = format!(
-            "args=\"$*\"\nout=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"/Out\" ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$out\" ]; then printf 'designer log for %s\\n' \"$args\" > \"$out\"; fi\nprintf '%s\\n' \"$args\" >> \"{}\"\n{}\nexit 0",
+            "args=\"$*\"\nout=\"\"\nload_root=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"/Out\" ]; then out=\"$arg\"; fi\n  if [ \"$prev\" = \"/LoadConfigFromFiles\" ]; then load_root=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$out\" ]; then printf 'designer log for %s\\n' \"$args\" > \"$out\"; fi\nseeded=no\nif [ -n \"$load_root\" ] && [ -f \"$load_root/ConfigDumpInfo.xml\" ]; then seeded=yes; fi\nprintf '%s seeded=%s\\n' \"$args\" \"$seeded\" >> \"{}\"\n{}\nif [ -n \"$load_root\" ]; then printf '%s\\n' '<ConfigDumpInfo version=\"2.17\"><Metadata id=\"fake-id\" configVersion=\"1\"/></ConfigDumpInfo>' > \"$load_root/ConfigDumpInfo.xml\"; fi\nexit 0",
             calls_log.display(),
             pattern_branch
         );
@@ -796,6 +923,20 @@ mod tests {
             fs::create_dir_all(parent).expect("create dirs");
         }
         fs::write(path, format!("#!/bin/sh\n{body}\n")).expect("write script");
+        make_executable(path);
+    }
+
+    #[cfg(unix)]
+    fn write_delayed_edt_script(path: &Path, calls_log: &Path) {
+        let body = format!(
+            "args=\"$*\"\nproject=\"\"\ntarget=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"--project-name\" ]; then project=\"$arg\"; fi\n  if [ \"$prev\" = \"--configuration-files\" ]; then target=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$target\" ]; then mkdir -p \"$target\"; printf 'delayed export from %s\\n' \"$project\" > \"$target/exported.txt\"; printf '<Configuration />\\n' > \"$target/Configuration.xml\"; fi\nprintf '%s\\n' \"$args\" >> \"{}\"\nsleep 0.15\nexit 0",
+            calls_log.display()
+        );
+
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create dirs");
+        }
+        fs::write(path, format!("#!/bin/sh\n{body}\n")).expect("write delayed EDT script");
         make_executable(path);
     }
 
@@ -980,6 +1121,31 @@ mod tests {
         }
     }
 
+    #[test]
+    fn malformed_designer_connection_returns_structured_validation_failure_without_unwinding() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = build_config(
+            dir.path(),
+            &dir.path().join("work"),
+            &dir.path().join("1cv8"),
+            20,
+            SourceFormat::Designer,
+            BuilderBackend::Designer,
+        );
+        config.infobase.connection = "/Unsupported secret-value".to_owned();
+
+        let result = std::panic::catch_unwind(|| run_build(&config, &build_args(false)));
+
+        assert!(result.is_ok(), "build boundary must not unwind");
+        let failure = result
+            .expect("no unwind")
+            .expect_err("malformed connection must fail");
+        assert_eq!(failure.error.kind(), UseCaseErrorKind::Validation);
+        let payload = failure.payload.expect("structured build payload");
+        assert!(!payload.ok);
+        assert!(payload.steps.is_empty());
+    }
+
     #[cfg(unix)]
     #[test]
     fn execute_build_honors_interruption_before_load_safe_point() {
@@ -1015,6 +1181,16 @@ mod tests {
             .error
             .message()
             .contains("before entering build load for source-set 'main' safe point"));
+        let payload = failure.payload.expect("cancelled build payload");
+        let receipt = serde_json::to_value(&payload.steps[0].receipt).expect("receipt");
+        assert_eq!(receipt["status"], "failed");
+        assert!(!receipt["requested"]
+            .as_array()
+            .expect("requested")
+            .is_empty());
+        assert_eq!(receipt["processed"], serde_json::json!([]));
+        assert_eq!(receipt["skipped"], serde_json::json!([]));
+        assert_eq!(receipt["conflicted"], serde_json::json!([]));
         assert!(
             !calls_log.exists()
                 || fs::read_to_string(&calls_log)
@@ -1077,6 +1253,14 @@ mod tests {
             .error
             .message()
             .contains("before entering ibcmd apply for source-set 'main' safe point"));
+        let payload = failure.payload.expect("cancelled ibcmd payload");
+        let receipt = serde_json::to_value(&payload.steps[0].receipt).expect("receipt");
+        assert_eq!(receipt["status"], "failed");
+        assert!(!receipt["requested"]
+            .as_array()
+            .expect("requested")
+            .is_empty());
+        assert_eq!(receipt["processed"], serde_json::json!([]));
         let calls = fs::read_to_string(&calls_log).expect("calls");
         assert!(calls.contains("config import"));
         assert!(!calls.contains("config apply"));
@@ -1265,6 +1449,16 @@ mod tests {
         let export_root = &export_roots[0];
 
         assert!(result.ok);
+        let receipt = serde_json::to_value(&result.steps[0].receipt).expect("receipt");
+        assert_eq!(receipt["status"], "applied");
+        assert!(!receipt["requested"]
+            .as_array()
+            .expect("requested")
+            .is_empty());
+        assert!(!receipt["processed"]
+            .as_array()
+            .expect("processed")
+            .is_empty());
         assert!(result.steps.iter().any(|step| {
             step.source_set == "processors" && matches!(step.mode, BuildMode::EdtExport) && step.ok
         }));
@@ -1273,29 +1467,38 @@ mod tests {
     }
 
     fn prime_snapshots(config: &AppConfig) {
-        let service = SourceSetsService::new(config);
-        for context in service.designer_contexts() {
-            crate::change_detection::analyzer::rescan_and_commit_full(&context, &config.work_path)
+        let service = SourceSetsService::new(config).expect("service");
+        for context in service.designer_contexts().expect("contexts") {
+            crate::change_detection::analyzer::rescan_and_commit_full(&context)
                 .expect("prime snapshot");
+            if let Some(parent) = context.private_cdfi_path().parent() {
+                fs::create_dir_all(parent).expect("private state dir");
+            }
+            fs::write(
+                context.private_cdfi_path(),
+                r#"<ConfigDumpInfo version="2.17"><Metadata id="prime-id" configVersion="1"/></ConfigDumpInfo>"#,
+            )
+            .expect("prime private CDFI");
         }
     }
 
     fn prime_edt_snapshots(config: &AppConfig) {
-        let service = SourceSetsService::new(config);
-        for context in service.edt_contexts() {
-            crate::change_detection::analyzer::rescan_and_commit_full(&context, &config.work_path)
+        let service = SourceSetsService::new(config).expect("service");
+        for context in service.edt_contexts().expect("contexts") {
+            crate::change_detection::analyzer::rescan_and_commit_full(&context)
                 .expect("prime edt snapshot");
         }
     }
 
     fn storage_generation(config: &AppConfig, source_set_name: &str) -> u64 {
-        let service = SourceSetsService::new(config);
+        let service = SourceSetsService::new(config).expect("service");
         let context = service
             .designer_contexts()
+            .expect("contexts")
             .into_iter()
             .find(|context| context.name() == source_set_name)
             .expect("context");
-        HashStorage::new(context.storage_path(&config.work_path))
+        HashStorage::new(context.storage_path())
             .load_snapshot()
             .expect("snapshot")
             .generation
@@ -1318,16 +1521,25 @@ mod tests {
         source_path: &Path,
         extension_name: &str,
     ) -> PathBuf {
-        let context = SourceSetContext::new(
-            format!("tool:{extension_name}"),
-            source_path.to_path_buf(),
-            format!("tool-{extension_name}-source"),
-        );
-        context.storage_path(&config.work_path)
+        let extension = config
+            .tools
+            .client_mcp
+            .extension
+            .as_ref()
+            .filter(|extension| extension.name == extension_name)
+            .expect("configured tool extension");
+        let source = extension.source().expect("source tool extension");
+        let context = crate::use_cases::tool_extension::tool_extension_source_context(
+            config, extension, source,
+        )
+        .expect("tool extension context");
+        assert_eq!(context.path(), source_path);
+        context.storage_path()
     }
 
     fn write_recoverable_tool_extension_storage(path: &Path) {
         remove_file_if_exists(path);
+        std::fs::create_dir_all(path.parent().expect("storage parent")).expect("storage parent");
         let db = redb::Database::create(path).expect("create recoverable storage");
         let tx = db.begin_write().expect("begin recoverable storage write");
         {
@@ -1338,16 +1550,222 @@ mod tests {
     }
 
     fn edt_storage_generation(config: &AppConfig, source_set_name: &str) -> u64 {
-        let service = SourceSetsService::new(config);
+        let service = SourceSetsService::new(config).expect("service");
         let context = service
             .edt_contexts()
+            .expect("contexts")
             .into_iter()
             .find(|context| context.name() == source_set_name)
             .expect("edt context");
-        HashStorage::new(context.storage_path(&config.work_path))
+        HashStorage::new(context.storage_path())
             .load_snapshot()
             .expect("snapshot")
             .generation
+    }
+
+    fn runtime_storage_paths(config: &AppConfig) -> Vec<PathBuf> {
+        let service = SourceSetsService::new(config).expect("service");
+        let mut paths = service
+            .designer_contexts()
+            .expect("designer contexts")
+            .into_iter()
+            .chain(service.edt_contexts().expect("EDT contexts"))
+            .map(|context| context.storage_path())
+            .collect::<Vec<_>>();
+        paths.sort();
+        paths
+    }
+
+    fn storage_generations(paths: &[PathBuf]) -> Vec<u64> {
+        paths
+            .iter()
+            .map(|path| {
+                HashStorage::new(path.clone())
+                    .current_generation()
+                    .expect("runtime-state generation")
+            })
+            .collect()
+    }
+
+    fn assert_source_set_skipped(result: &crate::domain::build::BuildResult) {
+        let source_steps = result
+            .steps
+            .iter()
+            .filter(|step| step.source_set == "main")
+            .collect::<Vec<_>>();
+        assert!(!source_steps.is_empty(), "main source-set must have steps");
+        assert!(source_steps
+            .iter()
+            .all(|step| step.ok && matches!(step.mode, BuildMode::Skipped)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn per_infobase_lifecycle_isolated_for_all_format_backend_pairs() {
+        for (format, backend) in [
+            (SourceFormat::Designer, BuilderBackend::Designer),
+            (SourceFormat::Designer, BuilderBackend::Ibcmd),
+            (SourceFormat::Edt, BuilderBackend::Designer),
+            (SourceFormat::Edt, BuilderBackend::Ibcmd),
+        ] {
+            let dir = tempdir().expect("tempdir");
+            let base = dir.path().join("base");
+            let work = dir.path().join("work");
+            let designer = dir.path().join("platform").join("bin").join("1cv8");
+            let ibcmd = dir.path().join("ibcmd");
+            let edt = dir.path().join("edt").join("1cedtcli");
+            let platform_calls = dir.path().join("platform-calls.log");
+            let edt_calls = dir.path().join("edt-calls.log");
+            create_source_tree(&base);
+            write_designer_script(&designer, &platform_calls, None);
+            write_ibcmd_script(&ibcmd, &platform_calls, None);
+            write_edt_script(&edt, &edt_calls, None);
+            let platform_path = match backend {
+                BuilderBackend::Designer => dir.path().join("platform"),
+                BuilderBackend::Ibcmd => ibcmd.clone(),
+            };
+            let mut config_a = match format {
+                SourceFormat::Designer => {
+                    build_config(&base, &work, &platform_path, 20, format, backend)
+                }
+                SourceFormat::Edt => {
+                    let mut config = build_edt_config(&base, &work, &platform_path, &edt);
+                    config.builder = backend;
+                    config
+                }
+            };
+            config_a.source_sets.truncate(1);
+            config_a.infobase = crate::config::model::InfobaseConfig::file(format!(
+                "File={}",
+                dir.path().join("ib-a").display()
+            ));
+            let mut config_b = config_a.clone();
+            config_b.infobase = crate::config::model::InfobaseConfig::file(format!(
+                "File={}",
+                dir.path().join("ib-b").display()
+            ));
+
+            let first_a = run_build(&config_a, &build_args(false)).expect("A bootstrap build");
+            assert!(first_a.ok);
+            assert!(first_a.steps.iter().any(|step| {
+                step.source_set == "main" && step.ok && matches!(step.mode, BuildMode::Full)
+            }));
+            assert_source_set_skipped(
+                &run_build(&config_a, &build_args(false)).expect("A repeat skip"),
+            );
+            let a_paths = runtime_storage_paths(&config_a);
+            let a_generations = storage_generations(&a_paths);
+
+            let first_b = run_build(&config_b, &build_args(false)).expect("B bootstrap build");
+            assert!(first_b.steps.iter().any(|step| {
+                step.source_set == "main" && step.ok && matches!(step.mode, BuildMode::Full)
+            }));
+            let b_paths = runtime_storage_paths(&config_b);
+            assert!(a_paths.iter().all(|path| !b_paths.contains(path)));
+            assert_eq!(storage_generations(&a_paths), a_generations);
+
+            assert_source_set_skipped(
+                &run_build(&config_a, &build_args(false)).expect("A remains skipped after B"),
+            );
+            let restarted_a = config_a.clone();
+            drop(config_a);
+            assert_source_set_skipped(
+                &run_build(&restarted_a, &build_args(false)).expect("A restart skip"),
+            );
+            assert_eq!(storage_generations(&a_paths), a_generations);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn legacy_hash_storages_are_never_read_or_mutated() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let platform = dir.path().join("platform").join("bin").join("1cv8");
+        let edt = dir.path().join("edt").join("1cedtcli");
+        let designer_calls = dir.path().join("designer-calls.log");
+        let edt_calls = dir.path().join("edt-calls.log");
+        let tool_source = base.join("tool-client-mcp");
+        create_source_tree(&base);
+        create_edt_tool_extension_source(&tool_source);
+        write_designer_script(&platform, &designer_calls, None);
+        write_edt_script(&edt, &edt_calls, None);
+        let mut config = build_edt_config(&base, &work, &dir.path().join("platform"), &edt);
+        config.source_sets.truncate(1);
+        config.tools.client_mcp.extension = Some(ToolExtensionConfig {
+            name: "client_mcp".to_owned(),
+            input: ToolExtensionInput::Source(ToolExtensionSourceConfig {
+                path: PathBuf::from("tool-client-mcp"),
+                format: Some(SourceFormat::Edt),
+            }),
+        });
+        let legacy_root = work.join("hash-storages");
+        fs::create_dir_all(&legacy_root).expect("legacy root");
+        let sentinels = [
+            ("designer-main.redb", b"legacy designer sentinel".as_slice()),
+            ("edt-main.redb", b"legacy EDT sentinel".as_slice()),
+            (
+                "tool-client_mcp-source.redb",
+                b"legacy tool sentinel".as_slice(),
+            ),
+        ];
+        for (name, bytes) in sentinels {
+            fs::write(legacy_root.join(name), bytes).expect("legacy sentinel");
+        }
+
+        let first = run_build(&config, &build_args(false)).expect("new-layout bootstrap");
+        assert!(first.steps.iter().any(|step| {
+            step.source_set == "main" && step.ok && matches!(step.mode, BuildMode::Full)
+        }));
+        let repeat = run_build(&config, &build_args(false)).expect("new-layout repeat");
+        assert_source_set_skipped(&repeat);
+        assert!(repeat.steps.iter().any(|step| {
+            step.source_set == "tool:client_mcp"
+                && step.ok
+                && matches!(step.mode, BuildMode::Skipped)
+        }));
+        let tool_a_path = tool_extension_storage_path(&config, &tool_source, "client_mcp");
+        let tool_a_generation = HashStorage::new(tool_a_path.clone())
+            .current_generation()
+            .expect("A tool generation");
+        let mut config_b = config.clone();
+        config_b.infobase = crate::config::model::InfobaseConfig::file(format!(
+            "File={}",
+            dir.path().join("legacy-test-ib-b").display()
+        ));
+        let first_b = run_build(&config_b, &build_args(false)).expect("B new-layout bootstrap");
+        assert!(first_b.steps.iter().any(|step| {
+            step.source_set == "tool:client_mcp"
+                && step.ok
+                && !matches!(step.mode, BuildMode::Skipped)
+        }));
+        let tool_b_path = tool_extension_storage_path(&config_b, &tool_source, "client_mcp");
+        assert_ne!(tool_a_path, tool_b_path);
+        assert_eq!(
+            HashStorage::new(tool_a_path.clone())
+                .current_generation()
+                .expect("unchanged A tool generation"),
+            tool_a_generation
+        );
+        let after_b = run_build(&config, &build_args(false)).expect("A tool remains skipped");
+        assert!(after_b.steps.iter().any(|step| {
+            step.source_set == "tool:client_mcp"
+                && step.ok
+                && matches!(step.mode, BuildMode::Skipped)
+        }));
+
+        for (name, bytes) in sentinels {
+            assert_eq!(
+                fs::read(legacy_root.join(name)).expect("unchanged sentinel"),
+                bytes
+            );
+        }
+        let mut new_paths = runtime_storage_paths(&config);
+        new_paths.push(tool_a_path);
+        new_paths.push(tool_b_path);
+        assert!(new_paths.iter().all(|path| path.exists()));
+        assert!(new_paths.iter().all(|path| !path.starts_with(&legacy_root)));
     }
 
     #[cfg(unix)]
@@ -1371,6 +1789,16 @@ mod tests {
         let result = run_build(&config, &build_args(true)).expect("build");
 
         assert!(result.ok);
+        let receipt = serde_json::to_value(&result.steps[0].receipt).expect("receipt");
+        assert_eq!(receipt["status"], "applied");
+        assert!(!receipt["requested"]
+            .as_array()
+            .expect("requested")
+            .is_empty());
+        assert!(!receipt["processed"]
+            .as_array()
+            .expect("processed")
+            .is_empty());
         let calls_text = fs::read_to_string(&calls).expect("calls");
         assert!(calls_text.contains("config import"));
         assert!(calls_text.contains("config apply"));
@@ -1467,7 +1895,7 @@ mod tests {
         config.tools.client_mcp.extension = Some(ToolExtensionConfig {
             name: "client_mcp".to_owned(),
             input: ToolExtensionInput::Source(ToolExtensionSourceConfig {
-                path: tool_source,
+                path: PathBuf::from("tool-client-mcp"),
                 format: Some(SourceFormat::Edt),
             }),
         });
@@ -1479,7 +1907,8 @@ mod tests {
         let designer_calls_text = fs::read_to_string(&designer_calls).expect("designer calls");
         assert!(edt_calls_text.contains("--project-name client-mcp-project"));
         assert!(edt_calls_text.contains("tool-extensions/client_mcp"));
-        assert!(designer_calls_text.contains("tool-extensions/client_mcp"));
+        assert!(designer_calls_text.contains("/ib-state/v1/"));
+        assert!(designer_calls_text.contains("/transactions/designer-build-"));
         assert!(designer_calls_text.contains("-Extension client_mcp"));
     }
 
@@ -1593,9 +2022,22 @@ mod tests {
         assert!(second.steps.iter().any(|step| {
             step.source_set == "tool:client_mcp" && matches!(step.mode, BuildMode::Full) && step.ok
         }));
+        let tool_step = second
+            .steps
+            .iter()
+            .find(|step| step.source_set == "tool:client_mcp")
+            .expect("tool step");
+        let receipt = serde_json::to_value(&tool_step.receipt).expect("receipt");
+        assert_eq!(receipt["status"], "applied");
+        assert_eq!(receipt["requested"].as_array().expect("requested").len(), 1);
+        assert!(!receipt["processed"]
+            .as_array()
+            .expect("processed")
+            .is_empty());
         assert!(edt_calls_text.contains("--project-name client-mcp-project"));
         assert!(edt_calls_text.contains("tool-extensions/client_mcp"));
-        assert!(designer_calls_text.contains("tool-extensions/client_mcp"));
+        assert!(designer_calls_text.contains("/ib-state/v1/"));
+        assert!(designer_calls_text.contains("/transactions/designer-build-"));
         assert!(designer_calls_text.contains("-Extension client_mcp"));
         assert_eq!(
             tool_extension_storage_generation(&config, &tool_source, "client_mcp"),
@@ -1642,7 +2084,8 @@ mod tests {
         assert!(rebuild.ok);
         assert!(edt_calls_text.contains("--project-name client-mcp-project"));
         assert!(edt_calls_text.contains("tool-extensions/client_mcp"));
-        assert!(designer_calls_text.contains("tool-extensions/client_mcp"));
+        assert!(designer_calls_text.contains("/ib-state/v1/"));
+        assert!(designer_calls_text.contains("/transactions/designer-build-"));
         assert!(designer_calls_text.contains("-Extension client_mcp"));
         assert_eq!(
             tool_extension_storage_generation(&config, &tool_source, "client_mcp"),
@@ -1701,6 +2144,16 @@ mod tests {
         let failure = run_build(&config, &build_args(false)).expect_err("failed export");
 
         assert!(failure.error.message().contains("tool extension"));
+        let payload = failure.payload.expect("tool failure payload");
+        let tool_step = payload
+            .steps
+            .iter()
+            .find(|step| step.source_set == "tool:client_mcp")
+            .expect("tool step");
+        let receipt = serde_json::to_value(&tool_step.receipt).expect("receipt");
+        assert_eq!(receipt["status"], "failed");
+        assert_eq!(receipt["requested"].as_array().expect("requested").len(), 1);
+        assert_eq!(receipt["processed"], serde_json::json!([]));
         assert_eq!(
             tool_extension_storage_generation(&config, &tool_source, "client_mcp"),
             1
@@ -1962,13 +2415,27 @@ mod tests {
             .steps
             .iter()
             .any(|step| matches!(step.mode, BuildMode::EdtExport) && step.ok));
+        let export_step = result
+            .steps
+            .iter()
+            .find(|step| matches!(step.mode, BuildMode::EdtExport))
+            .expect("export step");
+        let receipt = serde_json::to_value(&export_step.receipt).expect("receipt");
+        assert_eq!(receipt["status"], "applied");
+        assert_eq!(receipt["requested"].as_array().expect("requested").len(), 1);
+        assert!(!receipt["processed"]
+            .as_array()
+            .expect("processed")
+            .is_empty());
         assert!(result.steps.iter().any(|step| {
             step.source_set == "main" && matches!(step.mode, BuildMode::Full) && step.ok
         }));
         assert!(edt_calls_text.contains("export --project-name main"));
         assert!(designer_calls_text.contains("/LoadConfigFromFiles"));
         assert!(!designer_calls_text.contains("-partial"));
-        assert!(designer_calls_text.contains(
+        assert!(designer_calls_text.contains("/ib-state/v1/"));
+        assert!(designer_calls_text.contains("/transactions/designer-build-"));
+        assert!(!designer_calls_text.contains(
             work.join("designer")
                 .join("main")
                 .display()
@@ -2315,25 +2782,59 @@ mod tests {
             .payload
             .expect("build failures should preserve a structured payload");
         let designer_storage_path = SourceSetsService::new(&config)
+            .expect("service")
             .designer_contexts()
+            .expect("contexts")
             .into_iter()
             .find(|context| context.name() == "client_mcp")
             .expect("designer context")
-            .storage_path(&config.work_path);
+            .storage_path();
         let designer_calls_text = fs::read_to_string(&designer_calls).expect("designer calls");
 
         assert!(!result.ok);
         assert!(matches!(result.steps[0].mode, BuildMode::EdtExport));
         assert!(result.steps[0].ok);
-        assert!(result.steps.iter().any(|step| {
-            step.source_set == "client_mcp" && matches!(step.mode, BuildMode::Full) && !step.ok
-        }));
+        let export_receipt =
+            serde_json::to_value(&result.steps[0].receipt).expect("export receipt");
+        assert_eq!(export_receipt["status"], "applied");
+        assert_eq!(
+            export_receipt["requested"]
+                .as_array()
+                .expect("requested")
+                .len(),
+            1
+        );
+        let failed_step = result
+            .steps
+            .iter()
+            .find(|step| {
+                step.source_set == "client_mcp" && matches!(step.mode, BuildMode::Full) && !step.ok
+            })
+            .expect("failed downstream step");
+        let failed_receipt = serde_json::to_value(&failed_step.receipt).expect("failed receipt");
+        assert_eq!(failed_receipt["status"], "failed");
+        assert!(!failed_receipt["requested"]
+            .as_array()
+            .expect("requested")
+            .is_empty());
+        assert_eq!(failed_receipt["processed"], serde_json::json!([]));
         assert!(!result.steps.iter().any(|step| {
             step.source_set == "client_mcp" && matches!(step.mode, BuildMode::Partial { .. })
         }));
         assert!(designer_calls_text.contains("/UpdateDBCfg -Extension client_mcp"));
-        assert_eq!(edt_storage_generation(&config, "client_mcp"), 2);
+        assert_eq!(edt_storage_generation(&config, "client_mcp"), 1);
         assert!(!designer_storage_path.exists());
+
+        write_designer_script(&platform_script, &designer_calls, None);
+        run_build(&config, &build_args(false)).expect("extension retry succeeds");
+        assert_eq!(edt_storage_generation(&config, "client_mcp"), 2);
+        assert_eq!(
+            fs::read_to_string(&edt_calls)
+                .expect("EDT calls")
+                .matches("export --project-name client_mcp")
+                .count(),
+            2
+        );
     }
 
     #[cfg(unix)]
@@ -2440,6 +2941,45 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn edt_snapshot_commits_when_generated_designer_output_is_already_converged() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let platform_script = dir.path().join("platform").join("bin").join("1cv8");
+        let edt_script = dir.path().join("edt").join("1cedtcli");
+        let designer_calls = dir.path().join("designer-calls.log");
+        let edt_calls = dir.path().join("edt-calls.log");
+        create_source_tree(&base);
+        write_designer_script(&platform_script, &designer_calls, None);
+        write_edt_script(&edt_script, &edt_calls, None);
+        let mut config = build_edt_config(&base, &work, &dir.path().join("platform"), &edt_script);
+        config.source_sets.truncate(1);
+        run_build(&config, &build_args(false)).expect("initial build");
+        let generation_before = edt_storage_generation(&config, "main");
+        fs::write(
+            base.join("main")
+                .join("Catalogs.Items")
+                .join("ObjectModule.bsl"),
+            "procedure Test()\n  // EDT-only change with stable export\nendprocedure",
+        )
+        .expect("modify EDT source");
+
+        let result = run_build(&config, &build_args(false)).expect("converged build");
+
+        assert!(result.steps.iter().any(|step| {
+            step.source_set == "main" && step.ok && matches!(step.mode, BuildMode::EdtExport)
+        }));
+        assert!(result.steps.iter().any(|step| {
+            step.source_set == "main" && step.ok && matches!(step.mode, BuildMode::Skipped)
+        }));
+        assert_eq!(
+            edt_storage_generation(&config, "main"),
+            generation_before + 1
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn edt_export_failure_stops_pipeline_before_designer_load() {
         let dir = tempdir().expect("tempdir");
         let base = dir.path().join("base");
@@ -2470,6 +3010,10 @@ mod tests {
         assert!(!result.ok);
         assert!(matches!(result.steps[0].mode, BuildMode::EdtExport));
         assert!(!result.steps[0].ok);
+        let receipt = serde_json::to_value(&result.steps[0].receipt).expect("receipt");
+        assert_eq!(receipt["status"], "failed");
+        assert_eq!(receipt["requested"].as_array().expect("requested").len(), 1);
+        assert_eq!(receipt["processed"], serde_json::json!([]));
         assert!(!designer_calls.exists());
     }
 
@@ -2555,11 +3099,13 @@ mod tests {
             .payload
             .expect("build failures should preserve a structured payload");
         let designer_storage_path = SourceSetsService::new(&config)
+            .expect("service")
             .designer_contexts()
+            .expect("contexts")
             .into_iter()
             .find(|context| context.name() == "main")
             .expect("designer context")
-            .storage_path(&config.work_path);
+            .storage_path();
 
         assert!(!result.ok);
         assert!(matches!(result.steps[0].mode, BuildMode::EdtExport));
@@ -2567,8 +3113,256 @@ mod tests {
         assert!(result.steps.iter().any(|step| {
             step.source_set == "main" && matches!(step.mode, BuildMode::Full) && !step.ok
         }));
-        assert_eq!(edt_storage_generation(&config, "main"), 2);
+        assert_eq!(
+            serde_json::to_value(&result.steps[0].receipt).expect("EDT receipt")["status"],
+            "applied"
+        );
+        let downstream = result
+            .steps
+            .iter()
+            .find(|step| step.source_set == "main" && !step.ok)
+            .expect("failed downstream step");
+        let downstream_receipt =
+            serde_json::to_value(&downstream.receipt).expect("downstream receipt");
+        assert_eq!(downstream_receipt["status"], "failed");
+        assert_eq!(downstream_receipt["processed"], serde_json::json!([]));
+        assert_eq!(edt_storage_generation(&config, "main"), 1);
         assert!(!designer_storage_path.exists());
+
+        write_designer_script(&platform_script, &designer_calls, None);
+        run_build(&config, &build_args(false)).expect("retry succeeds");
+        assert_eq!(edt_storage_generation(&config, "main"), 2);
+        assert_eq!(
+            fs::read_to_string(&edt_calls)
+                .expect("EDT calls")
+                .matches("export --project-name main")
+                .count(),
+            2
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn edt_ibcmd_apply_failure_keeps_edt_snapshot_pending_for_retry() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let ibcmd_script = dir.path().join("ibcmd");
+        let edt_script = dir.path().join("edt").join("1cedtcli");
+        let ibcmd_calls = dir.path().join("ibcmd-calls.log");
+        let edt_calls = dir.path().join("edt-calls.log");
+        create_source_tree(&base);
+        write_ibcmd_script(&ibcmd_script, &ibcmd_calls, Some("config apply"));
+        write_edt_script(&edt_script, &edt_calls, None);
+        let mut config = build_edt_config(&base, &work, &ibcmd_script, &edt_script);
+        config.builder = BuilderBackend::Ibcmd;
+        prime_edt_snapshots(&config);
+        fs::write(
+            base.join("main")
+                .join("Catalogs.Items")
+                .join("ObjectModule.bsl"),
+            "procedure Test()\n  // changed in edt\nendprocedure",
+        )
+        .expect("modify edt main");
+
+        let failure = run_build(&config, &build_args(false)).expect_err("apply must fail");
+        let result = failure.payload.expect("structured failure");
+
+        assert_eq!(edt_storage_generation(&config, "main"), 1);
+        assert_eq!(
+            serde_json::to_value(&result.steps[0].receipt).expect("EDT receipt")["status"],
+            "applied"
+        );
+        let downstream = result
+            .steps
+            .iter()
+            .find(|step| step.source_set == "main" && !step.ok)
+            .expect("failed IBCMD step");
+        let downstream_receipt = serde_json::to_value(&downstream.receipt).expect("IBCMD receipt");
+        assert_eq!(downstream_receipt["status"], "failed");
+        assert_eq!(downstream_receipt["processed"], serde_json::json!([]));
+        write_ibcmd_script(&ibcmd_script, &ibcmd_calls, None);
+        run_build(&config, &build_args(false)).expect("retry succeeds");
+        assert_eq!(edt_storage_generation(&config, "main"), 2);
+        assert_eq!(
+            fs::read_to_string(&edt_calls)
+                .expect("EDT calls")
+                .matches("export --project-name main")
+                .count(),
+            2
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_after_edt_export_keeps_snapshot_pending_for_retry() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let ibcmd_script = dir.path().join("ibcmd");
+        let edt_script = dir.path().join("edt").join("1cedtcli");
+        let ibcmd_calls = dir.path().join("ibcmd-calls.log");
+        let edt_calls = dir.path().join("edt-calls.log");
+        create_source_tree(&base);
+        if let Some(parent) = ibcmd_script.parent() {
+            fs::create_dir_all(parent).expect("create ibcmd dir");
+        }
+        fs::write(
+            &ibcmd_script,
+            format!(
+                "#!/bin/sh\nargs=\"$*\"\nprintf '%s\\n' \"$args\" >> \"{}\"\n\
+                 if printf '%s' \"$args\" | grep -F -q -- 'config import'; then sleep 0.15; fi\n\
+                 exit 0\n",
+                ibcmd_calls.display()
+            ),
+        )
+        .expect("write delayed ibcmd script");
+        make_executable(&ibcmd_script);
+        write_edt_script(&edt_script, &edt_calls, None);
+        let mut config = build_edt_config(&base, &work, &ibcmd_script, &edt_script);
+        config.builder = BuilderBackend::Ibcmd;
+        config.source_sets.truncate(1);
+        prime_edt_snapshots(&config);
+        fs::write(
+            base.join("main")
+                .join("Catalogs.Items")
+                .join("ObjectModule.bsl"),
+            "procedure Test()\n  // cancel after export\nendprocedure",
+        )
+        .expect("modify EDT source");
+        let cancellation = CancellationToken::new();
+        let delayed_cancel = cancellation.clone();
+        let import_marker = ibcmd_calls.clone();
+        let cancel_thread = thread::spawn(move || {
+            for _ in 0..4_000 {
+                if import_marker.exists()
+                    && fs::read_to_string(&import_marker)
+                        .expect("IBCMD calls")
+                        .contains("config import")
+                {
+                    delayed_cancel.cancel();
+                    return;
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+            panic!("IBCMD import marker was not observed");
+        });
+
+        let failure = super::execute(
+            &ExecutionContext::cli(CommandName::Build).with_cancellation(cancellation),
+            &config,
+            &build_args(false),
+        )
+        .expect_err("build must stop before IBCMD apply");
+        cancel_thread.join().expect("cancel thread");
+        let result = failure.payload.expect("structured cancellation failure");
+
+        assert!(failure
+            .error
+            .message()
+            .contains("before entering ibcmd apply for source-set 'main' safe point"));
+        assert_eq!(edt_storage_generation(&config, "main"), 1);
+        assert_eq!(
+            serde_json::to_value(&result.steps[0].receipt).expect("EDT receipt")["status"],
+            "applied"
+        );
+        let downstream = result.steps.last().expect("failed IBCMD step");
+        let downstream_receipt = serde_json::to_value(&downstream.receipt).expect("IBCMD receipt");
+        assert_eq!(downstream_receipt["status"], "failed");
+        assert_eq!(downstream_receipt["processed"], serde_json::json!([]));
+
+        run_build(&config, &build_args(false)).expect("retry succeeds");
+        assert_eq!(edt_storage_generation(&config, "main"), 2);
+        assert_eq!(
+            fs::read_to_string(&edt_calls)
+                .expect("EDT calls")
+                .matches("export --project-name main")
+                .count(),
+            2
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn deferred_edt_commit_conflicts_use_edt_receipt_after_execute_and_skip() {
+        for generated_output_is_stable in [false, true] {
+            let dir = tempdir().expect("tempdir");
+            let base = dir.path().join("base");
+            let work = dir.path().join("work");
+            let platform_script = dir.path().join("platform").join("bin").join("1cv8");
+            let edt_script = dir.path().join("edt").join("1cedtcli");
+            let designer_calls = dir.path().join("designer-calls.log");
+            let edt_calls = dir.path().join("edt-calls.log");
+            create_source_tree(&base);
+            write_designer_script(&platform_script, &designer_calls, None);
+            if generated_output_is_stable {
+                write_delayed_edt_script(&edt_script, &edt_calls);
+            } else {
+                write_edt_script(&edt_script, &edt_calls, None);
+            }
+            let mut config =
+                build_edt_config(&base, &work, &dir.path().join("platform"), &edt_script);
+            config.source_sets.truncate(1);
+            run_build(&config, &build_args(false)).expect("initial build");
+
+            fs::remove_file(&edt_calls).expect("clear EDT calls");
+            if designer_calls.exists() {
+                fs::remove_file(&designer_calls).expect("clear Designer calls");
+            }
+            write_delayed_edt_script(&edt_script, &edt_calls);
+            fs::write(
+                base.join("main")
+                    .join("Catalogs.Items")
+                    .join("ObjectModule.bsl"),
+                "procedure Test()\n  // concurrent EDT commit\nendprocedure",
+            )
+            .expect("modify EDT source");
+            let edt_context = SourceSetsService::new(&config)
+                .expect("service")
+                .edt_contexts()
+                .expect("contexts")
+                .into_iter()
+                .find(|context| context.name() == "main")
+                .expect("EDT context");
+            let concurrent_context = edt_context.clone();
+            let calls_marker = edt_calls.clone();
+            let concurrent_commit = thread::spawn(move || {
+                for _ in 0..4_000 {
+                    if calls_marker.exists() {
+                        analyzer::rescan_and_commit_full(&concurrent_context)
+                            .expect("concurrent EDT commit");
+                        return;
+                    }
+                    thread::sleep(Duration::from_millis(5));
+                }
+                panic!("EDT export marker was not observed");
+            });
+
+            let failure = run_build(&config, &build_args(false))
+                .expect_err("deferred EDT commit must detect concurrent state");
+            concurrent_commit.join().expect("concurrent commit thread");
+            let result = failure.payload.expect("structured failure");
+            let failed_step = result.steps.last().expect("failed EDT commit step");
+            let receipt = serde_json::to_value(&failed_step.receipt).expect("failed EDT receipt");
+
+            assert!(failure
+                .error
+                .message()
+                .contains("concurrent state modification"));
+            assert!(!failed_step.ok);
+            assert!(matches!(failed_step.mode, BuildMode::EdtExport));
+            assert_eq!(receipt["status"], "failed");
+            assert!(!receipt["requested"]
+                .as_array()
+                .expect("requested")
+                .is_empty());
+            assert_eq!(receipt["processed"], serde_json::json!([]));
+            let designer_was_loaded = designer_calls.exists()
+                && fs::read_to_string(&designer_calls)
+                    .expect("Designer calls")
+                    .contains("/LoadConfigFromFiles");
+            assert_eq!(designer_was_loaded, !generated_output_is_stable);
+        }
     }
 
     #[cfg(unix)]
@@ -2604,6 +3398,230 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn designer_build_uses_private_stage_and_preserves_source_cdfi() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let script = dir.path().join("1cv8");
+        let calls = dir.path().join("calls.log");
+        create_source_tree(&base);
+        let source_cdfi = base.join("main/ConfigDumpInfo.xml");
+        fs::write(&source_cdfi, b"user-owned sentinel").expect("source CDFI");
+        let source_before = fs::read(&source_cdfi).expect("source before");
+        write_designer_script(&script, &calls, None);
+        let config = build_config(
+            &base,
+            &work,
+            &script,
+            20,
+            SourceFormat::Designer,
+            BuilderBackend::Designer,
+        );
+        prime_snapshots(&config);
+
+        let result = run_build(&config, &build_args(true)).expect("build");
+        let calls = fs::read_to_string(calls).expect("calls");
+        let main_context = SourceSetsService::new(&config)
+            .expect("service")
+            .designer_contexts()
+            .expect("contexts")
+            .into_iter()
+            .find(|context| context.name() == "main")
+            .expect("main context");
+
+        assert!(result.ok);
+        assert!(calls.contains("/ib-state/v1/"));
+        assert!(calls.contains("/transactions/designer-build-"));
+        assert!(calls.contains("seeded=no"));
+        assert!(!calls.contains(base.join("main").display().to_string().as_str()));
+        assert_eq!(fs::read(source_cdfi).expect("source after"), source_before);
+        assert!(matches!(
+            crate::use_cases::runtime_state::inspect_private_cdfi(
+                &main_context.private_cdfi_path()
+            )
+            .expect("private CDFI"),
+            crate::use_cases::runtime_state::PrivateCdfiState::Valid(_)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_or_corrupt_private_cdfi_forces_full_designer_load() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let script = dir.path().join("1cv8");
+        let calls = dir.path().join("calls.log");
+        create_source_tree(&base);
+        write_designer_script(&script, &calls, None);
+        let config = build_config(
+            &base,
+            &work,
+            &script,
+            20,
+            SourceFormat::Designer,
+            BuilderBackend::Designer,
+        );
+        prime_snapshots(&config);
+        let main_context = SourceSetsService::new(&config)
+            .expect("service")
+            .designer_contexts()
+            .expect("contexts")
+            .into_iter()
+            .find(|context| context.name() == "main")
+            .expect("main context");
+
+        fs::remove_file(main_context.private_cdfi_path()).expect("remove CDFI");
+        let first = run_build(&config, &build_args(false)).expect("missing CDFI build");
+        assert!(matches!(first.steps[0].mode, BuildMode::Full));
+        assert!(!fs::read_to_string(&calls)
+            .expect("first calls")
+            .contains("-partial"));
+
+        fs::write(main_context.private_cdfi_path(), "<broken>").expect("corrupt CDFI");
+        remove_file_if_exists(&calls);
+        let second = run_build(&config, &build_args(false)).expect("corrupt CDFI build");
+        assert!(matches!(second.steps[0].mode, BuildMode::Full));
+        assert!(!fs::read_to_string(calls)
+            .expect("second calls")
+            .contains("-partial"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn seeded_designer_failure_is_not_retried_and_preserves_private_state() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let script = dir.path().join("1cv8");
+        let calls = dir.path().join("calls.log");
+        create_source_tree(&base);
+        write_designer_script(&script, &calls, Some("/LoadConfigFromFiles"));
+        let config = build_config(
+            &base,
+            &work,
+            &script,
+            20,
+            SourceFormat::Designer,
+            BuilderBackend::Designer,
+        );
+        prime_snapshots(&config);
+        let main_context = SourceSetsService::new(&config)
+            .expect("service")
+            .designer_contexts()
+            .expect("contexts")
+            .into_iter()
+            .find(|context| context.name() == "main")
+            .expect("main context");
+        let old_cdfi = fs::read(main_context.private_cdfi_path()).expect("old CDFI");
+        let old_generation = storage_generation(&config, "main");
+        fs::write(base.join("main/Catalogs.Items/ObjectModule.bsl"), "changed")
+            .expect("change source");
+
+        let error = run_build(&config, &build_args(false)).expect_err("load failure");
+        let calls_text = fs::read_to_string(&calls).expect("calls");
+
+        assert!(error.error.message().contains("load"));
+        assert_eq!(calls_text.matches("/LoadConfigFromFiles").count(), 1);
+        assert!(calls_text.contains("-partial"));
+        assert!(calls_text.contains("seeded=yes"));
+        assert_eq!(
+            fs::read(main_context.private_cdfi_path()).expect("preserved CDFI"),
+            old_cdfi
+        );
+        assert_eq!(storage_generation(&config, "main"), old_generation);
+
+        write_designer_script(&script, &calls, None);
+        remove_file_if_exists(&calls);
+        let recovery = run_build(&config, &build_args(false)).expect("safe recovery build");
+        let recovery_calls = fs::read_to_string(calls).expect("recovery calls");
+        assert!(matches!(recovery.steps[0].mode, BuildMode::Full));
+        assert!(recovery_calls.contains("seeded=no"));
+        assert!(!recovery_calls.contains("-partial"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn designer_load_is_not_started_when_in_progress_marker_cannot_be_persisted() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let script = dir.path().join("1cv8");
+        let calls = dir.path().join("calls.log");
+        create_source_tree(&base);
+        write_designer_script(&script, &calls, None);
+        let config = build_config(
+            &base,
+            &work,
+            &script,
+            20,
+            SourceFormat::Designer,
+            BuilderBackend::Designer,
+        );
+        prime_snapshots(&config);
+        let main_context = SourceSetsService::new(&config)
+            .expect("service")
+            .designer_contexts()
+            .expect("contexts")
+            .into_iter()
+            .find(|context| context.name() == "main")
+            .expect("main context");
+        let marker = main_context
+            .transactions_dir()
+            .parent()
+            .expect("state dir")
+            .join("full-rebuild-required");
+        fs::create_dir(&marker).expect("blocking marker directory");
+        fs::write(base.join("main/Catalogs.Items/ObjectModule.bsl"), "changed")
+            .expect("change source");
+        remove_file_if_exists(&calls);
+
+        let _failure = run_build(&config, &build_args(false)).expect_err("marker failure");
+
+        assert!(
+            !calls.exists(),
+            "Designer must not start before marker fsync"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_explicit_full_load_forces_next_normal_load_unseeded() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let script = dir.path().join("1cv8");
+        let calls = dir.path().join("calls.log");
+        create_source_tree(&base);
+        write_designer_script(&script, &calls, Some("/LoadConfigFromFiles"));
+        let config = build_config(
+            &base,
+            &work,
+            &script,
+            20,
+            SourceFormat::Designer,
+            BuilderBackend::Designer,
+        );
+        prime_snapshots(&config);
+        fs::write(base.join("main/Catalogs.Items/ObjectModule.bsl"), "changed")
+            .expect("change source");
+
+        run_build(&config, &build_args(true)).expect_err("explicit full load failure");
+        assert!(fs::read_to_string(&calls)
+            .expect("failed calls")
+            .contains("seeded=no"));
+
+        write_designer_script(&script, &calls, None);
+        remove_file_if_exists(&calls);
+        let recovery = run_build(&config, &build_args(false)).expect("normal recovery");
+        let recovery_calls = fs::read_to_string(&calls).expect("recovery calls");
+        assert!(matches!(recovery.steps[0].mode, BuildMode::Full));
+        assert!(recovery_calls.contains("seeded=no"));
+        assert!(!recovery_calls.contains("-partial"));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn changed_configuration_runs_partial_load_and_commits_state() {
         let dir = tempdir().expect("tempdir");
         let base = dir.path().join("base");
@@ -2635,6 +3653,24 @@ mod tests {
 
         assert!(matches!(result.steps[0].mode, BuildMode::Partial { .. }));
         assert!(result.steps[0].ok);
+        let receipt = serde_json::to_value(&result.steps[0].receipt).expect("receipt");
+        assert_eq!(receipt["status"], "applied");
+        assert_eq!(receipt["requested"].as_array().expect("requested").len(), 1);
+        assert_eq!(
+            receipt["requested"][0]["path"],
+            "Catalogs.Items/ObjectModule.bsl"
+        );
+        assert_ne!(
+            receipt["requested"][0]["preHash"],
+            receipt["requested"][0]["postHash"]
+        );
+        let descriptor = receipt["processed"]
+            .as_array()
+            .expect("processed")
+            .iter()
+            .find(|target| target["path"] == "Catalogs.Items/ObjectModule.xml")
+            .expect("closure descriptor");
+        assert_eq!(descriptor["preHash"], descriptor["postHash"]);
         assert!(calls_text.contains("/LoadConfigFromFiles"));
         assert!(calls_text.contains("-partial"));
         assert!(calls_text.contains("/UpdateDBCfg"));
@@ -2643,6 +3679,103 @@ mod tests {
 
         let rerun = run_build(&config, &build_args(false)).expect("rerun");
         assert!(matches!(rerun.steps[0].mode, BuildMode::Skipped));
+        let skipped = serde_json::to_value(&rerun.steps[0].receipt).expect("receipt");
+        assert_eq!(skipped["status"], "skipped");
+        assert_eq!(skipped["processed"], serde_json::json!([]));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn full_load_receipt_keeps_deleted_target_with_absent_post_hash() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let script = dir.path().join("1cv8");
+        let calls = dir.path().join("calls.log");
+        create_source_tree(&base);
+        write_designer_script(&script, &calls, None);
+        let config = build_config(
+            &base,
+            &work,
+            &script,
+            20,
+            SourceFormat::Designer,
+            BuilderBackend::Designer,
+        );
+        prime_snapshots(&config);
+        fs::remove_file(
+            base.join("main")
+                .join("Catalogs.Items")
+                .join("ObjectModule.bsl"),
+        )
+        .expect("delete module");
+
+        let result = run_build(&config, &build_args(false)).expect("build");
+        let receipt = serde_json::to_value(&result.steps[0].receipt).expect("receipt");
+        let deleted = receipt["processed"]
+            .as_array()
+            .expect("processed")
+            .iter()
+            .find(|target| target["path"] == "Catalogs.Items/ObjectModule.bsl")
+            .expect("deleted target");
+
+        assert!(matches!(result.steps[0].mode, BuildMode::Full));
+        assert!(deleted["preHash"].is_string());
+        assert!(deleted["postHash"].is_null());
+    }
+
+    #[test]
+    fn full_plan_commits_exact_pre_platform_observation_and_detects_later_edit() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path().join("base");
+        let work = dir.path().join("work");
+        let script = dir.path().join("1cv8");
+        create_source_tree(&base);
+        let config = build_config(
+            &base,
+            &work,
+            &script,
+            20,
+            SourceFormat::Designer,
+            BuilderBackend::Designer,
+        );
+        let source_set = &config.source_sets[0];
+        let context = SourceSetsService::new(&config)
+            .expect("service")
+            .designer_contexts()
+            .expect("contexts")
+            .into_iter()
+            .find(|candidate| candidate.name() == source_set.name)
+            .expect("context");
+
+        let plan =
+            plan_configurator_load_step(source_set, &context, true, None, 20).expect("full plan");
+        let receipt = serde_json::to_value(receipt_after_success(&plan)).expect("receipt");
+        let observed = receipt["processed"]
+            .as_array()
+            .expect("processed")
+            .iter()
+            .find(|target| target["path"] == ".project")
+            .expect("project target")["postHash"]
+            .as_str()
+            .expect("post hash")
+            .to_owned();
+
+        fs::write(base.join("main").join(".project"), "edited after planning")
+            .expect("concurrent edit");
+        let StepPlan::Execute { commit, .. } = &plan else {
+            panic!("full plan must execute");
+        };
+        commit_step_state(source_set, &context, commit).expect("commit observation");
+
+        let stored = HashStorage::new(context.storage_path())
+            .load_snapshot()
+            .expect("snapshot");
+        assert_eq!(stored.entries[".project"].hash, observed);
+        assert!(matches!(
+            analyzer::analyze_context(&context).outcome,
+            Ok(AnalysisOutcome::Changes { .. })
+        ));
     }
 
     #[cfg(unix)]
@@ -2826,13 +3959,14 @@ mod tests {
         );
         prime_snapshots(&config);
 
-        let service = SourceSetsService::new(&config);
+        let service = SourceSetsService::new(&config).expect("service");
         let main_context = service
             .designer_contexts()
+            .expect("contexts")
             .into_iter()
             .find(|context| context.name() == "main")
             .expect("main context");
-        fs::write(main_context.storage_path(&config.work_path), "corrupt").expect("corrupt main");
+        fs::write(main_context.storage_path(), "corrupt").expect("corrupt main");
         fs::write(
             base.join("ext").join("CommonModules").join("Module.bsl"),
             "procedure Test()\n  // ext changed\nendprocedure",
@@ -2962,9 +4096,9 @@ mod tests {
         );
         prime_snapshots(&config);
 
-        let service = SourceSetsService::new(&config);
-        for context in service.designer_contexts() {
-            let storage_path = context.storage_path(&config.work_path);
+        let service = SourceSetsService::new(&config).expect("service");
+        for context in service.designer_contexts().expect("contexts") {
+            let storage_path = context.storage_path();
             fs::write(storage_path, "corrupt").expect("corrupt storage");
         }
 
@@ -2999,13 +4133,14 @@ mod tests {
         );
         prime_snapshots(&config);
 
-        let service = SourceSetsService::new(&config);
+        let service = SourceSetsService::new(&config).expect("service");
         let main_context = service
             .designer_contexts()
+            .expect("contexts")
             .into_iter()
             .find(|context| context.name() == "main")
             .expect("main context");
-        let storage_path = main_context.storage_path(&config.work_path);
+        let storage_path = main_context.storage_path();
         std::fs::remove_file(&storage_path).expect("remove storage file");
         std::fs::create_dir_all(&storage_path).expect("replace with directory");
 
@@ -3057,6 +4192,19 @@ mod tests {
 
         assert!(result.steps[0].ok);
         assert!(!result.steps[1].ok);
+        let applied = serde_json::to_value(&result.steps[0].receipt).expect("applied receipt");
+        let failed = serde_json::to_value(&result.steps[1].receipt).expect("failed receipt");
+        assert_eq!(applied["status"], "applied");
+        assert!(!applied["processed"]
+            .as_array()
+            .expect("processed")
+            .is_empty());
+        assert_eq!(failed["status"], "failed");
+        assert!(!failed["requested"]
+            .as_array()
+            .expect("requested")
+            .is_empty());
+        assert_eq!(failed["processed"], serde_json::json!([]));
         assert!(result.steps[1]
             .message
             .as_deref()
@@ -3078,6 +4226,7 @@ mod tests {
                     ok: true,
                     message: Some("forced full rebuild".to_owned()),
                     duration_ms: 1,
+                    receipt: Default::default(),
                 },
                 crate::domain::build::BuildStep {
                     source_set: "ext".to_owned(),
@@ -3085,6 +4234,7 @@ mod tests {
                     ok: false,
                     message: Some("aborted after previous failure".to_owned()),
                     duration_ms: 0,
+                    receipt: Default::default(),
                 },
             ],
             duration_ms: 42,

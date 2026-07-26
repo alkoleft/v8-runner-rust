@@ -8,20 +8,25 @@ sequenceDiagram
     participant Adapter as Адаптер CLI/MCP
     participant UC as Use case сборки
     participant CD as Анализ изменений
+    participant Stage as Private source transaction
     participant PF as Платформенный адаптер
     participant IB as Информационная база 1С
+    participant State as Per-IB runtime state
 
     User->>Adapter: запрос build
     Adapter->>UC: нормализованный запрос
     UC->>CD: определить изменённые source-set
-    CD-->>UC: изменённые файлы и подсказки по режиму
+    CD-->>UC: bootstrap/изменения и подсказки по режиму
     alt Изменений нет
         UC-->>Adapter: skipped/success результат
     else Найдены изменения
-        UC->>PF: выполнить загрузку через Designer или IBCMD
+        UC->>Stage: копировать managed source, исключить source CDFI/symlinks/workPath
+        UC->>Stage: добавить только валидный private CDFI
+        UC->>PF: выполнить загрузку из private staging
         PF->>IB: import/apply изменений
         IB-->>PF: результат платформы
         PF-->>UC: структурированный итог исполнения
+        UC->>State: commit CDFI/baseline/observation generation
         UC-->>Adapter: результат build
     end
 ```
@@ -31,7 +36,8 @@ sequenceDiagram
 - Public CLI/MCP boundary должен владеть workspace lock для canonical `workPath` до dispatch use case.
 - `CONFIGURATION` обрабатывается раньше расширений.
 - Выбор между partial и full строится по анализу изменений и возможностям backend.
-- Состояние сохраняется только после успешного выполнения.
+- Legacy state не мигрируется: отсутствие scoped state или missing/corrupt private CDFI означает full bootstrap, даже для пустого source-set.
+- Platform не получает живое source tree; состояние сохраняется только после успешного pipeline.
 - Для EDT source-set export decision и generated Designer load decision используют разные change-detection contexts.
 
 ### 6.2 Сценарий `test`
@@ -102,18 +108,49 @@ sequenceDiagram
 - Ожидание в очереди, baseline reset/probe и выполнение команды используют один и тот же ограниченный бюджет таймаута.
 - Host policy различается: MCP может отпустить caller после running cancel/timeout и дождаться terminal state асинхронно внутри shared actor, а CLI blocking adapter ждёт terminal cleanup или завершает собственный short-lived manager принудительно перед возвратом.
 
-### 6.6 Full Replacement `dump` / `artifacts` Publication
+### 6.6 `dump` И `artifacts` Publication
+
+`dump` использует отдельный от artifacts контракт:
+
+```mermaid
+sequenceDiagram
+    participant UC as Dump use case
+    participant Shadow as Private shadow
+    participant Source as Project source
+    participant Journal as Source journal
+    participant State as Per-IB state
+
+    UC->>Journal: recover exact generation + transaction token
+    UC->>Shadow: full/incremental/partial platform dump
+    UC->>UC: построить B/S/D plan и revalidate source
+    alt conflict или TOCTOU mismatch
+        UC-->>Source: no writes
+        UC-->>State: no generation advance
+    else conflict-free
+        UC->>Journal: backup + ordered managed-file actions
+        Journal->>Source: publish manifest
+        UC->>State: commit generation с тем же UUID token
+        UC->>Journal: mark state visible exact (generation, token)
+    end
+```
+
+- `B=absent, S=present, D=absent` является conflict: runner не удаляет не принадлежавший baseline локальный файл.
+- Любой conflict блокирует весь source-set; `ConfigDumpInfo.xml` и unmanaged entries не публикуются.
+- Receipt lists являются audit dimensions, не partition: в `applied` одинаковый target может одновременно быть `processed` и `skipped`.
+- Recovery завершает transaction вперёд только при exact generation/token match; чужая transaction с тем же номером generation ведёт к rollback source changes.
+
+Package/external artifacts используют full-replacement staging/backup:
 
 ```mermaid
 sequenceDiagram
     participant User as CLI пользователь
-    participant UC as Use case dump/artifacts
+    participant UC as Use case artifacts
     participant PF as Platform adapter
     participant Stage as Sibling staging path
     participant Target as User target path
     participant Backup as Sibling backup path
 
-    User->>UC: dump/artifacts request
+    User->>UC: artifacts request
     UC->>Stage: подготовить staging рядом с target
     UC->>PF: записать результат в staging
     PF-->>UC: platform result
@@ -137,7 +174,6 @@ sequenceDiagram
 
 - Staging и backup находятся рядом с target, чтобы не переходить границу файловой системы при rename.
 - Orphan cleanup может удалять только stale staging/backup paths с metadata `tool=v8-runner` и matching target identity.
-- `dump incremental` и `dump partial` не получают full replacement guarantee и остаются non-atomic update modes.
 - Publication phase после переноса старого target в backup является filesystem critical phase.
 
 ### 6.7 Command Boundary, Admission и Cancellation

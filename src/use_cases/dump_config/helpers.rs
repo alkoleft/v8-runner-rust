@@ -387,6 +387,7 @@ pub(super) fn empty_result(
         platform_log_path: None,
         duration_ms: started.elapsed().as_millis() as u64,
         message,
+        receipt: crate::domain::sync_receipt::SyncReceipt::empty_failed(),
     }
 }
 

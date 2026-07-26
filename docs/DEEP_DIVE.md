@@ -31,16 +31,18 @@ MCP DTO в одном слое.
 
 `source-set` — минимальная единица оркестрации.
 
-- Для `format=DESIGNER` используется один runtime context `designer-<sourceSetName>`.
+- Для `format=DESIGNER` используется один логический Designer context на source-set.
 - Для `format=EDT` используются два context-а:
-  - `edt-<sourceSetName>` для решения, нужен ли export;
-  - `designer-<sourceSetName>` для решения, что именно грузить в ИБ.
-- Persisted state живёт в `workPath/hash-storages/`.
+  - EDT-source context для решения, нужен ли export;
+  - generated-Designer context для решения, что именно грузить в ИБ.
+- Каждый context изолирован по ИБ и source identity под `workPath/ib-state/v1`.
 - Generated Designer output для EDT flow живёт под `workPath/designer/<sourceSetName>`.
 
 Change detection выполняется on-demand во время build/export/load decision и не требует
 background watcher. `build --source-set <NAME>` ограничивает анализ, export/load decision и
 runtime snapshot commit только указанным source-set.
+Legacy `workPath/hash-storages` намеренно не мигрируется: первое обращение к scoped state,
+включая пустой source-set, является full bootstrap, а не `NoChanges`.
 
 ## Пайплайн `build`
 
@@ -48,8 +50,10 @@ runtime snapshot commit только указанным source-set.
 
 1. Анализ изменений по выбранным `source-set`.
 2. Выбор partial/full path по изменённым файлам.
-3. Загрузка через выбранный backend.
-4. Commit runtime snapshot только после успешного шага.
+3. Копирование managed source в private transaction; source `ConfigDumpInfo.xml`, symlinks и
+   вложенный `workPath` исключаются, валидный private CDFI seed добавляется отдельно.
+4. Загрузка через выбранный backend только из private staging.
+5. Commit CDFI, baseline и source observation одной recoverable generation после успеха.
 
 Для `EDT`:
 
@@ -60,6 +64,8 @@ runtime snapshot commit только указанным source-set.
 
 Пайплайн намеренно не является атомарным across many `source-set`: поздний failure не откатывает
 уже успешные ранние шаги.
+Missing/corrupt private CDFI приводит к full bootstrap. Platform не получает живое source tree,
+поэтому failed/cancelled build не создаёт и не изменяет source `ConfigDumpInfo.xml`.
 
 ## Проверка и тесты
 
@@ -82,7 +88,19 @@ runtime snapshot commit только указанным source-set.
 
 - Для `DESIGNER` может быть full, incremental или partial.
 - Для `IBCMD` object-scoped partial деградирует в incremental.
-- Для `format=EDT` использует internal Designer snapshot, затем EDT import.
+- Любой режим выполняется в private complete shadow; отсутствие matching baseline/private CDFI
+  повышает incremental/partial request до одной full shadow operation.
+- Публикация сравнивает baseline `B`, текущий source `S` и dump `D`; любой conflict или TOCTOU
+  mismatch оставляет весь source-set и private generation неизменными.
+- `B=absent, S=present, D=absent` является conflict, а не разрешением удалить локальный файл.
+- Managed-file journal обеспечивает restart recovery. Forward recovery требует точной пары
+  `(generation, UUID transaction token)`; совпавшая generation другой операции не считается успехом.
+- Для `format=EDT` private platform shadow импортируется в private configured-source shadow до
+  той же B/S/D publication; platform не пишет в project source или `workPath/designer/<name>`.
+- Exact receipt lists — независимые audit dimensions: одинаковый target может быть одновременно
+  `processed` и `skipped`, если он входил в effective platform scope, но merge сохранил/no-op
+  локальный файл. Full сообщает полный managed result, incremental/partial — наблюдаемые записи
+  private shadow.
 
 ### `convert`
 

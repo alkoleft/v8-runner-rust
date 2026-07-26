@@ -112,7 +112,7 @@ Important staging note:
 `build` and `dump` use cases dispatch by `builder`:
 
 - `builder=DESIGNER` uses the existing `DesignerDsl`.
-- `builder=IBCMD` uses `IbcmdDsl` with `config import/apply` for build and `config export` for dump; for EDT build the EDT export step still produces Designer-format files first, and for EDT dump the reverse path first updates an internal Designer snapshot before EDT import/publication.
+- `builder=IBCMD` uses `IbcmdDsl` with `config import/apply` for build and `config export` for dump; for EDT build the EDT export step still produces Designer-format files first, while EDT dump uses private per-IB Designer and configured-source shadows before merge/publication.
 - Builder backends are expected to stay interchangeable for implemented builder scenarios. Functionality added for the Designer builder should also be available through the IBCMD builder, or the gap must be documented explicitly. Future Designer agent mode should be added behind the same use-case contract.
 - Server infobase support is a target contract for all tools; file-only behavior must be documented as a current gap rather than treated as the permanent architecture.
 
@@ -128,10 +128,8 @@ Constraints to keep in mind:
 
 ## Dump And Artifact Publication
 
-Full replacement outputs are published through a staging/backup contract governed by [ADR-0015](spec/decisions/0015-atomarnaya-publikatsiya-dump-artifacts-cherez-staging-backup.md).
-Full dump writes to a sibling staging directory before replacing the resolved target directory.
-Package artifacts write to a sibling staging file before replacing the output file, and external EPF/ERF publication stages the whole output directory before replacing it.
-Incremental and partial dump modes remain direct non-atomic update modes.
+Package and external EPF/ERF artifacts use the sibling staging/backup contract from [ADR-0015](spec/decisions/0015-atomarnaya-publikatsiya-dump-artifacts-cherez-staging-backup.md).
+All dump modes instead execute in private per-IB shadows and publish only managed files through the recoverable manifest transaction from [ADR-0023](spec/decisions/0023-izolirovat-runtime-state-po-infobase-i-ispolzovat-private-shadow.md). A B/S/D conflict publishes nothing; incremental and partial requests are promoted to one full shadow operation when their private baseline is unavailable.
 
 ## Output Flow
 
@@ -153,9 +151,9 @@ Use cases now return transport-neutral payloads or structured failures.
 - `workPath/convert/out/<sourceSetName>/<designer|edt>/` stores default generated convert outputs; `convert --output <dir>` publishes the same converted source-set content under a caller-provided root using source-set path mirror layout.
 - `workPath/temp/partial-lists/` stores partial load and partial dump list files.
 - `workPath/temp/yaxunit/` stores temporary YaXUnit config files.
-- `workPath/hash-storages/` remains reserved for change detection state.
+- `workPath/ib-state/v1/<infobase-fingerprint>/<source-set>-<context-fingerprint>/` stores opaque per-IB change-detection state, private CDFI, baselines and recoverable transactions. Legacy `workPath/hash-storages/` is not migrated or reused.
 - `workPath/designer/<sourceSetName>/` is used by the EDT export/build flow as the generated Designer-format output area for a source-set.
 
-The `source-set` and `workPath` state boundary is formalized in [ADR-0002](spec/decisions/0002-izolirovat-runtime-state-po-source-set-pod-workpath.md): `DESIGNER` format uses one `designer-<sourceSetName>` change-detection context, while `EDT` format uses both `edt-<sourceSetName>` for export decisions and `designer-<sourceSetName>` for load decisions.
+The source/runtime boundary is formalized in [ADR-0023](spec/decisions/0023-izolirovat-runtime-state-po-infobase-i-ispolzovat-private-shadow.md): every configured or generated view has a versioned identity scoped by infobase, source root, purpose, format, backend and logical role. EDT build still has distinct configured and generated Designer contexts, but dump platform/configured shadows live only in private transactions.
 Exclusive command ownership of `workPath` is governed by [ADR-0011](spec/decisions/0011-eksklyuzivnoe-vladenie-workpath-na-vremya-komandy.md).
 On-demand change detection and conservative file-level partial load rules are governed by [ADR-0012](spec/decisions/0012-on-demand-change-detection-i-faylovaya-partial-load-strategiya.md).

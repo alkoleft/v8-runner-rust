@@ -257,13 +257,17 @@ tests:
 
 Корень runtime state:
 
-- `workPath/hash-storages`
+- `workPath/ib-state/v1/<infobase-fingerprint>/<source-set>-<context-fingerprint>`
 - `workPath/logs`
 - `workPath/temp`
 - `workPath/edt-workspace`
 - `workPath/designer`
 
 Если каталога нет, он создаётся автоматически.
+Fingerprints являются opaque и зависят от secret-free identity ИБ и source context; их не
+следует вычислять или редактировать вручную. Legacy `workPath/hash-storages` не мигрируется
+и не переиспользуется. Первое обращение к scoped state выполняет full bootstrap, а не
+интерпретирует отсутствующий snapshot как отсутствие изменений.
 
 ### `execution_timeout`
 
@@ -476,9 +480,9 @@ MCP endpoint и не гарантирует наличие Vanessa tools.
 `tools.client_mcp.extension` не добавляется в `source-set` и не выбирается через `--source-set`.
 `init` импортирует EDT `source` в workspace, `build` подготавливает расширение после project
 source-set build, а `launch mcp` и `launch mcp va` расширение не устанавливают и не обновляют.
-Для `source` build хранит отдельный snapshot под `workPath/hash-storages`: повторный запуск с
-неизменёнными исходниками пропускает export/load, а `build --full-rebuild` принудительно
-обновляет расширение.
+Для `source` build хранит отдельный per-IB/per-source snapshot под `workPath/ib-state/v1`:
+повторный запуск с неизменёнными исходниками пропускает export/load, а первое обращение или
+`build --full-rebuild` выполняет full operation. Legacy snapshot не переиспользуется.
 
 `v8-runner tools download client-mcp` может заполнить этот блок в `v8project.local.yaml`:
 с `--sources` он указывает `source.path` на

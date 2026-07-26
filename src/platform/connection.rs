@@ -1,3 +1,5 @@
+use crate::support::connection_args::split_v8_arg_string;
+
 /// Parsed V8 connection and optional authentication parameters.
 #[derive(Debug, Clone)]
 pub struct V8Connection {
@@ -14,7 +16,7 @@ impl V8Connection {
     pub fn from_connection_string(raw: &str) -> Self {
         let trimmed = raw.trim();
         let connection_args = if trimmed.starts_with('/') || trimmed.starts_with('-') {
-            split_arg_string(trimmed)
+            split_v8_arg_string(trimmed).0
         } else {
             vec!["/IBConnectionString".to_owned(), trimmed.to_owned()]
         };
@@ -76,30 +78,6 @@ fn file_path_from_args(args: &[String]) -> Option<&str> {
     }
 
     None
-}
-
-fn split_arg_string(raw: &str) -> Vec<String> {
-    let mut args = Vec::new();
-    let mut current = String::new();
-    let mut in_quotes = false;
-
-    for ch in raw.chars() {
-        match ch {
-            '"' => in_quotes = !in_quotes,
-            ch if ch.is_whitespace() && !in_quotes => {
-                if !current.is_empty() {
-                    args.push(std::mem::take(&mut current));
-                }
-            }
-            _ => current.push(ch),
-        }
-    }
-
-    if !current.is_empty() {
-        args.push(current);
-    }
-
-    args
 }
 
 #[cfg(test)]

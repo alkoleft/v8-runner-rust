@@ -18,7 +18,7 @@
 - [ADR-0012: On-demand change detection и файловая partial-load стратегия](0012-on-demand-change-detection-i-faylovaya-partial-load-strategiya.md) — `accepted`, `2026-04-20`
 - [ADR-0013: MCP execution admission, timeout/cancellation routing и HTTP session capacity](0013-mcp-execution-admission-timeout-cancellation-routing-i-http-session-capacity.md) — `accepted`, `2026-04-20`
 - [ADR-0014: Единая timeout/cancellation policy для CLI и MCP команд](0014-edinaya-timeout-cancellation-policy-dlya-cli-i-mcp-komand.md) — `accepted`, `2026-04-20`
-- [ADR-0015: Атомарная публикация dump/artifacts через staging/backup](0015-atomarnaya-publikatsiya-dump-artifacts-cherez-staging-backup.md) — `accepted`, `2026-04-21`
+- [ADR-0015: Атомарная публикация dump/artifacts через staging/backup](0015-atomarnaya-publikatsiya-dump-artifacts-cherez-staging-backup.md) — `accepted`, `2026-04-21`; staging/backup для artifacts, dump contract заменён ADR-0023
 - [ADR-0016: Единый `ExecutionOutcome` и pipeline steps для runner-like сценариев](0016-edinyy-executionoutcome-i-pipeline-steps-dlya-runner-like-stsenariev.md) — `accepted`, `2026-04-21`
 - [ADR-0017: `v8project.yaml` / `source-set` как главный конфигурационный контракт](0017-v8project-yaml-source-set-kak-glavnyy-konfiguratsionnyy-kontrakt.md) — `accepted`, `2026-04-20`
 - [ADR-0018: Перенести контракт информационной базы в `infobase`](0018-perenesti-kontrakt-informatsionnoy-bazy-v-infobase.md) — `accepted`, `2026-04-21`
@@ -26,6 +26,7 @@
 - [ADR-0020: Упростить CLI-only `convert` до repo-aware конвертации текущих исходников проекта](0020-dobavit-cli-only-convert-dlya-dvustoronney-konvertatsii-edt-i-designer.md) — `accepted`, `2026-04-22`
 - [ADR-0021: Ввести локальный overlay для `v8project.yaml`](0021-lokalnyy-overlay-config.md) — `accepted`, `2026-05-02`
 - [ADR-0022: Ввести общий механизм подготовки расширений и использовать его для `client_mcp`](0022-universalnyy-mehanizm-podgotovki-rasshireniy-i-client-mcp-extension.md) — `accepted`, `2026-05-02`
+- [ADR-0023: Изолировать runtime state по информационной базе и использовать private shadow](0023-izolirovat-runtime-state-po-infobase-i-ispolzovat-private-shadow.md) — `accepted`, `2026-07-21`; `ib-state/v1`, private build/dump shadows и recoverable manifest publication
 
 ## Правила обновления
 

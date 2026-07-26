@@ -1,3 +1,4 @@
+use crate::domain::sync_receipt::SyncReceipt;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -16,6 +17,8 @@ pub struct DumpResult {
     pub duration_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    #[serde(default)]
+    pub receipt: SyncReceipt,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

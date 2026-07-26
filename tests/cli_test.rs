@@ -60,7 +60,7 @@ fn write_build_script(path: &Path, calls_log: &Path, fail: bool) {
         ""
     };
     let body = format!(
-        "args=\"$*\"\nout=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"/Out\" ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nprintf '%s\\n' \"$args\" >> '{}'\nif [ -n \"$out\" ]; then printf 'build /P secret\\n' > \"$out\"; fi\n{}\nexit 0",
+        "args=\"$*\"\nout=\"\"\nload_root=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"/Out\" ]; then out=\"$arg\"; fi\n  if [ \"$prev\" = \"/LoadConfigFromFiles\" ]; then load_root=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nprintf '%s\\n' \"$args\" >> '{}'\nif [ -n \"$out\" ]; then printf 'build /P secret\\n' > \"$out\"; fi\n{}\nif [ -n \"$load_root\" ]; then printf '%s\\n' '<ConfigDumpInfo version=\"2.17\"><Metadata id=\"fake-id\" configVersion=\"1\"/></ConfigDumpInfo>' > \"$load_root/ConfigDumpInfo.xml\"; fi\nexit 0",
         calls_log.display(),
         fail_branch
     );
@@ -642,6 +642,16 @@ fn test_accepts_explicit_client_mode_for_vanessa_and_yaxunit() {
         5,
         None,
     );
+    let prime = v8_runner_command()
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "build",
+            "--full-rebuild",
+        ])
+        .output()
+        .expect("prime private Designer state");
+    assert!(prime.status.success(), "prime build failed");
     write_script(
         &dir.path().join("platform").join("bin").join("1cv8"),
         &format!(

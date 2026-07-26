@@ -73,7 +73,26 @@ pub async fn execute(
         )));
     }
 
-    let inventory = SourceSetInventory::new(config);
+    let inventory = match SourceSetInventory::new(config) {
+        Ok(inventory) => inventory,
+        Err(error) => {
+            let error = AppError::from(error);
+            let error_message = error.to_string();
+            return Ok(Err(SyntaxExecutionFailure::with_payload(
+                error,
+                failed_result(
+                    "edt",
+                    SyntaxCheckStatus::ToolFailed,
+                    -1,
+                    started,
+                    vec![],
+                    None,
+                    Some(error_message),
+                    None,
+                ),
+            )));
+        }
+    };
     let source_sets = match resolve_edt_source_sets(&inventory, projects) {
         Ok(source_sets) => source_sets,
         Err(error) => {

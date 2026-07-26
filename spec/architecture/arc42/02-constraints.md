@@ -10,11 +10,11 @@
 - Для реализованных сценариев `builder=IBCMD` уже поддерживает file и server ИБ; server path требует полный `infobase.dbms.kind/server/name`, а оставшиеся ограничения считаются gaps, а не целевой нормой.
 - Все инструменты должны проектироваться с целевой поддержкой серверных информационных баз, если соответствующая операция платформы 1С принципиально поддерживает серверное подключение.
 - MCP реализован на `rmcp`, `tokio` и `axum`.
-- Состояние отслеживания изменений хранится в `workPath/hash-storages/*.redb`.
+- Состояние отслеживания изменений хранится в versioned per-IB/per-source layout `workPath/ib-state/v1`; legacy `hash-storages` не мигрируется.
 - `workPath` является owned runtime root; публичные CLI/MCP команды, которые читают или пишут runtime state под ним, должны владеть workspace lock.
 - MCP execution admission и HTTP session capacity являются разными лимитами и не заменяют workspace lock.
 - Публичная поверхность MCP намеренно уже, чем CLI: например, `init` и `extensions` не публикуются как MCP tools.
-- Full replacement `dump` и `artifacts` должны публиковаться через staging/backup рядом с target; incremental/partial dump остаются non-atomic update modes.
+- Все dump-режимы используют private shadow и recoverable managed-file journal; full-replacement artifacts публикуются через staging/backup рядом с target.
 - Единая timeout/cancellation policy для CLI и MCP является целевым контрактом. Текущие implementation gaps фиксируются в ADR-0014 и не должны становиться новой нормой.
 
 ### 2.2 Организационные и продуктовые ограничения

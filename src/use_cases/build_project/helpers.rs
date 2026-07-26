@@ -3,11 +3,11 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::change_detection::analyzer::{self, AnalysisOutcome, PreparedStateUpdate};
-use crate::change_detection::hash_storage::{HashStorage, StorageError};
 use crate::change_detection::partial_load::{self, LoadDecision};
 use crate::config::model::{AppConfig, SourceSetConfig, SourceSetPurpose};
 use crate::domain::build::{BuildMode, BuildResult, BuildStep};
 use crate::domain::source_set::SourceSetContext;
+use crate::domain::sync_receipt::{SyncReceipt, SyncTarget};
 use crate::platform::designer::DesignerDsl;
 use crate::platform::ibcmd::{IbcmdConnection, IbcmdDsl, IbcmdError};
 use crate::platform::process::ProcessRunner;
@@ -26,20 +26,212 @@ pub(super) type AnalysisByName =
 
 pub(super) enum StepCommit {
     Prepared(PreparedStateUpdate),
-    RescanFull { recover_storage: bool },
+    FullObservation(PreparedStateUpdate),
+}
+
+impl StepCommit {
+    pub(super) fn prepared_state(&self) -> &PreparedStateUpdate {
+        match self {
+            Self::Prepared(prepared) | Self::FullObservation(prepared) => prepared,
+        }
+    }
 }
 
 pub(super) enum StepPlan {
     Skip {
         message: String,
         ok: bool,
+        receipt: SyncReceipt,
     },
     Execute {
         mode: BuildMode,
         message: String,
         partial_paths: Option<Vec<PathBuf>>,
         commit: StepCommit,
+        receipt: PlannedReceipt,
     },
+}
+
+#[derive(Clone)]
+pub(super) struct PlannedReceipt {
+    applied: SyncReceipt,
+    failed: SyncReceipt,
+}
+
+impl PlannedReceipt {
+    fn new(
+        source_set: &SourceSetConfig,
+        requested: Vec<SyncTarget>,
+        processed: Vec<SyncTarget>,
+    ) -> Result<Self, analyzer::ChangeDetectionError> {
+        let failed = SyncReceipt::failed(requested.clone()).map_err(|error| {
+            analyzer::ChangeDetectionError::InvalidInventory {
+                source_set: source_set.name.clone(),
+                reason: error.to_string(),
+            }
+        })?;
+        let applied = SyncReceipt::applied(requested, processed, vec![]).map_err(|error| {
+            analyzer::ChangeDetectionError::InvalidInventory {
+                source_set: source_set.name.clone(),
+                reason: error.to_string(),
+            }
+        })?;
+        Ok(Self { applied, failed })
+    }
+
+    pub fn applied(&self) -> SyncReceipt {
+        self.applied.clone()
+    }
+
+    pub fn failed(&self) -> SyncReceipt {
+        self.failed.clone()
+    }
+}
+
+fn sync_target_from_change(
+    source_set: &SourceSetConfig,
+    change: &analyzer::FileChange,
+) -> Result<SyncTarget, analyzer::ChangeDetectionError> {
+    SyncTarget::new(
+        &change.rel_path,
+        change.pre_hash.clone(),
+        change.post_hash.clone(),
+    )
+    .map_err(|error| analyzer::ChangeDetectionError::InvalidInventory {
+        source_set: source_set.name.clone(),
+        reason: error.to_string(),
+    })
+}
+
+fn planned_full_receipt(
+    source_set: &SourceSetConfig,
+    context: &SourceSetContext,
+) -> Result<(PlannedReceipt, PreparedStateUpdate), analyzer::ChangeDetectionError> {
+    let inventory = analyzer::managed_inventory(context)?;
+    let requested = inventory
+        .requested
+        .iter()
+        .map(|change| sync_target_from_change(source_set, change))
+        .collect::<Result<Vec<_>, _>>()?;
+    let requested_by_path = unique_target_index(source_set, &requested)?;
+    let mut processed = inventory
+        .current
+        .iter()
+        .map(|file| {
+            let pre_hash = match requested_by_path.get(file.rel_path.as_str()) {
+                Some(target) => target.pre_hash().map(str::to_owned),
+                None => Some(file.hash.clone()),
+            };
+            SyncTarget::new(&file.rel_path, pre_hash, Some(file.hash.clone())).map_err(|error| {
+                analyzer::ChangeDetectionError::InvalidInventory {
+                    source_set: source_set.name.clone(),
+                    reason: error.to_string(),
+                }
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    processed.extend(
+        requested
+            .iter()
+            .filter(|target| target.post_hash().is_none())
+            .cloned(),
+    );
+    Ok((
+        PlannedReceipt::new(source_set, requested, processed)?,
+        inventory.prepared,
+    ))
+}
+
+fn planned_change_receipt(
+    source_set: &SourceSetConfig,
+    context_path: &Path,
+    changes: &[analyzer::FileChange],
+    prepared: &PreparedStateUpdate,
+    processed_paths: Option<&[PathBuf]>,
+) -> Result<PlannedReceipt, analyzer::ChangeDetectionError> {
+    let requested = changes
+        .iter()
+        .map(|change| sync_target_from_change(source_set, change))
+        .collect::<Result<Vec<_>, _>>()?;
+    let requested_by_path = unique_target_index(source_set, &requested)?;
+    let selected = match processed_paths {
+        Some(paths) => partial_load::relative_paths(paths, context_path)
+            .map_err(|error| analyzer::ChangeDetectionError::InvalidInventory {
+                source_set: source_set.name.clone(),
+                reason: error.to_string(),
+            })?
+            .into_iter()
+            .map(|path| {
+                crate::change_detection::scanner::portable_relative_path(
+                    context_path,
+                    &context_path.join(path),
+                )
+                .map_err(|error| {
+                    analyzer::ChangeDetectionError::InvalidInventory {
+                        source_set: source_set.name.clone(),
+                        reason: error.to_string(),
+                    }
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        None => prepared
+            .snapshot
+            .iter()
+            .map(|file| file.rel_path.clone())
+            .collect(),
+    };
+    let prepared_by_path = prepared
+        .snapshot
+        .iter()
+        .map(|file| (file.rel_path.as_str(), file))
+        .collect::<HashMap<_, _>>();
+    let mut processed = selected
+        .into_iter()
+        .map(|rel_path| {
+            let post_hash = prepared_by_path
+                .get(rel_path.as_str())
+                .map(|file| file.hash.clone())
+                .ok_or_else(|| analyzer::ChangeDetectionError::InvalidInventory {
+                    source_set: source_set.name.clone(),
+                    reason: format!("processed path '{rel_path}' is absent from managed inventory"),
+                })?;
+            let pre_hash = match requested_by_path.get(rel_path.as_str()) {
+                Some(target) => target.pre_hash().map(str::to_owned),
+                None => Some(post_hash.clone()),
+            };
+            SyncTarget::new(rel_path, pre_hash, Some(post_hash)).map_err(|error| {
+                analyzer::ChangeDetectionError::InvalidInventory {
+                    source_set: source_set.name.clone(),
+                    reason: error.to_string(),
+                }
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if processed_paths.is_none() {
+        processed.extend(
+            requested
+                .iter()
+                .filter(|target| target.post_hash().is_none())
+                .cloned(),
+        );
+    }
+    PlannedReceipt::new(source_set, requested, processed)
+}
+
+fn unique_target_index<'a>(
+    source_set: &SourceSetConfig,
+    targets: &'a [SyncTarget],
+) -> Result<HashMap<&'a str, &'a SyncTarget>, analyzer::ChangeDetectionError> {
+    let mut by_path = HashMap::with_capacity(targets.len());
+    for target in targets {
+        if by_path.insert(target.path(), target).is_some() {
+            return Err(analyzer::ChangeDetectionError::InvalidInventory {
+                source_set: source_set.name.clone(),
+                reason: format!("duplicate normalized path '{}'", target.path()),
+            });
+        }
+    }
+    Ok(by_path)
 }
 
 pub(super) fn plan_configurator_load_step(
@@ -50,13 +242,13 @@ pub(super) fn plan_configurator_load_step(
     partial_load_threshold: usize,
 ) -> Result<StepPlan, analyzer::ChangeDetectionError> {
     if full_rebuild {
+        let (receipt, prepared) = planned_full_receipt(source_set, source_context)?;
         return Ok(StepPlan::Execute {
             mode: BuildMode::Full,
             message: "forced full rebuild".to_owned(),
             partial_paths: None,
-            commit: StepCommit::RescanFull {
-                recover_storage: true,
-            },
+            commit: StepCommit::FullObservation(prepared),
+            receipt,
         });
     }
 
@@ -64,27 +256,28 @@ pub(super) fn plan_configurator_load_step(
         .and_then(|analysis| analysis.get(&source_set.name))
         .cloned()
         .expect("every source-set must have an analysis result")?;
-    Ok(plan_configurator_load_from_analysis(
+    plan_configurator_load_from_analysis(
         source_set,
-        source_context.path(),
+        source_context,
         outcome,
         partial_load_threshold,
-    ))
+    )
 }
 
 pub(super) fn plan_edt_export_step(
     source_set: &SourceSetConfig,
+    source_context: &SourceSetContext,
     full_rebuild: bool,
     analysis_by_name: Option<&AnalysisByName>,
 ) -> Result<StepPlan, analyzer::ChangeDetectionError> {
     if full_rebuild {
+        let (receipt, prepared) = planned_full_receipt(source_set, source_context)?;
         return Ok(StepPlan::Execute {
             mode: BuildMode::EdtExport,
             message: "forced EDT export (--full-rebuild)".to_owned(),
             partial_paths: None,
-            commit: StepCommit::RescanFull {
-                recover_storage: true,
-            },
+            commit: StepCommit::FullObservation(prepared),
+            receipt,
         });
     }
 
@@ -102,9 +295,11 @@ pub(super) fn plan_edt_export_step(
             Ok(StepPlan::Skip {
                 message: "no changes".to_owned(),
                 ok: true,
+                receipt: SyncReceipt::empty_skipped(),
             })
         }
-        AnalysisOutcome::Fallback => {
+        AnalysisOutcome::Bootstrap | AnalysisOutcome::Fallback => {
+            let (receipt, prepared) = planned_full_receipt(source_set, source_context)?;
             debug!(
                 source_set = source_set.name.as_str(),
                 "edt change analysis result: fallback to full export/load after recoverable issue"
@@ -120,18 +315,25 @@ pub(super) fn plan_edt_export_step(
                 message: "fallback to EDT export after recoverable change-detection issue"
                     .to_owned(),
                 partial_paths: None,
-                commit: StepCommit::RescanFull {
-                    recover_storage: false,
-                },
+                commit: StepCommit::FullObservation(prepared),
+                receipt,
             })
         }
         AnalysisOutcome::Changes { changes, prepared } => {
             log_change_analysis(source_set.name.as_str(), &changes);
+            let receipt = planned_change_receipt(
+                source_set,
+                source_context.path(),
+                &changes,
+                &prepared,
+                None,
+            )?;
             Ok(StepPlan::Execute {
                 mode: BuildMode::EdtExport,
                 message: "EDT export after change detection".to_owned(),
                 partial_paths: None,
                 commit: StepCommit::Prepared(prepared),
+                receipt,
             })
         }
     }
@@ -143,41 +345,41 @@ pub(super) fn plan_generated_designer_load_step(
     full_rebuild: bool,
     edt_stage_skipped: bool,
     partial_load_threshold: usize,
-    work_path: &Path,
 ) -> Result<StepPlan, analyzer::ChangeDetectionError> {
     if edt_stage_skipped && !designer_context.path().exists() {
         return Ok(StepPlan::Skip {
             message: "no changes".to_owned(),
             ok: true,
+            receipt: SyncReceipt::empty_skipped(),
         });
     }
 
     if full_rebuild {
+        let (receipt, prepared) = planned_full_receipt(source_set, designer_context)?;
         return Ok(StepPlan::Execute {
             mode: BuildMode::Full,
             message: "full load from EDT export (--full-rebuild)".to_owned(),
             partial_paths: None,
-            commit: StepCommit::RescanFull {
-                recover_storage: true,
-            },
+            commit: StepCommit::FullObservation(prepared),
+            receipt,
         });
     }
 
-    let outcome = analyzer::analyze_context(designer_context, work_path).outcome?;
-    Ok(plan_generated_designer_load_from_analysis(
+    let outcome = analyzer::analyze_context(designer_context).outcome?;
+    plan_generated_designer_load_from_analysis(
         source_set,
-        designer_context.path(),
+        designer_context,
         outcome,
         partial_load_threshold,
-    ))
+    )
 }
 
 fn plan_configurator_load_from_analysis(
     source_set: &SourceSetConfig,
-    context_path: &Path,
+    source_context: &SourceSetContext,
     outcome: AnalysisOutcome,
     partial_load_threshold: usize,
-) -> StepPlan {
+) -> Result<StepPlan, analyzer::ChangeDetectionError> {
     match outcome {
         AnalysisOutcome::NoChanges => {
             debug!(
@@ -185,12 +387,14 @@ fn plan_configurator_load_from_analysis(
                 found_changes = 0,
                 "change analysis result: found 0 change(s)"
             );
-            StepPlan::Skip {
+            Ok(StepPlan::Skip {
                 message: "no changes".to_owned(),
                 ok: true,
-            }
+                receipt: SyncReceipt::empty_skipped(),
+            })
         }
-        AnalysisOutcome::Fallback => {
+        AnalysisOutcome::Bootstrap | AnalysisOutcome::Fallback => {
+            let (receipt, prepared) = planned_full_receipt(source_set, source_context)?;
             debug!(
                 source_set = source_set.name.as_str(),
                 "change analysis result: fallback to full load after recoverable issue"
@@ -201,21 +405,20 @@ fn plan_configurator_load_from_analysis(
                 "fallback to full load after recoverable issue",
                 TimelineStageStatus::Succeeded,
             );
-            StepPlan::Execute {
+            Ok(StepPlan::Execute {
                 mode: BuildMode::Full,
                 message: "fallback to full load after recoverable change-detection issue"
                     .to_owned(),
                 partial_paths: None,
-                commit: StepCommit::RescanFull {
-                    recover_storage: false,
-                },
-            }
+                commit: StepCommit::FullObservation(prepared),
+                receipt,
+            })
         }
         AnalysisOutcome::Changes { changes, prepared } => {
             log_change_analysis(source_set.name.as_str(), &changes);
             plan_partial_or_full_load(
                 source_set,
-                context_path,
+                source_context.path(),
                 changes,
                 prepared,
                 partial_load_threshold,
@@ -227,10 +430,10 @@ fn plan_configurator_load_from_analysis(
 
 fn plan_generated_designer_load_from_analysis(
     source_set: &SourceSetConfig,
-    context_path: &Path,
+    source_context: &SourceSetContext,
     outcome: AnalysisOutcome,
     partial_load_threshold: usize,
-) -> StepPlan {
+) -> Result<StepPlan, analyzer::ChangeDetectionError> {
     match outcome {
         AnalysisOutcome::NoChanges => {
             debug!(
@@ -238,12 +441,14 @@ fn plan_generated_designer_load_from_analysis(
                 found_changes = 0,
                 "generated designer change analysis result: found 0 change(s)"
             );
-            StepPlan::Skip {
+            Ok(StepPlan::Skip {
                 message: "no changes".to_owned(),
                 ok: true,
-            }
+                receipt: SyncReceipt::empty_skipped(),
+            })
         }
-        AnalysisOutcome::Fallback => {
+        AnalysisOutcome::Bootstrap | AnalysisOutcome::Fallback => {
+            let (receipt, prepared) = planned_full_receipt(source_set, source_context)?;
             debug!(
                 source_set = source_set.name.as_str(),
                 "generated designer change analysis result: fallback to full load after recoverable issue"
@@ -254,21 +459,20 @@ fn plan_generated_designer_load_from_analysis(
                 "fallback to full load after recoverable issue",
                 TimelineStageStatus::Succeeded,
             );
-            StepPlan::Execute {
+            Ok(StepPlan::Execute {
                 mode: BuildMode::Full,
                 message: "fallback to full load after recoverable change-detection issue"
                     .to_owned(),
                 partial_paths: None,
-                commit: StepCommit::RescanFull {
-                    recover_storage: false,
-                },
-            }
+                commit: StepCommit::FullObservation(prepared),
+                receipt,
+            })
         }
         AnalysisOutcome::Changes { changes, prepared } => {
             log_change_analysis(source_set.name.as_str(), &changes);
             plan_partial_or_full_load(
                 source_set,
-                context_path,
+                source_context.path(),
                 changes,
                 prepared,
                 partial_load_threshold,
@@ -311,7 +515,7 @@ fn plan_partial_or_full_load(
     prepared: PreparedStateUpdate,
     partial_load_threshold: usize,
     source: LoadPlanSource,
-) -> StepPlan {
+) -> Result<StepPlan, analyzer::ChangeDetectionError> {
     let decision = if source.forces_full_for_extension()
         && source_set.purpose == SourceSetPurpose::Extension
     {
@@ -326,6 +530,13 @@ fn plan_partial_or_full_load(
 
     match decision {
         LoadDecision::Partial(paths) => {
+            let receipt = planned_change_receipt(
+                source_set,
+                context_path,
+                &changes,
+                &prepared,
+                Some(&paths),
+            )?;
             debug!(
                 source_set = source_set.name.as_str(),
                 partial_file_count = paths.len(),
@@ -333,23 +544,26 @@ fn plan_partial_or_full_load(
                 "{}",
                 source.partial_log_message()
             );
-            StepPlan::Execute {
+            Ok(StepPlan::Execute {
                 mode: BuildMode::Partial {
                     file_count: paths.len(),
                 },
                 message: format!("partial load of {} files", paths.len()),
                 partial_paths: Some(paths),
                 commit: StepCommit::Prepared(prepared),
-            }
+                receipt,
+            })
         }
         LoadDecision::Full => {
+            let receipt =
+                planned_change_receipt(source_set, context_path, &changes, &prepared, None)?;
             debug!(
                 source_set = source_set.name.as_str(),
                 threshold = partial_load_threshold,
                 "{}",
                 source.full_log_message()
             );
-            StepPlan::Execute {
+            Ok(StepPlan::Execute {
                 mode: BuildMode::Full,
                 message: if source.forces_full_for_extension()
                     && source_set.purpose == SourceSetPurpose::Extension
@@ -360,7 +574,8 @@ fn plan_partial_or_full_load(
                 },
                 partial_paths: None,
                 commit: StepCommit::Prepared(prepared),
-            }
+                receipt,
+            })
         }
     }
 }
@@ -399,41 +614,92 @@ pub(super) fn push_build_step(
 ) {
     let step = BuildStep {
         source_set: source_set_name.to_owned(),
-        mode,
+        mode: mode.clone(),
         ok,
         message: Some(message),
         duration_ms,
+        receipt: if ok {
+            if matches!(mode, BuildMode::Skipped) {
+                crate::domain::sync_receipt::SyncReceipt::empty_skipped()
+            } else {
+                crate::domain::sync_receipt::SyncReceipt::empty_applied()
+            }
+        } else {
+            crate::domain::sync_receipt::SyncReceipt::empty_failed()
+        },
     };
     log_build_step_timeline(&step);
     steps.push(step);
 }
 
-pub(super) fn commit_full_rescan(
-    context: &SourceSetContext,
-    work_path: &Path,
-    recover_storage: bool,
-) -> Result<(), AppError> {
-    match analyzer::rescan_and_commit_full(context, work_path) {
-        Ok(()) => Ok(()),
-        Err(_error) if recover_storage && storage_needs_recovery(context, work_path) => {
-            let storage_path = context.storage_path(work_path);
-            remove_storage_path(&storage_path).map_err(|remove_error| {
-                AppError::Runtime(format!(
-                    "failed to remove corrupt storage '{}': {remove_error}",
-                    storage_path.display()
-                ))
-            })?;
-            analyzer::rescan_and_commit_full(context, work_path)
-                .map_err(|retry_error| AppError::Runtime(retry_error.to_string()))
-        }
-        Err(error) => Err(AppError::Runtime(error.to_string())),
+pub(super) fn push_build_step_with_receipt(
+    steps: &mut Vec<BuildStep>,
+    source_set_name: &str,
+    mode: BuildMode,
+    ok: bool,
+    message: String,
+    duration_ms: u64,
+    receipt: SyncReceipt,
+) {
+    let step = BuildStep {
+        source_set: source_set_name.to_owned(),
+        mode,
+        ok,
+        message: Some(message),
+        duration_ms,
+        receipt,
+    };
+    log_build_step_timeline(&step);
+    steps.push(step);
+}
+
+pub(super) fn attach_failed_receipt(
+    mut result: BuildResult,
+    source_set_name: &str,
+    receipt: &PlannedReceipt,
+) -> BuildResult {
+    if let Some(step) = result
+        .steps
+        .iter_mut()
+        .rev()
+        .find(|step| step.source_set == source_set_name)
+    {
+        step.receipt = receipt.failed();
     }
+    result
+}
+
+pub(super) fn receipt_after_success(plan: &StepPlan) -> SyncReceipt {
+    match plan {
+        StepPlan::Skip { receipt, .. } => receipt.clone(),
+        StepPlan::Execute { receipt, .. } => receipt.applied(),
+    }
+}
+
+pub(super) fn attach_failed_plan_receipt(
+    result: BuildResult,
+    source_set_name: &str,
+    plan: &StepPlan,
+) -> BuildResult {
+    match plan {
+        StepPlan::Execute { receipt, .. } => {
+            attach_failed_receipt(result, source_set_name, receipt)
+        }
+        StepPlan::Skip { .. } => result,
+    }
+}
+
+pub(super) fn commit_full_observation(
+    context: &SourceSetContext,
+    prepared: &PreparedStateUpdate,
+) -> Result<(), AppError> {
+    analyzer::commit_full_observation(context, prepared)
+        .map_err(|error| AppError::Runtime(error.to_string()))
 }
 
 pub(super) fn commit_step_state(
     source_set: &SourceSetConfig,
     context: &SourceSetContext,
-    work_path: &Path,
     commit: &StepCommit,
 ) -> Result<(), AppError> {
     match commit {
@@ -442,27 +708,16 @@ pub(super) fn commit_step_state(
                 source_set = source_set.name.as_str(),
                 "committing prepared change-detection state"
             );
-            analyzer::commit_success(context, work_path, prepared)
+            analyzer::commit_success(context, prepared)
                 .map_err(|error| AppError::Runtime(error.to_string()))
         }
-        StepCommit::RescanFull { recover_storage } => {
+        StepCommit::FullObservation(prepared) => {
             debug!(
                 source_set = source_set.name.as_str(),
-                recover_storage, "rescanning source-set state after full build"
+                "committing pre-build full source observation"
             );
-            commit_full_rescan(context, work_path, *recover_storage)
+            commit_full_observation(context, prepared)
         }
-    }
-}
-
-fn storage_needs_recovery(context: &SourceSetContext, work_path: &Path) -> bool {
-    match HashStorage::new(context.storage_path(work_path)).current_generation() {
-        Err(StorageError::Recoverable { .. }) => true,
-        Err(StorageError::Hard { reason, .. }) => {
-            let reason = reason.to_ascii_lowercase();
-            reason.contains("invalid data") || reason.contains("corrupt")
-        }
-        Err(StorageError::ConcurrentStateModified { .. }) | Ok(_) => false,
     }
 }
 

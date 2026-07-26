@@ -32,6 +32,16 @@ v8-runner --json-message build
 
 Use text output for direct human diagnostics.
 
+For JSON build and dump results, use each step's `receipt` as the exact source-sync audit record.
+`requested` is the byte-exact add/modify/delete delta; `processed`, `skipped`, and `conflicted`
+are independent audit dimensions, not a strict partition. In an applied result, the same target
+may appear in both `processed` and `skipped` when it belongs to the effective platform scope but
+publication retained or no-op'd the local version. Full operations report the complete managed
+final scope; incremental/partial operations report observable shadow writes. Inconsistent overlap is invalid. `preHash`/`postHash` are SHA-256
+values, with `null` denoting the absent side of an add/delete. Failed or cancelled steps keep the
+computed `requested` delta and leave outcome lists empty; if failure happens before a delta can be
+computed, every list may be empty.
+
 Use `v8-runner version` or `v8-runner --version` to check the installed application version; it does not require `v8project.yaml`.
 
 Useful global flags:

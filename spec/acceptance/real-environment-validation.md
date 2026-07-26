@@ -11,6 +11,7 @@
 3. `test` Rust/CLI/MCP-контракта
 4. `package`
 5. `deploy-ready artifacts`
+6. `full/incremental/partial dump` через private shadow с проверкой no-clobber
 
 Под `deploy-ready artifacts` в этом репозитории понимается только публикация и проверка наличия/непустоты следующих файлов:
 
@@ -45,7 +46,7 @@ bash scripts/test/ci-rust.sh
 
 - `V8_RUNNER_CI_SCOPE=contract` или `full` запускает `cargo test --locked`
 - `V8_RUNNER_CI_SCOPE=runtime-locks` запускает только lock-focused regression subset
-- `V8_RUNNER_CI_SCOPE=happy-path` запускает обязательную цепочку `build -> syntax/check -> test -> package -> deploy-ready artifacts`
+- `V8_RUNNER_CI_SCOPE=happy-path` запускает обязательную цепочку `build -> syntax/check -> test -> package -> deploy-ready artifacts -> private dump/no-clobber`
 
 ### 2. Mandatory Linux/Windows happy-path
 
@@ -75,6 +76,10 @@ V8_RUNNER_CI_SCOPE=happy-path bash scripts/test/ci-rust.sh
 7. `test`
 8. `make` для `.cf/.cfe/.epf/.erf`
 9. проверку, что все deploy-ready артефакты существуют и не пусты
+10. отсутствие `ConfigDumpInfo.xml` в source и наличие private CDFI под `workPath/ib-state/v1`
+11. успешный `dump full` bootstrap в пустой owned target, затем `dump incremental` и
+   `dump partial` с детерминированным `LocalOnly.txt` conflict, точным receipt и byte-exact
+   сохранением конфликтующего source/runtime state
 
 Partial smoke contract:
 
@@ -125,7 +130,8 @@ bash scripts/test/live-cli-fixture.sh
 
 - `V8TR_BIN` - путь к бинарю `v8-runner`
 - `V8TR_PLATFORM_PATH` - явный override пути до `1cv8`/`1cv8.exe`
-- `V8TR_DESIGNER_SMOKE_PROFILE=mandatory|extended` - mandatory по умолчанию; `extended` включает dump-only хвост
+- `V8TR_DESIGNER_SMOKE_PROFILE=mandatory|extended` - `mandatory` по умолчанию; `extended`
+  сохранён как совместимый alias, а private dump/no-clobber contour обязателен для обоих профилей
 - `V8TR_DESIGNER_TEST_MODE=none|va|yaxunit-all|module` - явный запуск 1С test-stage helper-а; `none` по умолчанию
 - `V8TR_DESIGNER_TEST_MODULE` - обязателен при `V8TR_DESIGNER_TEST_MODE=module`
 - `V8TR_DESIGNER_ALLOW_MISSING_CONFIG=1` - разрешить `SKIPPED` вместо hard failure только для non-blocking/soft-skip контекстов
@@ -149,6 +155,11 @@ Cross-platform hardening:
 Критерий успеха:
 
 - все стадии `build -> syntax/check -> test -> package -> deploy-ready artifacts` завершаются с `exit code 0`
+- full dump успешно публикует declarative source из private shadow в пустой owned target;
+  incremental/partial dump возвращают ожидаемый conflict exit code `3`, exact receipt указывает
+  только `LocalOnly.txt` и не содержит processed targets
+- source и `ib-state/v1` после incremental/partial conflict остаются byte-exact, CDFI присутствует
+  только в private runtime state, а общий smoke завершается с `exit code 0`
 - существуют и не пусты:
   - `target/manual-tests/live-cli-designer/artifacts/configuration.cf`
   - `target/manual-tests/live-cli-designer/artifacts/extension.cfe`
@@ -201,13 +212,13 @@ Windows runner contract for this helper layer is explicit:
 
 ## Матрица покрытия
 
-| Контур | Linux | Windows | Blocking | Build | Syntax/check | Test | Package | Deploy-ready artifacts |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `ci-rust contract` | yes | yes | yes | Rust | Rust | Rust | no | no |
-| `ci-rust happy-path` | yes | yes | yes on trusted | Rust + real 1C | real | Rust by default; real 1C opt-in | real | real |
-| `live-mcp-http` | optional | optional | no | real via MCP | real via MCP | real via MCP | n/a | n/a |
-| `live-cli-ibcmd` | optional | optional | no | real (`IBCMD`) | n/a | n/a | diagnostic dump/export only | n/a |
-| `live-cli-designer` | optional | optional | no | real (`DESIGNER`) | real | real opt-in | real | real |
+| Контур | Linux | Windows | Blocking | Build | Syntax/check | Test | Package | Dump/no-clobber | Deploy-ready artifacts |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `ci-rust contract` | yes | yes | yes | Rust | Rust | Rust | no | no | no |
+| `ci-rust happy-path` | yes | yes | yes on trusted | Rust + real 1C | real | Rust by default; real 1C opt-in | real | real | real |
+| `live-mcp-http` | optional | optional | no | real via MCP | real via MCP | real via MCP | n/a | n/a | n/a |
+| `live-cli-ibcmd` | optional | optional | no | real (`IBCMD`) | n/a | n/a | n/a | diagnostic dump/export | n/a |
+| `live-cli-designer` | optional | optional | no | real (`DESIGNER`) | real | real opt-in | real | real | real |
 
 ## Ограничения и TODO hooks
 

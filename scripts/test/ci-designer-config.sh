@@ -94,7 +94,7 @@ def inject_platform_path(match: re.Match[str]) -> str:
 
 
 text, platform_count = re.subn(
-    r"(?m)(?P<prefix>^tools:\n  platform:\n)(?P<body>(?:    .*\n)+)",
+    r"(?m)(?P<prefix>^  platform:\n)(?P<body>(?:    .*(?:\n|\Z))+)",
     inject_platform_path,
     text,
     count=1,

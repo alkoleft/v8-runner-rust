@@ -179,7 +179,7 @@ impl<'a> DesignerDsl<'a> {
         self.run(&args)
     }
 
-    /// `/DumpConfigToFiles <dir> [-Extension <name>]`
+    /// `/DumpConfigToFiles <dir> -updateConfigDumpInfo [-Extension <name>]`
     pub fn dump_config_to_files(
         &self,
         target_dir: &Path,
@@ -188,6 +188,7 @@ impl<'a> DesignerDsl<'a> {
         let mut args = self.base_args();
         args.push("/DumpConfigToFiles".to_owned());
         args.push(target_dir.display().to_string());
+        args.push("-updateConfigDumpInfo".to_owned());
         if let Some(extension) = extension {
             args.push("-Extension".to_owned());
             args.push(extension.to_owned());
@@ -195,7 +196,7 @@ impl<'a> DesignerDsl<'a> {
         self.run(&args)
     }
 
-    /// `/DumpConfigToFiles <dir> -update [-Extension <name>]`
+    /// `/DumpConfigToFiles <dir> -update -updateConfigDumpInfo [-Extension <name>]`
     pub fn dump_config_to_files_incremental(
         &self,
         target_dir: &Path,
@@ -205,6 +206,7 @@ impl<'a> DesignerDsl<'a> {
         args.push("/DumpConfigToFiles".to_owned());
         args.push(target_dir.display().to_string());
         args.push("-update".to_owned());
+        args.push("-updateConfigDumpInfo".to_owned());
         if let Some(extension) = extension {
             args.push("-Extension".to_owned());
             args.push(extension.to_owned());
@@ -254,7 +256,8 @@ impl<'a> DesignerDsl<'a> {
         self.run(&args)
     }
 
-    /// `/DumpConfigToFiles <dir> -partial -listFile <list_file> [-Extension <name>]`
+    /// `/DumpConfigToFiles <dir> -partial -listFile <list_file> -updateConfigDumpInfo
+    /// [-Extension <name>]`
     pub fn dump_config_to_files_partial(
         &self,
         target_dir: &Path,
@@ -267,6 +270,7 @@ impl<'a> DesignerDsl<'a> {
         args.push("-partial".to_owned());
         args.push("-listFile".to_owned());
         args.push(list_file.display().to_string());
+        args.push("-updateConfigDumpInfo".to_owned());
         if let Some(extension) = extension {
             args.push("-Extension".to_owned());
             args.push(extension.to_owned());
@@ -476,8 +480,8 @@ mod tests {
 
         let args = fs::read_to_string(args_log).expect("args log");
         assert!(args.contains("/DumpConfigToFiles"));
-        assert!(!args.contains("-update"));
-        assert!(!args.contains("-updateConfigDumpInfo"));
+        assert!(!args.lines().any(|arg| arg == "-update"));
+        assert!(args.contains("-updateConfigDumpInfo"));
     }
 
     #[cfg(unix)]
@@ -504,7 +508,7 @@ mod tests {
         let args = fs::read_to_string(args_log).expect("args log");
         assert!(args.contains("/DumpConfigToFiles"));
         assert!(args.contains("-update"));
-        assert!(!args.contains("-updateConfigDumpInfo"));
+        assert!(args.contains("-updateConfigDumpInfo"));
         assert!(args.contains("-Extension"));
         assert!(args.contains("ExtName"));
     }
@@ -539,7 +543,7 @@ mod tests {
         assert!(args.contains("-partial"));
         assert!(args.contains("-listFile"));
         assert!(args.contains("objects.txt"));
-        assert!(!args.contains("-updateConfigDumpInfo"));
+        assert!(args.contains("-updateConfigDumpInfo"));
         assert!(args.contains("-Extension"));
         assert!(args.contains("ExtName"));
     }

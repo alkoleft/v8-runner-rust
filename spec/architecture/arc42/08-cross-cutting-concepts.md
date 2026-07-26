@@ -48,13 +48,13 @@
 
 ### 8.4.1 Публикация dump/artifacts
 
-- Full replacement dump/artifacts сначала пишутся в staging path рядом с target.
+- Full-replacement artifacts сначала пишутся в staging path рядом с target.
 - При замене существующего target старое состояние временно переносится в backup и используется для rollback при publish failure.
 - Cleanup backup/staging после успешной публикации выполняется best-effort и может вернуться как warning.
 - Staging/backup cleanup опирается на metadata sidecar: `tool`, `kind`, `run_id`, `target_path`, `target_identity`, `created_at`.
 - Orphan cleanup не должен удалять malformed, foreign или recent temp paths.
-- Incremental/partial dump остаются non-atomic update modes.
-- Правила staging/backup publication описаны в ADR-0015.
+- Все dump-режимы выполняются в private shadow и публикуют managed-file manifest через recoverable journal; B/S/D conflict блокирует весь source-set.
+- Правила artifacts staging/backup описаны в ADR-0015, dump publication и exact generation/token recovery — в ADR-0023.
 
 ### 8.5 Параллелизм и таймауты
 

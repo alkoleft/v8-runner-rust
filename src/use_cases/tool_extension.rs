@@ -9,7 +9,12 @@ use crate::config::model::{
     ToolExtensionSourceConfig,
 };
 use crate::domain::build::{BuildMode, BuildStep};
+use crate::domain::runtime_state::{
+    InfobaseIdentity, LogicalSourceRole, RuntimeSourceDescriptor, RuntimeSourceIdentityInputs,
+    RuntimeStateLayout,
+};
 use crate::domain::source_set::SourceSetContext;
+use crate::domain::sync_receipt::{SyncReceipt, SyncTarget};
 use crate::platform::designer::DesignerDsl;
 use crate::platform::edt::EdtDsl;
 use crate::platform::edt_session::{EdtSessionHostOptions, EdtSessionManager};
@@ -25,11 +30,38 @@ use crate::use_cases::build_progress::{log_timeline_stage, TimelineStageStatus};
 use crate::use_cases::context::{ExecutionContext, InterruptionSafetyClass};
 use crate::use_cases::ibcmd_diagnostics::format_ibcmd_failure_details;
 use crate::use_cases::interruption;
+use crate::use_cases::runtime_state::{
+    cleanup_orphan_designer_transactions, commit_designer_state_with_lock,
+    designer_full_rebuild_required, inspect_private_cdfi, lock_designer_state,
+    recover_designer_state_with_lock, require_designer_full_rebuild, PrivateCdfiState,
+};
+use crate::use_cases::source_transaction::{
+    verify_source_snapshot, CdfiSeed, DesignerSourceTransaction,
+};
 
 #[derive(Debug)]
 pub(crate) struct ToolExtensionFailure {
     pub(crate) step: BuildStep,
     pub(crate) error: AppError,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolCdfiSeedPolicy {
+    Allow,
+    Omit,
+}
+
+struct ToolSourceCommit<'a> {
+    context: &'a SourceSetContext,
+    prepared: &'a analyzer::PreparedStateUpdate,
+    state_commit: ToolStateCommit,
+    cdfi_seed: ToolCdfiSeedPolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolStateCommit {
+    Prepared,
+    FullObservation,
 }
 
 pub(crate) fn client_mcp_extension(config: &AppConfig) -> Option<&ToolExtensionConfig> {
@@ -56,15 +88,7 @@ pub(crate) fn prepare_client_mcp_extension(
     let Some(extension) = client_mcp_extension(config) else {
         return Ok(None);
     };
-    prepare_extension(context, config, extension, full_rebuild)
-        .map(Some)
-        .map_err(|error| {
-            let message = error.to_string();
-            ToolExtensionFailure {
-                step: failed_build_step(extension, message),
-                error,
-            }
-        })
+    prepare_extension(context, config, extension, full_rebuild).map(Some)
 }
 
 fn prepare_extension(
@@ -72,11 +96,11 @@ fn prepare_extension(
     config: &AppConfig,
     extension: &ToolExtensionConfig,
     full_rebuild: bool,
-) -> Result<BuildStep, AppError> {
+) -> Result<BuildStep, ToolExtensionFailure> {
     let started = Instant::now();
 
     if let Some(error) = interruption_before_safe_point(context, extension, "tool extension load") {
-        return Err(error);
+        return Err(tool_extension_failure(extension, error, vec![]));
     }
 
     let mut utilities = PlatformUtilities::from_config(config);
@@ -91,7 +115,8 @@ fn prepare_extension(
             full_rebuild,
         ),
         ToolExtensionInput::Artifact(artifact) => {
-            prepare_artifact_extension(context, config, extension, &artifact.path, &mut utilities)?;
+            prepare_artifact_extension(context, config, extension, &artifact.path, &mut utilities)
+                .map_err(|error| tool_extension_failure(extension, error, vec![]))?;
             Ok(successful_build_step(
                 extension,
                 format!("prepared extension '{}' from .cfe artifact", extension.name),
@@ -109,30 +134,101 @@ fn prepare_source_extension(
     utilities: &mut PlatformUtilities,
     started: Instant,
     full_rebuild: bool,
-) -> Result<BuildStep, AppError> {
-    let source_context = tool_extension_source_context(config, extension, source)?;
+) -> Result<BuildStep, ToolExtensionFailure> {
+    let source_context = tool_extension_source_context(config, extension, source)
+        .map_err(|error| tool_extension_failure(extension, error, vec![]))?;
+    let cdfi_requires_bootstrap = if config.builder == BuilderBackend::Designer {
+        let state_lock = lock_designer_state(&source_context).map_err(|error| {
+            tool_extension_failure(extension, AppError::Runtime(error.to_string()), vec![])
+        })?;
+        recover_designer_state_with_lock(&source_context, &state_lock).map_err(|error| {
+            tool_extension_failure(extension, AppError::Runtime(error.to_string()), vec![])
+        })?;
+        cleanup_orphan_designer_transactions(&source_context, &state_lock).map_err(|error| {
+            tool_extension_failure(extension, AppError::Runtime(error.to_string()), vec![])
+        })?;
+        designer_full_rebuild_required(&source_context).map_err(|error| {
+            tool_extension_failure(extension, AppError::Runtime(error.to_string()), vec![])
+        })? || !matches!(
+            inspect_private_cdfi(&source_context.private_cdfi_path()).map_err(|error| {
+                tool_extension_failure(extension, AppError::Runtime(error.to_string()), vec![])
+            })?,
+            PrivateCdfiState::Valid(_)
+        )
+    } else {
+        false
+    };
     if full_rebuild {
-        prepare_source_extension_full(context, config, extension, source, utilities)?;
-        commit_tool_extension_full_rescan(&source_context, &config.work_path, true)?;
-        return Ok(successful_build_step(
+        let (requested, processed, prepared) = full_inventory_receipt(&source_context)
+            .map_err(|error| tool_extension_failure(extension, error, vec![]))?;
+        let receipt = applied_receipt(requested.clone(), processed)
+            .map_err(|error| tool_extension_failure(extension, error, requested.clone()))?;
+        let commit = ToolSourceCommit {
+            context: &source_context,
+            prepared: &prepared,
+            state_commit: ToolStateCommit::FullObservation,
+            cdfi_seed: ToolCdfiSeedPolicy::Omit,
+        };
+        prepare_source_extension_full(context, config, extension, source, utilities, &commit)
+            .map_err(|error| tool_extension_failure(extension, error, requested.clone()))?;
+        return Ok(successful_build_step_with_receipt(
             extension,
             format!("prepared extension '{}' from sources", extension.name),
             started.elapsed().as_millis() as u64,
+            receipt,
         ));
     }
 
-    let outcome = match analyzer::analyze_context(&source_context, &config.work_path).outcome {
+    if cdfi_requires_bootstrap {
+        let (requested, processed, prepared) = full_inventory_receipt(&source_context)
+            .map_err(|error| tool_extension_failure(extension, error, vec![]))?;
+        let receipt = applied_receipt(requested.clone(), processed)
+            .map_err(|error| tool_extension_failure(extension, error, requested.clone()))?;
+        let commit = ToolSourceCommit {
+            context: &source_context,
+            prepared: &prepared,
+            state_commit: ToolStateCommit::FullObservation,
+            cdfi_seed: ToolCdfiSeedPolicy::Omit,
+        };
+        prepare_source_extension_full(context, config, extension, source, utilities, &commit)
+            .map_err(|error| tool_extension_failure(extension, error, requested.clone()))?;
+        return Ok(successful_build_step_with_receipt(
+            extension,
+            format!("prepared extension '{}' from sources", extension.name),
+            started.elapsed().as_millis() as u64,
+            receipt,
+        ));
+    }
+
+    let outcome = match analyzer::analyze_context(&source_context).outcome {
         Ok(outcome) => outcome,
-        Err(error) if storage_needs_recovery(&source_context, &config.work_path) => {
-            prepare_source_extension_full(context, config, extension, source, utilities)?;
-            commit_tool_extension_full_rescan(&source_context, &config.work_path, true)?;
-            return Ok(successful_build_step(
+        Err(_error) if storage_needs_recovery(&source_context) => {
+            let (requested, processed, prepared) = full_inventory_receipt(&source_context)
+                .map_err(|error| tool_extension_failure(extension, error, vec![]))?;
+            let receipt = applied_receipt(requested.clone(), processed)
+                .map_err(|error| tool_extension_failure(extension, error, requested.clone()))?;
+            let commit = ToolSourceCommit {
+                context: &source_context,
+                prepared: &prepared,
+                state_commit: ToolStateCommit::FullObservation,
+                cdfi_seed: ToolCdfiSeedPolicy::Allow,
+            };
+            prepare_source_extension_full(context, config, extension, source, utilities, &commit)
+                .map_err(|error| tool_extension_failure(extension, error, requested.clone()))?;
+            return Ok(successful_build_step_with_receipt(
                 extension,
                 format!("prepared extension '{}' from sources", extension.name),
                 started.elapsed().as_millis() as u64,
+                receipt,
             ));
         }
-        Err(error) => return Err(AppError::Runtime(error.to_string())),
+        Err(error) => {
+            return Err(tool_extension_failure(
+                extension,
+                AppError::Runtime(error.to_string()),
+                vec![],
+            ))
+        }
     };
 
     match outcome {
@@ -141,23 +237,44 @@ fn prepare_source_extension(
             "no changes".to_owned(),
             started.elapsed().as_millis() as u64,
         )),
-        AnalysisOutcome::Fallback => {
-            prepare_source_extension_full(context, config, extension, source, utilities)?;
-            commit_tool_extension_full_rescan(&source_context, &config.work_path, false)?;
-            Ok(successful_build_step(
+        AnalysisOutcome::Bootstrap | AnalysisOutcome::Fallback => {
+            let (requested, processed, prepared) = full_inventory_receipt(&source_context)
+                .map_err(|error| tool_extension_failure(extension, error, vec![]))?;
+            let receipt = applied_receipt(requested.clone(), processed)
+                .map_err(|error| tool_extension_failure(extension, error, requested.clone()))?;
+            let commit = ToolSourceCommit {
+                context: &source_context,
+                prepared: &prepared,
+                state_commit: ToolStateCommit::FullObservation,
+                cdfi_seed: ToolCdfiSeedPolicy::Allow,
+            };
+            prepare_source_extension_full(context, config, extension, source, utilities, &commit)
+                .map_err(|error| tool_extension_failure(extension, error, requested.clone()))?;
+            Ok(successful_build_step_with_receipt(
                 extension,
                 format!("prepared extension '{}' from sources", extension.name),
                 started.elapsed().as_millis() as u64,
+                receipt,
             ))
         }
-        AnalysisOutcome::Changes { prepared, .. } => {
-            prepare_source_extension_full(context, config, extension, source, utilities)?;
-            analyzer::commit_success(&source_context, &config.work_path, &prepared)
-                .map_err(|error| AppError::Runtime(error.to_string()))?;
-            Ok(successful_build_step(
+        AnalysisOutcome::Changes { changes, prepared } => {
+            let (requested, processed) = change_receipt(&changes, &prepared)
+                .map_err(|error| tool_extension_failure(extension, error, vec![]))?;
+            let receipt = applied_receipt(requested.clone(), processed)
+                .map_err(|error| tool_extension_failure(extension, error, requested.clone()))?;
+            let commit = ToolSourceCommit {
+                context: &source_context,
+                prepared: &prepared,
+                state_commit: ToolStateCommit::Prepared,
+                cdfi_seed: ToolCdfiSeedPolicy::Allow,
+            };
+            prepare_source_extension_full(context, config, extension, source, utilities, &commit)
+                .map_err(|error| tool_extension_failure(extension, error, requested.clone()))?;
+            Ok(successful_build_step_with_receipt(
                 extension,
                 format!("prepared extension '{}' from sources", extension.name),
                 started.elapsed().as_millis() as u64,
+                receipt,
             ))
         }
     }
@@ -169,20 +286,63 @@ fn prepare_source_extension_full(
     extension: &ToolExtensionConfig,
     source: &ToolExtensionSourceConfig,
     utilities: &mut PlatformUtilities,
+    commit: &ToolSourceCommit<'_>,
 ) -> Result<(), AppError> {
     match source.format.unwrap_or(config.format) {
-        SourceFormat::Designer => {
-            prepare_designer_source_extension(context, config, extension, &source.path, utilities)
-        }
+        SourceFormat::Designer => prepare_source_extension_for_backend(
+            context,
+            config,
+            extension,
+            commit.context.path(),
+            utilities,
+            commit,
+        ),
         SourceFormat::Edt => {
-            let exported =
-                export_edt_source_extension(context, config, extension, &source.path, utilities)?;
-            prepare_designer_source_extension(context, config, extension, &exported, utilities)
+            let exported = export_edt_source_extension(
+                context,
+                config,
+                extension,
+                commit.context.path(),
+                utilities,
+            )?;
+            prepare_source_extension_for_backend(
+                context, config, extension, &exported, utilities, commit,
+            )
         }
     }
 }
 
-fn tool_extension_source_context(
+fn prepare_source_extension_for_backend(
+    context: &ExecutionContext,
+    config: &AppConfig,
+    extension: &ToolExtensionConfig,
+    source_path: &Path,
+    utilities: &mut PlatformUtilities,
+    commit: &ToolSourceCommit<'_>,
+) -> Result<(), AppError> {
+    if config.builder == BuilderBackend::Designer && source_path != commit.context.path() {
+        verify_source_snapshot(
+            commit.context.path(),
+            commit.context.excluded_roots(),
+            commit.prepared,
+        )
+        .map_err(|error| AppError::Runtime(error.to_string()))?;
+    }
+    prepare_designer_source_extension(context, config, extension, source_path, utilities, commit)?;
+    if config.builder == BuilderBackend::Ibcmd {
+        match commit.state_commit {
+            ToolStateCommit::FullObservation => {
+                commit_tool_extension_full_observation(commit.context, commit.prepared)
+            }
+            ToolStateCommit::Prepared => analyzer::commit_success(commit.context, commit.prepared)
+                .map_err(|error| AppError::Runtime(error.to_string())),
+        }
+    } else {
+        Ok(())
+    }
+}
+
+pub(crate) fn tool_extension_source_context(
     config: &AppConfig,
     extension: &ToolExtensionConfig,
     source: &ToolExtensionSourceConfig,
@@ -193,11 +353,21 @@ fn tool_extension_source_context(
     } else {
         base_path.join(&source.path)
     };
-    Ok(SourceSetContext::new(
-        format!("tool:{}", extension.name),
-        source_path,
-        format!("tool-{}-source", extension.name),
-    ))
+    let identity = InfobaseIdentity::normalize(&config.infobase)?;
+    let layout = RuntimeStateLayout::new(&config.work_path, identity)?;
+    let descriptor = RuntimeSourceDescriptor::new(RuntimeSourceIdentityInputs {
+        configured_source_identity: &source.path,
+        source_root: &source_path,
+        purpose: crate::config::model::SourceSetPurpose::Extension,
+        format: source.format.unwrap_or(config.format),
+        backend: config.builder,
+        logical_role: LogicalSourceRole::ToolExtension,
+    })?;
+    let state = layout.source_state(&format!("tool-{}", extension.name), &descriptor);
+    Ok(
+        SourceSetContext::new(format!("tool:{}", extension.name), source_path, state)
+            .with_excluded_roots(vec![absolutize_path(&config.work_path)?]),
+    )
 }
 
 fn absolutize_path(path: &Path) -> Result<PathBuf, AppError> {
@@ -223,30 +393,16 @@ fn extension_stage_detail(executor: &str, action: &str, extension: &ToolExtensio
     format!("[{executor}] {action} расширения {}", extension.name)
 }
 
-fn commit_tool_extension_full_rescan(
+fn commit_tool_extension_full_observation(
     context: &SourceSetContext,
-    work_path: &Path,
-    recover_storage: bool,
+    prepared: &analyzer::PreparedStateUpdate,
 ) -> Result<(), AppError> {
-    match analyzer::rescan_and_commit_full(context, work_path) {
-        Ok(()) => Ok(()),
-        Err(_error) if recover_storage && storage_needs_recovery(context, work_path) => {
-            let storage_path = context.storage_path(work_path);
-            remove_storage_path(&storage_path).map_err(|remove_error| {
-                AppError::Runtime(format!(
-                    "failed to remove corrupt storage '{}': {remove_error}",
-                    storage_path.display()
-                ))
-            })?;
-            analyzer::rescan_and_commit_full(context, work_path)
-                .map_err(|retry_error| AppError::Runtime(retry_error.to_string()))
-        }
-        Err(error) => Err(AppError::Runtime(error.to_string())),
-    }
+    analyzer::commit_full_observation(context, prepared)
+        .map_err(|error| AppError::Runtime(error.to_string()))
 }
 
-fn storage_needs_recovery(context: &SourceSetContext, work_path: &Path) -> bool {
-    match HashStorage::new(context.storage_path(work_path)).current_generation() {
+fn storage_needs_recovery(context: &SourceSetContext) -> bool {
+    match HashStorage::new(context.storage_path()).current_generation() {
         Err(StorageError::Recoverable { .. }) => true,
         Err(StorageError::Hard { reason, .. }) => {
             let reason = reason.to_ascii_lowercase();
@@ -256,28 +412,46 @@ fn storage_needs_recovery(context: &SourceSetContext, work_path: &Path) -> bool 
     }
 }
 
-fn remove_storage_path(path: &Path) -> std::io::Result<()> {
-    if !path.exists() {
-        return Ok(());
-    }
-
-    let metadata = std::fs::symlink_metadata(path)?;
-    if metadata.is_dir() {
-        std::fs::remove_dir_all(path)
-    } else {
-        std::fs::remove_file(path)
-    }
-}
-
 fn prepare_designer_source_extension(
     context: &ExecutionContext,
     config: &AppConfig,
     extension: &ToolExtensionConfig,
     source_path: &Path,
     utilities: &mut PlatformUtilities,
+    commit: &ToolSourceCommit<'_>,
 ) -> Result<(), AppError> {
     match config.builder {
         BuilderBackend::Designer => {
+            let state_lock = lock_designer_state(commit.context)
+                .map_err(|error| AppError::Runtime(error.to_string()))?;
+            recover_designer_state_with_lock(commit.context, &state_lock)
+                .map_err(|error| AppError::Runtime(error.to_string()))?;
+            cleanup_orphan_designer_transactions(commit.context, &state_lock)
+                .map_err(|error| AppError::Runtime(error.to_string()))?;
+            let private_cdfi = if commit.cdfi_seed == ToolCdfiSeedPolicy::Allow {
+                match inspect_private_cdfi(&commit.context.private_cdfi_path())
+                    .map_err(|error| AppError::Runtime(error.to_string()))?
+                {
+                    PrivateCdfiState::Valid(cdfi) => Some(cdfi),
+                    PrivateCdfiState::Missing | PrivateCdfiState::Corrupt(_) => None,
+                }
+            } else {
+                None
+            };
+            let transaction = DesignerSourceTransaction::create(
+                source_path,
+                commit.context.excluded_roots(),
+                &commit.context.transactions_dir(),
+                private_cdfi
+                    .as_ref()
+                    .map_or(CdfiSeed::None, CdfiSeed::Validated),
+            )
+            .map_err(|error| AppError::Runtime(error.to_string()))?;
+            if source_path == commit.context.path() {
+                transaction
+                    .verify_snapshot(commit.prepared)
+                    .map_err(|error| AppError::Runtime(error.to_string()))?;
+            }
             let binary = utilities
                 .locate(UtilityType::V8)
                 .map_err(AppError::from)?
@@ -290,13 +464,20 @@ fn prepare_designer_source_extension(
                 extension,
                 "load",
             )?;
+            if let Some(error) =
+                interruption_before_safe_point(context, extension, "Designer tool extension load")
+            {
+                return Err(error);
+            }
+            require_designer_full_rebuild(commit.context)
+                .map_err(|error| AppError::Runtime(error.to_string()))?;
             log_tool_extension_stage(
                 extension,
                 "load",
                 &extension_stage_detail("Конфигуратор", "Загрузка", extension),
             );
             let load = dsl
-                .load_config_from_files_full(source_path, Some(&extension.name))
+                .load_config_from_files_full(transaction.load_root(), Some(&extension.name))
                 .map_err(AppError::from)?;
             ensure_tool_extension_success("load", extension, &load)?;
 
@@ -321,7 +502,17 @@ fn prepare_designer_source_extension(
             let update = dsl
                 .update_db_cfg(Some(&extension.name))
                 .map_err(AppError::from)?;
-            ensure_tool_extension_success("update_db_cfg", extension, &update)
+            ensure_tool_extension_success("update_db_cfg", extension, &update)?;
+            commit_designer_state_with_lock(
+                commit.context,
+                &state_lock,
+                commit.prepared,
+                &transaction.load_root().join("ConfigDumpInfo.xml"),
+            )
+            .map_err(|error| AppError::Runtime(error.to_string()))?;
+            transaction
+                .close()
+                .map_err(|error| AppError::Runtime(error.to_string()))
         }
         BuilderBackend::Ibcmd => {
             let binary = utilities
@@ -633,7 +824,19 @@ fn successful_build_step(
         ok: true,
         message: Some(message),
         duration_ms,
+        receipt: crate::domain::sync_receipt::SyncReceipt::empty_applied(),
     }
+}
+
+fn successful_build_step_with_receipt(
+    extension: &ToolExtensionConfig,
+    message: String,
+    duration_ms: u64,
+    receipt: SyncReceipt,
+) -> BuildStep {
+    let mut step = successful_build_step(extension, message, duration_ms);
+    step.receipt = receipt;
+    step
 }
 
 fn skipped_build_step(
@@ -647,17 +850,149 @@ fn skipped_build_step(
         ok: true,
         message: Some(message),
         duration_ms,
+        receipt: crate::domain::sync_receipt::SyncReceipt::empty_skipped(),
     }
 }
 
-fn failed_build_step(extension: &ToolExtensionConfig, message: String) -> BuildStep {
+fn failed_build_step(
+    extension: &ToolExtensionConfig,
+    message: String,
+    receipt: SyncReceipt,
+) -> BuildStep {
     BuildStep {
         source_set: format!("tool:{}", extension.name),
         mode: BuildMode::Full,
         ok: false,
         message: Some(message),
         duration_ms: 0,
+        receipt,
     }
+}
+
+fn applied_receipt(
+    requested: Vec<SyncTarget>,
+    processed: Vec<SyncTarget>,
+) -> Result<SyncReceipt, AppError> {
+    SyncReceipt::applied(requested, processed, vec![])
+        .map_err(|error| AppError::Runtime(error.to_string()))
+}
+
+fn tool_extension_failure(
+    extension: &ToolExtensionConfig,
+    error: AppError,
+    requested: Vec<SyncTarget>,
+) -> ToolExtensionFailure {
+    let (error, receipt) = match SyncReceipt::failed(requested) {
+        Ok(receipt) => (error, receipt),
+        Err(receipt_error) => {
+            let combined = AppError::Runtime(format!(
+                "{error}; failed to construct exact failure receipt: {receipt_error}"
+            ));
+            (combined, SyncReceipt::empty_failed())
+        }
+    };
+    ToolExtensionFailure {
+        step: failed_build_step(extension, error.to_string(), receipt),
+        error,
+    }
+}
+
+fn full_inventory_receipt(
+    context: &SourceSetContext,
+) -> Result<
+    (
+        Vec<SyncTarget>,
+        Vec<SyncTarget>,
+        analyzer::PreparedStateUpdate,
+    ),
+    AppError,
+> {
+    let inventory = analyzer::managed_inventory(context)
+        .map_err(|error| AppError::Runtime(error.to_string()))?;
+    let requested = inventory
+        .requested
+        .iter()
+        .map(|change| {
+            SyncTarget::new(
+                &change.rel_path,
+                change.pre_hash.clone(),
+                change.post_hash.clone(),
+            )
+            .map_err(|error| AppError::Runtime(error.to_string()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let requested_by_path = unique_tool_target_index(&requested)?;
+    let mut processed = inventory
+        .current
+        .into_iter()
+        .map(|file| {
+            let pre_hash = match requested_by_path.get(file.rel_path.as_str()) {
+                Some(target) => target.pre_hash().map(str::to_owned),
+                None => Some(file.hash.clone()),
+            };
+            SyncTarget::new(file.rel_path, pre_hash, Some(file.hash))
+                .map_err(|error| AppError::Runtime(error.to_string()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    processed.extend(
+        requested
+            .iter()
+            .filter(|target| target.post_hash().is_none())
+            .cloned(),
+    );
+    Ok((requested, processed, inventory.prepared))
+}
+
+fn change_receipt(
+    changes: &[analyzer::FileChange],
+    prepared: &analyzer::PreparedStateUpdate,
+) -> Result<(Vec<SyncTarget>, Vec<SyncTarget>), AppError> {
+    let requested = changes
+        .iter()
+        .map(|change| {
+            SyncTarget::new(
+                &change.rel_path,
+                change.pre_hash.clone(),
+                change.post_hash.clone(),
+            )
+            .map_err(|error| AppError::Runtime(error.to_string()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let requested_by_path = unique_tool_target_index(&requested)?;
+    let mut processed = prepared
+        .snapshot
+        .iter()
+        .map(|file| {
+            let pre_hash = match requested_by_path.get(file.rel_path.as_str()) {
+                Some(target) => target.pre_hash().map(str::to_owned),
+                None => Some(file.hash.clone()),
+            };
+            SyncTarget::new(&file.rel_path, pre_hash, Some(file.hash.clone()))
+                .map_err(|error| AppError::Runtime(error.to_string()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    processed.extend(
+        requested
+            .iter()
+            .filter(|target| target.post_hash().is_none())
+            .cloned(),
+    );
+    Ok((requested, processed))
+}
+
+fn unique_tool_target_index(
+    targets: &[SyncTarget],
+) -> Result<std::collections::HashMap<&str, &SyncTarget>, AppError> {
+    let mut by_path = std::collections::HashMap::with_capacity(targets.len());
+    for target in targets {
+        if by_path.insert(target.path(), target).is_some() {
+            return Err(AppError::Runtime(format!(
+                "duplicate normalized path '{}' in tool extension inventory",
+                target.path()
+            )));
+        }
+    }
+    Ok(by_path)
 }
 
 fn recreate_directory(path: &Path) -> std::io::Result<()> {

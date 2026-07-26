@@ -640,7 +640,7 @@ fn resolve_target(
     args: &ArtifactsRequest,
 ) -> Result<ResolvedArtifactsTarget, AppError> {
     let output_path = validate_output_path(args)?;
-    let inventory = SourceSetInventory::new(config);
+    let inventory = SourceSetInventory::new(config).map_err(AppError::from)?;
 
     let (source_set, extension) = match args.mode {
         ArtifactsModeRequest::ConfigurationCf => {

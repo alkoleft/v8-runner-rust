@@ -28,8 +28,12 @@ pub mod load;
 pub mod partial_dump_selector;
 /// Shared runner models.
 pub mod runner;
+/// Versioned runtime-state identity and path models.
+pub mod runtime_state;
 /// Source set domain models.
 pub mod source_set;
+/// Typed terminal synchronization receipts shared by build and dump workflows.
+pub mod sync_receipt;
 /// Syntax-check domain models.
 pub mod syntax;
 /// Test domain models.

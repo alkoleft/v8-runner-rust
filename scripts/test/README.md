@@ -89,7 +89,9 @@ live-mcp-http.py
 
 - Это главный исполнитель реального fixture-based smoke.
 - Он владеет порядком шагов, валидацией config, подготовкой workspace и проверкой результата.
-- Для `builder=DESIGNER` выполняет `syntax`, opt-in `test`, упаковку `.cf/.cfe/.epf/.erf` и проверку deploy-ready артефактов.
+- Для `builder=DESIGNER` выполняет `syntax`, opt-in `test`, упаковку `.cf/.cfe/.epf/.erf`,
+  проверку deploy-ready артефактов и обязательный `full/incremental/partial` no-clobber dump
+  через private shadow без публикации `ConfigDumpInfo.xml` в source.
 - Для `builder=IBCMD` выполняет `dump full/incremental/partial` smoke вместо designer-specific packaging.
 - Именно этот скрипт является общим contract layer для `live-cli-designer.sh` и `live-cli-ibcmd.sh`.
 

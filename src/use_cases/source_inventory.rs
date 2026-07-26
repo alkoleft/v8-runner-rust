@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use crate::change_detection::analyzer::ContextAnalysis;
 use crate::change_detection::source_sets::SourceSetsService;
 use crate::config::model::{AppConfig, SourceSetConfig, SourceSetPurpose};
+use crate::domain::runtime_state::RuntimeStateError;
 use crate::domain::source_set::SourceSetContext;
 
 /// Read-only runtime index for source-set orchestration.
@@ -17,12 +18,12 @@ pub(crate) struct SourceSetInventory<'a> {
 }
 
 impl<'a> SourceSetInventory<'a> {
-    pub(crate) fn new(config: &'a AppConfig) -> Self {
-        let service = SourceSetsService::new(config);
-        let designer_contexts = service.designer_contexts();
-        let edt_contexts = service.edt_contexts();
+    pub(crate) fn new(config: &'a AppConfig) -> Result<Self, RuntimeStateError> {
+        let service = SourceSetsService::new(config)?;
+        let designer_contexts = service.designer_contexts()?;
+        let edt_contexts = service.edt_contexts()?;
 
-        Self {
+        Ok(Self {
             config,
             source_sets_by_name: config
                 .source_sets
@@ -33,7 +34,7 @@ impl<'a> SourceSetInventory<'a> {
             designer_contexts,
             edt_contexts_by_name: index_contexts(&edt_contexts),
             edt_contexts,
-        }
+        })
     }
 
     pub(crate) fn source_sets(&self) -> Vec<&'a SourceSetConfig> {
@@ -105,7 +106,7 @@ impl<'a> SourceSetInventory<'a> {
     }
 
     pub(crate) fn analyze_contexts(&self, contexts: &[SourceSetContext]) -> Vec<ContextAnalysis> {
-        SourceSetsService::new(self.config).analyze_contexts(contexts)
+        crate::change_detection::analyzer::analyze_contexts(contexts)
     }
 }
 
@@ -168,7 +169,7 @@ mod tests {
     #[test]
     fn ordered_source_sets_group_configuration_extensions_and_external_sets() {
         let config = config(SourceFormat::Designer);
-        let inventory = SourceSetInventory::new(&config);
+        let inventory = SourceSetInventory::new(&config).expect("inventory");
 
         let names = inventory
             .ordered_source_sets()
@@ -182,7 +183,7 @@ mod tests {
     #[test]
     fn indexes_designer_and_edt_contexts_by_source_set_identity() {
         let config = config(SourceFormat::Edt);
-        let inventory = SourceSetInventory::new(&config);
+        let inventory = SourceSetInventory::new(&config).expect("inventory");
 
         let main = inventory.source_set("main").expect("main source-set");
         assert_eq!(
@@ -197,5 +198,19 @@ mod tests {
             inventory.edt_context("main").expect("edt").path(),
             config.base_path.join("configuration").as_path()
         );
+    }
+
+    #[test]
+    fn malformed_nonempty_designer_connection_returns_error_without_unwinding() {
+        let mut config = config(SourceFormat::Designer);
+        config.infobase.connection = "/Unsupported secret-value".to_owned();
+
+        let result = std::panic::catch_unwind(|| SourceSetInventory::new(&config));
+
+        assert!(result.is_ok(), "inventory construction must not unwind");
+        assert!(matches!(
+            result.expect("no unwind"),
+            Err(crate::domain::runtime_state::RuntimeStateError::UnsupportedRawConnection)
+        ));
     }
 }

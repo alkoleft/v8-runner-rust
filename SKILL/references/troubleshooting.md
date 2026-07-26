@@ -47,7 +47,7 @@ workPath/temp/<runner-id>/runs/<run-id>/
 
 Useful `workPath` locations:
 
-- `workPath/hash-storages/`: persisted change-detection state.
+- `workPath/ib-state/v1/`: opaque per-infobase/per-source CDFI, baselines, observations, and recovery journals. Do not edit, copy between infobases, or delete it as a routine fix; legacy `hash-storages` is not migrated.
 - `workPath/edt-workspace/`: shared EDT workspace for `init`.
 - `workPath/convert/edt-workspace/`: separate EDT workspace for `convert`.
 - `workPath/designer/<sourceSetName>/`: generated Designer representation, especially for EDT flows.
@@ -55,3 +55,7 @@ Useful `workPath` locations:
 - `workPath/logs/platform/`: platform logs.
 - `workPath/temp/partial-lists/`: Designer partial load/dump list files; failed partial-load builds preserve the relevant list file for diagnostics.
 - `workPath/temp/`: temporary run artifacts and diagnostics.
+
+If dump reports a three-way conflict, inspect `git diff` and resolve the local/source intent before
+retrying. Conflict publishes no source files and advances no private generation. For a deliberate
+build recovery use `v8-runner build --full-rebuild`; do not repair opaque state files manually.

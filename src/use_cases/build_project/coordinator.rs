@@ -1,5 +1,36 @@
 use super::*;
 
+#[must_use = "EDT state must remain pending until the downstream generated stage succeeds"]
+struct PendingEdtCommit {
+    context: SourceSetContext,
+    commit: StepCommit,
+    receipt: PlannedReceipt,
+}
+
+impl PendingEdtCommit {
+    fn new(context: SourceSetContext, commit: StepCommit, receipt: PlannedReceipt) -> Self {
+        Self {
+            context,
+            commit,
+            receipt,
+        }
+    }
+
+    fn commit(self, source_set: &SourceSetConfig) -> Result<(), PendingEdtCommitFailure> {
+        commit_step_state(source_set, &self.context, &self.commit).map_err(|error| {
+            PendingEdtCommitFailure {
+                error,
+                receipt: self.receipt,
+            }
+        })
+    }
+}
+
+struct PendingEdtCommitFailure {
+    error: AppError,
+    receipt: PlannedReceipt,
+}
+
 pub(super) fn run_build_designer(
     context: &ExecutionContext,
     config: &AppConfig,
@@ -12,7 +43,16 @@ pub(super) fn run_build_designer(
     );
 
     let started = Instant::now();
-    let inventory = SourceSetInventory::new(config);
+    let inventory = SourceSetInventory::new(config).map_err(|error| {
+        BuildExecutionFailure::with_payload(
+            AppError::from(error),
+            BuildResult {
+                ok: false,
+                steps: vec![],
+                duration_ms: started.elapsed().as_millis() as u64,
+            },
+        )
+    })?;
     let ordered_source_sets =
         match selected_ordered_source_sets(&inventory, args.source_set.as_deref()) {
             Ok(source_sets) => source_sets,
@@ -29,6 +69,19 @@ pub(super) fn run_build_designer(
         };
     let selected_designer_contexts =
         designer_contexts_for_source_sets(&inventory, &ordered_source_sets);
+
+    for source_context in &selected_designer_contexts {
+        recover_designer_state(source_context).map_err(|error| {
+            BuildExecutionFailure::with_payload(
+                AppError::Runtime(error.to_string()),
+                BuildResult {
+                    ok: false,
+                    steps: vec![],
+                    duration_ms: started.elapsed().as_millis() as u64,
+                },
+            )
+        })?;
+    }
 
     let analysis_by_name = if args.full_rebuild {
         None
@@ -83,10 +136,26 @@ pub(super) fn run_build_designer(
             continue;
         }
 
+        let cdfi_plan = match resolve_designer_cdfi_plan(&source_context, args.full_rebuild) {
+            Ok(plan) => plan,
+            Err(error) => {
+                let result = fail_from_source_set_index(
+                    started,
+                    steps,
+                    &ordered_source_sets,
+                    index,
+                    source_set,
+                    BuildMode::Skipped,
+                    error.to_string(),
+                );
+                return Err(BuildExecutionFailure::with_payload(error, result));
+            }
+        };
+        let effective_full_rebuild = cdfi_plan.forces_full_rebuild();
         let plan = match plan_configurator_load_step(
             source_set,
             &source_context,
-            args.full_rebuild,
+            effective_full_rebuild,
             analysis_by_name.as_ref(),
             config.build.partial_load_threshold,
         ) {
@@ -109,19 +178,24 @@ pub(super) fn run_build_designer(
         };
 
         match plan {
-            StepPlan::Skip { message, ok } => {
+            StepPlan::Skip {
+                message,
+                ok,
+                receipt,
+            } => {
                 debug!(
                     source_set = source_set.name.as_str(),
                     message = message.as_str(),
                     "skipping build step"
                 );
-                push_build_step(
+                push_build_step_with_receipt(
                     &mut steps,
                     &source_set.name,
                     BuildMode::Skipped,
                     ok,
                     message,
                     0,
+                    receipt,
                 )
             }
             StepPlan::Execute {
@@ -129,6 +203,7 @@ pub(super) fn run_build_designer(
                 message,
                 partial_paths,
                 commit,
+                receipt,
             } => {
                 debug!(
                     source_set = source_set.name.as_str(),
@@ -151,6 +226,8 @@ pub(super) fn run_build_designer(
                                     mode.clone(),
                                     error.to_string(),
                                 );
+                                let result =
+                                    attach_failed_receipt(result, &source_set.name, &receipt);
                                 return Err(BuildExecutionFailure::with_payload(
                                     AppError::from(error),
                                     result,
@@ -174,14 +251,16 @@ pub(super) fn run_build_designer(
                     index,
                     partial_paths.as_deref(),
                     &commit,
+                    &cdfi_plan,
                 ) {
-                    Ok(warnings) => push_build_step(
+                    Ok(warnings) => push_build_step_with_receipt(
                         &mut steps,
                         &source_set.name,
                         mode,
                         true,
                         merge_step_message(message, &warnings),
                         step_started.elapsed().as_millis() as u64,
+                        receipt.applied(),
                     ),
                     Err(error) => {
                         let result = fail_from_source_set_index(
@@ -193,6 +272,7 @@ pub(super) fn run_build_designer(
                             mode,
                             error.to_string(),
                         );
+                        let result = attach_failed_receipt(result, &source_set.name, &receipt);
                         return Err(BuildExecutionFailure::with_payload(error, result));
                     }
                 }
@@ -219,7 +299,16 @@ pub(super) fn run_build_ibcmd(
     );
 
     let started = Instant::now();
-    let inventory = SourceSetInventory::new(config);
+    let inventory = SourceSetInventory::new(config).map_err(|error| {
+        BuildExecutionFailure::with_payload(
+            AppError::from(error),
+            BuildResult {
+                ok: false,
+                steps: vec![],
+                duration_ms: started.elapsed().as_millis() as u64,
+            },
+        )
+    })?;
     let ordered_source_sets =
         match selected_ordered_source_sets(&inventory, args.source_set.as_deref()) {
             Ok(source_sets) => source_sets,
@@ -281,19 +370,24 @@ pub(super) fn run_build_ibcmd(
         };
 
         match plan {
-            StepPlan::Skip { message, ok } => {
+            StepPlan::Skip {
+                message,
+                ok,
+                receipt,
+            } => {
                 debug!(
                     source_set = source_set.name.as_str(),
                     message = message.as_str(),
                     "skipping build step"
                 );
-                push_build_step(
+                push_build_step_with_receipt(
                     &mut steps,
                     &source_set.name,
                     BuildMode::Skipped,
                     ok,
                     message,
                     0,
+                    receipt,
                 )
             }
             StepPlan::Execute {
@@ -301,6 +395,7 @@ pub(super) fn run_build_ibcmd(
                 message,
                 partial_paths,
                 commit,
+                receipt,
             } => {
                 debug!(
                     source_set = source_set.name.as_str(),
@@ -323,6 +418,8 @@ pub(super) fn run_build_ibcmd(
                                     mode.clone(),
                                     error.to_string(),
                                 );
+                                let result =
+                                    attach_failed_receipt(result, &source_set.name, &receipt);
                                 return Err(BuildExecutionFailure::with_payload(
                                     AppError::from(error),
                                     result,
@@ -346,13 +443,14 @@ pub(super) fn run_build_ibcmd(
                     partial_paths.as_deref(),
                     &commit,
                 ) {
-                    Ok(warnings) => push_build_step(
+                    Ok(warnings) => push_build_step_with_receipt(
                         &mut steps,
                         &source_set.name,
                         mode,
                         true,
                         merge_step_message(message, &warnings),
                         step_started.elapsed().as_millis() as u64,
+                        receipt.applied(),
                     ),
                     Err(error) => {
                         let result = fail_from_source_set_index(
@@ -364,6 +462,7 @@ pub(super) fn run_build_ibcmd(
                             mode,
                             error.to_string(),
                         );
+                        let result = attach_failed_receipt(result, &source_set.name, &receipt);
                         return Err(BuildExecutionFailure::with_payload(error, result));
                     }
                 }
@@ -400,7 +499,16 @@ pub(super) fn run_build_edt(
     }
 
     let started = Instant::now();
-    let inventory = SourceSetInventory::new(config);
+    let inventory = SourceSetInventory::new(config).map_err(|error| {
+        BuildExecutionFailure::with_payload(
+            AppError::from(error),
+            BuildResult {
+                ok: false,
+                steps: vec![],
+                duration_ms: started.elapsed().as_millis() as u64,
+            },
+        )
+    })?;
     let ordered_source_sets =
         match selected_ordered_source_sets(&inventory, args.source_set.as_deref()) {
             Ok(source_sets) => source_sets,
@@ -437,9 +545,11 @@ pub(super) fn run_build_edt(
         let Some(designer_context) = inventory.designer_context(&source_set.name).cloned() else {
             continue;
         };
+        let mut pending_edt_commit = None;
 
         let edt_stage = match plan_edt_export_step(
             source_set,
+            &edt_context,
             args.full_rebuild,
             edt_analysis_by_name.as_ref(),
         ) {
@@ -477,6 +587,8 @@ pub(super) fn run_build_edt(
                                 BuildMode::EdtExport,
                                 error.to_string(),
                             );
+                            let result =
+                                attach_failed_plan_receipt(result, &source_set.name, &edt_stage);
                             return Err(BuildExecutionFailure::with_payload(
                                 AppError::from(error),
                                 result,
@@ -504,6 +616,7 @@ pub(super) fn run_build_edt(
                     BuildMode::EdtExport,
                     error.to_string(),
                 );
+                let result = attach_failed_plan_receipt(result, &source_set.name, &edt_stage);
                 return Err(BuildExecutionFailure::with_payload(error, result));
             }
             log_timeline_stage(
@@ -541,6 +654,11 @@ pub(super) fn run_build_edt(
                                         BuildMode::EdtExport,
                                         app_error.to_string(),
                                     );
+                                    let result = attach_failed_plan_receipt(
+                                        result,
+                                        &source_set.name,
+                                        &edt_stage,
+                                    );
                                     return Err(BuildExecutionFailure::with_payload(
                                         app_error, result,
                                     ));
@@ -556,6 +674,11 @@ pub(super) fn run_build_edt(
                                     source_set,
                                     BuildMode::EdtExport,
                                     app_error.to_string(),
+                                );
+                                let result = attach_failed_plan_receipt(
+                                    result,
+                                    &source_set.name,
+                                    &edt_stage,
                                 );
                                 return Err(BuildExecutionFailure::with_payload(app_error, result));
                             }
@@ -582,12 +705,9 @@ pub(super) fn run_build_edt(
                 Ok(descriptors) => {
                     match &edt_stage {
                         StepPlan::Execute { commit, .. } => {
-                            if let Err(app_error) = commit_step_state(
-                                source_set,
-                                &edt_context,
-                                &config.work_path,
-                                commit,
-                            ) {
+                            if let Err(app_error) =
+                                commit_step_state(source_set, &edt_context, commit)
+                            {
                                 let result = fail_from_source_set_index(
                                     started,
                                     steps,
@@ -597,12 +717,18 @@ pub(super) fn run_build_edt(
                                     BuildMode::EdtExport,
                                     app_error.to_string(),
                                 );
+                                let result = attach_failed_plan_receipt(
+                                    result,
+                                    &source_set.name,
+                                    &edt_stage,
+                                );
                                 return Err(BuildExecutionFailure::with_payload(app_error, result));
                             }
                         }
                         StepPlan::Skip { .. } => {}
                     }
-                    push_build_step(
+                    let receipt = receipt_after_success(&edt_stage);
+                    push_build_step_with_receipt(
                         &mut steps,
                         &source_set.name,
                         BuildMode::EdtExport,
@@ -615,6 +741,7 @@ pub(super) fn run_build_edt(
                             &[],
                         ),
                         export_started.elapsed().as_millis() as u64,
+                        receipt,
                     )
                 }
                 Err(error) => {
@@ -627,6 +754,7 @@ pub(super) fn run_build_edt(
                         BuildMode::EdtExport,
                         error.to_string(),
                     );
+                    let result = attach_failed_plan_receipt(result, &source_set.name, &edt_stage);
                     return Err(BuildExecutionFailure::with_payload(error, result));
                 }
             }
@@ -636,14 +764,19 @@ pub(super) fn run_build_edt(
         let edt_stage_skipped = matches!(&edt_stage, StepPlan::Skip { .. });
 
         match edt_stage {
-            StepPlan::Skip { message, ok } => {
-                push_build_step(
+            StepPlan::Skip {
+                message,
+                ok,
+                receipt,
+            } => {
+                push_build_step_with_receipt(
                     &mut steps,
                     &source_set.name,
                     BuildMode::Skipped,
                     ok,
                     message,
                     0,
+                    receipt,
                 );
             }
             StepPlan::Execute {
@@ -651,6 +784,7 @@ pub(super) fn run_build_edt(
                 partial_paths: _,
                 commit,
                 mode: _,
+                receipt,
             } => {
                 let edt = match edt_binary.clone() {
                     Some(path) => path,
@@ -667,6 +801,8 @@ pub(super) fn run_build_edt(
                                     BuildMode::EdtExport,
                                     error.to_string(),
                                 );
+                                let result =
+                                    attach_failed_receipt(result, &source_set.name, &receipt);
                                 return Err(BuildExecutionFailure::with_payload(
                                     AppError::from(error),
                                     result,
@@ -714,6 +850,11 @@ pub(super) fn run_build_edt(
                                             BuildMode::EdtExport,
                                             app_error.to_string(),
                                         );
+                                        let result = attach_failed_receipt(
+                                            result,
+                                            &source_set.name,
+                                            &receipt,
+                                        );
                                         return Err(BuildExecutionFailure::with_payload(
                                             app_error, result,
                                         ));
@@ -730,6 +871,8 @@ pub(super) fn run_build_edt(
                                         BuildMode::EdtExport,
                                         app_error.to_string(),
                                     );
+                                    let result =
+                                        attach_failed_receipt(result, &source_set.name, &receipt);
                                     return Err(BuildExecutionFailure::with_payload(
                                         app_error, result,
                                     ));
@@ -777,42 +920,56 @@ pub(super) fn run_build_edt(
                             BuildMode::EdtExport,
                             error.to_string(),
                         );
+                        let result = attach_failed_receipt(result, &source_set.name, &receipt);
                         return Err(BuildExecutionFailure::with_payload(error, result));
                     }
                 };
-                if let Err(app_error) =
-                    commit_step_state(source_set, &edt_context, &config.work_path, &commit)
-                {
-                    let result = fail_from_source_set_index(
-                        started,
-                        steps,
-                        &ordered_source_sets,
-                        index,
-                        source_set,
-                        BuildMode::EdtExport,
-                        app_error.to_string(),
-                    );
-                    return Err(BuildExecutionFailure::with_payload(app_error, result));
-                }
+                pending_edt_commit = Some(PendingEdtCommit::new(
+                    edt_context.clone(),
+                    commit,
+                    receipt.clone(),
+                ));
 
-                push_build_step(
+                push_build_step_with_receipt(
                     &mut steps,
                     &source_set.name,
                     BuildMode::EdtExport,
                     true,
                     merge_step_message("EDT export completed".to_owned(), &export_warnings),
                     export_started.elapsed().as_millis() as u64,
+                    receipt.applied(),
                 );
             }
         }
 
+        let designer_cdfi_plan = if config.builder == BuilderBackend::Designer {
+            match resolve_designer_cdfi_plan(&designer_context, args.full_rebuild) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    let result = fail_from_source_set_index(
+                        started,
+                        steps,
+                        &ordered_source_sets,
+                        index,
+                        source_set,
+                        BuildMode::Skipped,
+                        error.to_string(),
+                    );
+                    return Err(BuildExecutionFailure::with_payload(error, result));
+                }
+            }
+        } else if args.full_rebuild {
+            DesignerCdfiPlan::IbcmdFull
+        } else {
+            DesignerCdfiPlan::IbcmdNormal
+        };
+        let designer_effective_full_rebuild = designer_cdfi_plan.forces_full_rebuild();
         let designer_stage = match plan_generated_designer_load_step(
             source_set,
             &designer_context,
-            args.full_rebuild,
+            designer_effective_full_rebuild,
             edt_stage_skipped,
             config.build.partial_load_threshold,
-            &config.work_path,
         ) {
             Ok(plan) => plan,
             Err(error) => {
@@ -833,14 +990,35 @@ pub(super) fn run_build_edt(
         };
 
         match designer_stage {
-            StepPlan::Skip { message, ok } => {
-                push_build_step(
+            StepPlan::Skip {
+                message,
+                ok,
+                receipt,
+            } => {
+                if let Some(pending) = pending_edt_commit.take() {
+                    if let Err(failure) = pending.commit(source_set) {
+                        let result = fail_from_source_set_index(
+                            started,
+                            steps,
+                            &ordered_source_sets,
+                            index,
+                            source_set,
+                            BuildMode::EdtExport,
+                            failure.error.to_string(),
+                        );
+                        let result =
+                            attach_failed_receipt(result, &source_set.name, &failure.receipt);
+                        return Err(BuildExecutionFailure::with_payload(failure.error, result));
+                    }
+                }
+                push_build_step_with_receipt(
                     &mut steps,
                     &source_set.name,
                     BuildMode::Skipped,
                     ok,
                     message,
                     0,
+                    receipt,
                 );
             }
             StepPlan::Execute {
@@ -848,6 +1026,7 @@ pub(super) fn run_build_edt(
                 message,
                 partial_paths,
                 commit,
+                receipt,
             } => {
                 let load_started = Instant::now();
                 let load_result = match config.builder {
@@ -866,6 +1045,11 @@ pub(super) fn run_build_edt(
                                             source_set,
                                             mode.clone(),
                                             error.to_string(),
+                                        );
+                                        let result = attach_failed_receipt(
+                                            result,
+                                            &source_set.name,
+                                            &receipt,
                                         );
                                         return Err(BuildExecutionFailure::with_payload(
                                             AppError::from(error),
@@ -888,6 +1072,7 @@ pub(super) fn run_build_edt(
                             index,
                             partial_paths.as_deref(),
                             &commit,
+                            &designer_cdfi_plan,
                         )
                     }
                     BuilderBackend::Ibcmd => {
@@ -905,6 +1090,11 @@ pub(super) fn run_build_edt(
                                             source_set,
                                             mode.clone(),
                                             error.to_string(),
+                                        );
+                                        let result = attach_failed_receipt(
+                                            result,
+                                            &source_set.name,
+                                            &receipt,
                                         );
                                         return Err(BuildExecutionFailure::with_payload(
                                             AppError::from(error),
@@ -930,14 +1120,39 @@ pub(super) fn run_build_edt(
                     }
                 };
                 match load_result {
-                    Ok(warnings) => push_build_step(
-                        &mut steps,
-                        &source_set.name,
-                        mode,
-                        true,
-                        merge_step_message(message, &warnings),
-                        load_started.elapsed().as_millis() as u64,
-                    ),
+                    Ok(warnings) => {
+                        if let Some(pending) = pending_edt_commit.take() {
+                            if let Err(failure) = pending.commit(source_set) {
+                                let result = fail_from_source_set_index(
+                                    started,
+                                    steps,
+                                    &ordered_source_sets,
+                                    index,
+                                    source_set,
+                                    BuildMode::EdtExport,
+                                    failure.error.to_string(),
+                                );
+                                let result = attach_failed_receipt(
+                                    result,
+                                    &source_set.name,
+                                    &failure.receipt,
+                                );
+                                return Err(BuildExecutionFailure::with_payload(
+                                    failure.error,
+                                    result,
+                                ));
+                            }
+                        }
+                        push_build_step_with_receipt(
+                            &mut steps,
+                            &source_set.name,
+                            mode,
+                            true,
+                            merge_step_message(message, &warnings),
+                            load_started.elapsed().as_millis() as u64,
+                            receipt.applied(),
+                        )
+                    }
                     Err(error) => {
                         let result = fail_from_source_set_index(
                             started,
@@ -948,6 +1163,7 @@ pub(super) fn run_build_edt(
                             mode,
                             error.to_string(),
                         );
+                        let result = attach_failed_receipt(result, &source_set.name, &receipt);
                         return Err(BuildExecutionFailure::with_payload(error, result));
                     }
                 }

@@ -38,7 +38,19 @@ control characters are rejected. With `builder=DESIGNER`, Designer validates whe
 metadata root type exists. With `builder=IBCMD`, the object list is not used because partial
 degrades to incremental.
 
-For `format=EDT`, dump uses an internal Designer snapshot under `workPath/designer/<sourceSetName>`, then imports the result into the EDT target.
+For `format=EDT`, dump uses private platform and configured-source shadows inside the scoped
+`ib-state/v1` transaction. The platform never writes the project source or
+`workPath/designer/<sourceSetName>` as its dump target.
+
+Dump safety and recovery rules:
+
+- each infobase/source-set identity owns private shadows and generation-scoped baselines under `workPath/ib-state/v1`; fingerprints are opaque and state must never be reused across infobases;
+- legacy `workPath/hash-storages` is deliberately not migrated; missing scoped state means full bootstrap, never an unchanged result;
+- incremental and partial dump require a valid matching baseline and private `ConfigDumpInfo.xml`; missing or corrupt state promotes that one operation to a full dump;
+- receipt lists are exact but independent audit dimensions: an applied target may be both `processed` and `skipped` when platform work occurred but publication retained/no-op'd it;
+- a three-way conflict publishes no project-source files or new private generation;
+- `B=absent, S=present, D=absent` is a conflict; runner never deletes a local file absent from its baseline;
+- full, incremental, and partial modes all use recoverable manifest publication. Forward recovery requires the exact `(generation, UUID transaction token)`; otherwise it restores the previous managed file state.
 
 ## Convert
 
@@ -94,4 +106,4 @@ Behavior:
 - external data processors and reports publish `.epf` / `.erf` into the output directory;
 - `builder=DESIGNER` is required.
 
-Full dump and package/external artifact publication use staged publication with backup/rollback semantics. Incremental and partial dump are non-atomic update modes.
+Package and external-artifact publication uses staged backup/rollback semantics. Every dump mode uses journaled, manifest-scoped source publication and private-state recovery.

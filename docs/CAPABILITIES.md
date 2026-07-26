@@ -26,14 +26,14 @@ CLI help, доверяйте текущему коду и затем синхр�
 | `tools download <tool>` | CLI-only загрузка latest releases | Загружает выбранный YAxUnit, Vanessa Automation single или onec-client-mcp-devkit; обновляет local overlay для Vanessa/client MCP и при `yaxunit --sources` добавляет YAxUnit как `source-set` `tests` |
 | `init` | `format=DESIGNER` + `builder=DESIGNER` | Создаёт файловую ИБ через Designer; server connection остаётся manual prerequisite |
 | `init` | `format=DESIGNER` + `builder=IBCMD` | Выполняет `ensure` файловой или серверной ИБ через `ibcmd infobase create` |
-| `init` | `format=EDT` + `builder=DESIGNER|IBCMD` | Готовит ИБ по правилам builder и импортирует EDT workspace |
+| `init` | `format=EDT` + `builder=DESIGNER\|IBCMD` | Готовит ИБ по правилам builder и импортирует EDT workspace |
 | `extensions` | `format=DESIGNER` или `format=EDT` | Обновляет свойства extension `source-set` |
-| `build` | `format=DESIGNER` + `builder=DESIGNER|IBCMD` | Выполняет incremental/full загрузку в ИБ |
-| `build` | `format=EDT` + `builder=DESIGNER|IBCMD` | Экспортирует изменённые EDT `source-set`, затем грузит generated Designer output |
+| `build` | `format=DESIGNER` + `builder=DESIGNER\|IBCMD` | Выполняет incremental/full загрузку в ИБ |
+| `build` | `format=EDT` + `builder=DESIGNER\|IBCMD` | Экспортирует изменённые EDT `source-set`, затем грузит generated Designer output |
 | `test` | Та же матрица, что и у `build` | Всегда сначала запускает `build` |
 | `dump` | `format=DESIGNER` + `builder=DESIGNER` | Полная, инкрементальная или object-scoped partial выгрузка |
 | `dump` | `format=DESIGNER` + `builder=IBCMD` | Полная и инкрементальная выгрузка; `partial` деградирует в incremental с warning; standalone-server state изолирован в `workPath/ibcmd-data` |
-| `dump` | `format=EDT` + `builder=DESIGNER|IBCMD` | Reverse sync из ИБ через internal Designer snapshot и EDT import |
+| `dump` | `format=EDT` + `builder=DESIGNER\|IBCMD` | Reverse sync через private Designer/configured-source shadows и EDT import |
 | `convert` | CLI-only repo-aware конвертация текущих `source-set` | Не использует `builder` и не требует ИБ |
 | `load` | `format=DESIGNER` + `builder=DESIGNER` | Загрузка `.cf` / `.cfe` артефактов в ИБ |
 | `make` / `artifacts` | `format=DESIGNER` + `builder=DESIGNER` | Экспорт `.cf` / `.cfe` и публикация `.epf` / `.erf` |
@@ -176,12 +176,17 @@ v8-runner build [--source-set <NAME>] [--full-rebuild]
 - Для `DESIGNER` выбирает incremental, partial или full path по изменённым файлам выбранного scope.
 - Для `EDT` сначала анализирует и экспортирует выбранные EDT `source-set`, затем грузит generated
   Designer files выбранным backend.
+- Designer backend получает private source transaction, а не project source tree. Source
+  `ConfigDumpInfo.xml` игнорируется; private CDFI/baseline/observation публикуются одной generation
+  только после successful pipeline.
+- Отсутствие scoped `ib-state/v1` или missing/corrupt private CDFI означает full bootstrap;
+  legacy `workPath/hash-storages` не мигрируется.
 - После успешного project stage, включая scoped `--source-set`, подготавливает
   `tools.client_mcp.extension`, если оно настроено: `source` загружается как extension из
   исходников, `.cfe` `artifact` загружается как extension с именем
   `tools.client_mcp.extension.name`.
-- Для source-backed `tools.client_mcp.extension` использует отдельное состояние change detection
-  под `workPath/hash-storages`: неизменённый source пропускает export/load, `--full-rebuild`
+- Для source-backed `tools.client_mcp.extension` использует отдельное per-IB/per-source состояние
+  под `workPath/ib-state/v1`: неизменённый source пропускает export/load, `--full-rebuild`
   принудительно обновляет расширение.
 - `tools.client_mcp.extension` не является project `source-set`; `--source-set` выбирает только
   project source-set.
@@ -254,8 +259,14 @@ v8-runner dump --mode <full|incremental|partial> [--source-set <NAME>] [--extens
   потому что деградирует в incremental.
 - `builder=DESIGNER` поддерживает true object-scoped partial.
 - `builder=IBCMD` не умеет object-scoped partial; запрос деградирует в incremental с warning.
-- `format=EDT` использует internal Designer snapshot под `workPath/designer/<sourceSetName>`,
-  затем импортирует его в EDT target и публикует результат атомарной заменой target каталога.
+- Все режимы выполняются в private shadow. Missing baseline/private CDFI повышает
+  incremental/partial request до full shadow dump.
+- B/S/D conflict, включая `B=absent, S=present, D=absent`, или TOCTOU mismatch публикует ноль
+  source files и не продвигает private generation.
+- Conflict-free managed files публикуются через recoverable journal; exact generation и UUID
+  transaction token не позволяют принять чужую одноимённую generation за завершённый dump.
+- Для `format=EDT` private Designer shadow импортируется в private EDT/configured shadow до той же
+  manifest publication; platform не пишет в project source или `workPath/designer/<sourceSetName>`.
 
 ### `convert`
 
@@ -376,7 +387,7 @@ v8-runner mcp serve http
 
 Важные runtime директории:
 
-- `workPath/hash-storages/`: persisted change-detection state.
+- `workPath/ib-state/v1/`: opaque per-IB/per-source CDFI, baselines, observations and transaction journals; не редактируйте и не копируйте state между ИБ.
 - `workPath/edt-workspace/`: общий EDT workspace для `init`.
 - `workPath/convert/edt-workspace/`: отдельный EDT workspace для `convert`.
 - `workPath/ibcmd-data/`: изолированный standalone-server data directory для IBCMD dump; это runtime state `v8-runner`, его можно удалить, когда нет активных CLI/MCP команд проекта.

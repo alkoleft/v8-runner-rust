@@ -1,4 +1,5 @@
 use crate::config::loader::ConfigLoadError;
+use crate::domain::runtime_state::RuntimeStateError;
 use crate::platform::designer::DesignerError;
 use crate::platform::edt::EdtError;
 use crate::platform::edt_session::EdtSessionError;
@@ -153,6 +154,18 @@ impl AppError {
                 context: format!("{context}; {existing}"),
                 source,
             },
+        }
+    }
+}
+
+impl From<RuntimeStateError> for AppError {
+    fn from(error: RuntimeStateError) -> Self {
+        match error {
+            RuntimeStateError::PathResolution(_) => Self::Runtime(error.to_string()),
+            RuntimeStateError::EmptyConnection
+            | RuntimeStateError::MalformedConnectionString
+            | RuntimeStateError::MalformedRawConnection
+            | RuntimeStateError::UnsupportedRawConnection => Self::Validation(error.to_string()),
         }
     }
 }

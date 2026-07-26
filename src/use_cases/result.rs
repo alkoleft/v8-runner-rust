@@ -153,6 +153,7 @@ pub type UseCaseResult<T> = Result<T, UseCaseFailure<T>>;
 mod tests {
     use super::{UseCaseError, UseCaseErrorKind};
     use crate::config::loader::ConfigLoadError;
+    use crate::domain::runtime_state::RuntimeStateError;
     use crate::platform::designer::DesignerError;
     use crate::platform::edt_session::EdtSessionError;
     use crate::platform::ibcmd::IbcmdError;
@@ -164,6 +165,24 @@ mod tests {
         assert_eq!(UseCaseErrorKind::Validation.exit_code(), 2);
         assert_eq!(UseCaseErrorKind::Runtime.exit_code(), 3);
         assert_eq!(UseCaseErrorKind::Platform.exit_code(), 4);
+    }
+
+    #[test]
+    fn runtime_state_config_errors_are_validation_and_path_errors_are_runtime() {
+        for error in [
+            RuntimeStateError::EmptyConnection,
+            RuntimeStateError::MalformedConnectionString,
+            RuntimeStateError::MalformedRawConnection,
+            RuntimeStateError::UnsupportedRawConnection,
+        ] {
+            let validation = UseCaseError::from(AppError::from(error));
+            assert_eq!(validation.kind(), UseCaseErrorKind::Validation);
+        }
+        let runtime = UseCaseError::from(AppError::from(RuntimeStateError::PathResolution(
+            std::io::Error::other("lookup failed"),
+        )));
+
+        assert_eq!(runtime.kind(), UseCaseErrorKind::Runtime);
     }
 
     #[test]

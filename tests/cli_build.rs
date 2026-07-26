@@ -22,7 +22,7 @@ fn write_build_script(path: &Path, fail_pattern: Option<&str>) {
         })
         .unwrap_or_default();
     let body = format!(
-        "args=\"$*\"\nout=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"/Out\" ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$out\" ]; then printf 'designer log for %s\\n' \"$args\" > \"$out\"; fi\n{}\nexit 0",
+        "args=\"$*\"\nout=\"\"\nload_root=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"/Out\" ]; then out=\"$arg\"; fi\n  if [ \"$prev\" = \"/LoadConfigFromFiles\" ]; then load_root=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$out\" ]; then printf 'designer log for %s\\n' \"$args\" > \"$out\"; fi\n{}\nif [ -n \"$load_root\" ]; then printf '%s\\n' '<ConfigDumpInfo version=\"2.17\"><Metadata id=\"fake-id\" configVersion=\"1\"/></ConfigDumpInfo>' > \"$load_root/ConfigDumpInfo.xml\"; fi\nexit 0",
         pattern_branch
     );
     write_script(path, &body);
@@ -210,6 +210,27 @@ fn setup_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
     write_config(&config_path, &base_path, &work_path, &binary_path);
 
     (dir, config_path, binary_path, work_path)
+}
+
+fn prime_designer_state_and_modify_main(config_path: &Path) {
+    let prime = v8_runner_command()
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "build",
+            "--full-rebuild",
+        ])
+        .output()
+        .expect("prime Designer state");
+    assert!(prime.status.success(), "prime build failed");
+    fs::write(
+        config_path
+            .parent()
+            .expect("config parent")
+            .join("project/main/Catalogs.Items/ObjectModule.bsl"),
+        "procedure Test() // changed\nendprocedure",
+    )
+    .expect("modify main source");
 }
 
 fn setup_ibcmd_project() -> (
@@ -462,6 +483,7 @@ fn build_text_failure_does_not_print_success_footer() {
 #[test]
 fn build_text_stdout_includes_action_logs() {
     let (_dir, config_path, _binary_path, _work_path) = setup_project();
+    prime_designer_state_and_modify_main(&config_path);
 
     let output = v8_runner_command()
         .args([
@@ -488,6 +510,7 @@ fn build_text_stdout_includes_action_logs() {
 #[test]
 fn build_text_highlights_timeline_detail_prefixes() {
     let (_dir, config_path, _binary_path, _work_path) = setup_project();
+    prime_designer_state_and_modify_main(&config_path);
 
     let output = v8_runner_command()
         .args(["--config", &config_path.display().to_string(), "build"])
@@ -671,7 +694,7 @@ fn build_edt_text_interleaves_export_stage_after_edt_log() {
     assert!(stdout.contains("│   ✓ completed"));
     assert!(stdout.contains("[ibcmd] Загрузка в базу"));
     assert!(stdout.contains("[ibcmd] Применение изменений"));
-    assert!(stdout.contains("│   ✓ full load selected by partial-load rules"));
+    assert!(stdout.contains("│   ✓ fallback to full load after recoverable change-detection issue"));
     assert_eq!(stdout.matches("● configuration").count(), 1);
 
     let ibcmd_calls = fs::read_to_string(ibcmd_calls_log).expect("ibcmd calls");
@@ -748,6 +771,7 @@ fn build_text_groups_tool_extension_stages_under_single_build_node() {
 #[test]
 fn build_json_writes_action_log_file_without_polluting_stdout() {
     let (_dir, config_path, _binary_path, work_path) = setup_project();
+    prime_designer_state_and_modify_main(&config_path);
 
     let output = v8_runner_command()
         .args([

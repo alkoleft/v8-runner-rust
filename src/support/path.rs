@@ -31,43 +31,34 @@ pub fn nearest_existing_canonical_path(path: &Path) -> std::io::Result<PathBuf> 
         std::env::current_dir()?.join(path)
     };
 
-    let mut existing = absolute.as_path();
-    while !existing.exists() {
-        existing = existing.parent().ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("no existing ancestor for path '{}'", path.display()),
-            )
-        })?;
-    }
-
-    let existing_canonical = std::fs::canonicalize(existing)?;
-    if existing == absolute {
-        return Ok(existing_canonical);
-    }
-
-    let suffix = absolute
-        .strip_prefix(existing)
-        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
-    let suffix =
-        suffix
-            .components()
-            .try_fold(PathBuf::new(), |mut acc, component| match component {
-                Component::Normal(part) => {
-                    acc.push(part);
-                    Ok(acc)
+    let mut resolved = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::Prefix(prefix) => resolved.push(prefix.as_os_str()),
+            Component::RootDir => resolved.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !resolved.pop() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("path escapes filesystem root: '{}'", path.display()),
+                    ));
                 }
-                _ => Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!(
-                        "path '{}' contains unsupported component '{}'",
-                        path.display(),
-                        component.as_os_str().to_string_lossy()
-                    ),
-                )),
-            })?;
-
-    Ok(existing_canonical.join(suffix))
+                if resolved.try_exists()? {
+                    resolved = std::fs::canonicalize(&resolved)?;
+                }
+            }
+            Component::Normal(part) => {
+                let candidate = resolved.join(part);
+                resolved = if candidate.try_exists()? {
+                    std::fs::canonicalize(candidate)?
+                } else {
+                    candidate
+                };
+            }
+        }
+    }
+    Ok(resolved)
 }
 
 pub fn stable_path_identity(path: &Path) -> String {
@@ -136,7 +127,18 @@ mod tests {
         let resolved =
             nearest_existing_canonical_path(&root.join("nested").join("target")).expect("resolved");
 
-        assert_eq!(resolved, root.join("nested").join("target"));
+        let canonical_root = fs::canonicalize(&root).expect("canonical root");
+        assert_eq!(resolved, canonical_root.join("nested").join("target"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nearest_existing_canonical_path_propagates_lookup_errors() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("loop");
+        std::os::unix::fs::symlink(&path, &path).expect("self symlink");
+
+        assert!(nearest_existing_canonical_path(&path).is_err());
     }
 
     #[cfg(unix)]

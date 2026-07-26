@@ -275,6 +275,73 @@ if payload.get("command") != expected_command:
 PY
 }
 
+assert_json_dump_conflict() {
+    local json_path="$1"
+    local expected_mode="$2"
+    local expected_path="$3"
+
+    python3 - "$json_path" "$expected_mode" "$expected_path" <<'PY'
+import json
+import sys
+
+json_path, expected_mode, expected_path = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(json_path, "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+
+if payload.get("ok") is not False or payload.get("command") != "dump":
+    raise SystemExit(f"dump must return a structured failure: {payload}")
+
+data = payload.get("data", {})
+receipt = data.get("receipt", {})
+if data.get("mode") != expected_mode:
+    raise SystemExit(f"unexpected dump mode, expected {expected_mode}: {payload}")
+if receipt.get("status") != "conflict":
+    raise SystemExit(f"dump must report a conflict receipt: {payload}")
+if receipt.get("processed") != []:
+    raise SystemExit(f"conflicted dump must process no source targets: {payload}")
+if not receipt.get("conflicted"):
+    raise SystemExit(f"conflicted dump must identify exact targets: {payload}")
+if receipt.get("requested") != receipt.get("conflicted"):
+    raise SystemExit(f"conflict receipt requested/conflicted targets must match: {payload}")
+if [target.get("path") for target in receipt.get("conflicted", [])] != [expected_path]:
+    raise SystemExit(f"dump must identify the exact conflicted target {expected_path}: {payload}")
+target = receipt["conflicted"][0]
+if not isinstance(target.get("preHash"), str) or target.get("postHash") is not None:
+    raise SystemExit(f"local-only conflict must contain exact preHash and null postHash: {payload}")
+for group in ("requested", "processed", "skipped", "conflicted"):
+    if any(item.get("path", "").lower().endswith("configdumpinfo.xml") for item in receipt.get(group, [])):
+        raise SystemExit(f"ConfigDumpInfo.xml must not appear in source receipt group {group}: {payload}")
+PY
+}
+
+assert_json_dump_applied() {
+    local json_path="$1"
+    local expected_mode="$2"
+
+    python3 - "$json_path" "$expected_mode" <<'PY'
+import json
+import sys
+
+json_path, expected_mode = sys.argv[1], sys.argv[2]
+with open(json_path, "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+
+data = payload.get("data", {})
+receipt = data.get("receipt", {})
+if payload.get("ok") is not True or data.get("ok") is not True:
+    raise SystemExit(f"dump must succeed: {payload}")
+if data.get("mode") != expected_mode or receipt.get("status") != "applied":
+    raise SystemExit(f"dump must return an applied {expected_mode} receipt: {payload}")
+if receipt.get("conflicted") != []:
+    raise SystemExit(f"successful dump must contain no conflicts: {payload}")
+if not receipt.get("requested") or receipt.get("requested") != receipt.get("processed"):
+    raise SystemExit(f"full dump must process every requested source target: {payload}")
+for group in ("requested", "processed", "skipped", "conflicted"):
+    if any(item.get("path", "").lower().endswith("configdumpinfo.xml") for item in receipt.get(group, [])):
+        raise SystemExit(f"ConfigDumpInfo.xml must not appear in source receipt group {group}: {payload}")
+PY
+}
+
 extract_connection_file_path() {
     python3 - "$DESIGNER_CONFIG_PATH" <<'PY'
 import pathlib
@@ -430,6 +497,20 @@ run_cli_json_to_file() {
     "$BIN_PATH" --config "$DESIGNER_CONFIG_PATH" --json-message "$@" | tee "$json_path"
 }
 
+run_cli_json_expect_conflict() {
+    local json_path="$1"
+    shift
+    echo
+    echo "==> --json-message $* (expect conflict)"
+    set +e
+    "$BIN_PATH" --config "$DESIGNER_CONFIG_PATH" --json-message "$@" | tee "$json_path"
+    local cli_status="${PIPESTATUS[0]}"
+    set -e
+    if [[ "$cli_status" -ne 3 ]]; then
+        die "Expected dump conflict exit code 3, got $cli_status: $*"
+    fi
+}
+
 run_test_stage() {
     local json_path="$OUTPUT_ROOT/json/test-stage.json"
 
@@ -470,33 +551,57 @@ run_launch_smoke() {
     assert_json_command_ok "$launch_json" "launch"
 }
 
-run_extended_steps() {
+assert_source_has_no_cdfi() {
+    if find "$WORK_BASE_PATH" -type f -iname 'ConfigDumpInfo.xml' -print -quit | grep -q .; then
+        die "ConfigDumpInfo.xml must never be published into the fixture source tree"
+    fi
+}
+
+assert_private_cdfi_exists() {
+    if ! find "$WORK_PATH/ib-state/v1" -type f -iname 'ConfigDumpInfo.xml' -print -quit | grep -q .; then
+        die "Expected private ConfigDumpInfo.xml under per-infobase runtime state"
+    fi
+}
+
+run_designer_runtime_state_steps() {
     local dump_root="$OUTPUT_ROOT/dump"
+    local source_root="$WORK_BASE_PATH/$CONFIGURATION_SOURCE_SET_PATH"
+    local source_before="$dump_root/source-before-full"
+    local conflict_before="$dump_root/source-before-conflicts"
+    local state_before="$dump_root/state-before"
 
-    print_stage "extended dump validation"
-    rm -f \
-        "$WORK_BASE_PATH/$CONFIGURATION_SOURCE_SET_PATH/Configuration.xml" \
-        "$WORK_BASE_PATH/$CONFIGURATION_SOURCE_SET_PATH/ConfigDumpInfo.xml"
-    run_cli dump --mode full --source-set "$CONFIGURATION_SOURCE_SET_NAME"
-    assert_file_exists "$WORK_BASE_PATH/$CONFIGURATION_SOURCE_SET_PATH/Configuration.xml"
-    assert_file_exists "$WORK_BASE_PATH/$CONFIGURATION_SOURCE_SET_PATH/ConfigDumpInfo.xml"
-    snapshot_dir "$WORK_BASE_PATH/$CONFIGURATION_SOURCE_SET_PATH" "$dump_root/full"
+    print_stage "private dump shadow and no-clobber validation"
+    assert_source_has_no_cdfi
+    assert_private_cdfi_exists
+    snapshot_dir "$source_root" "$source_before"
 
-    rm -f "$WORK_BASE_PATH/$CONFIGURATION_SOURCE_SET_PATH/ConfigDumpInfo.xml"
-    run_cli dump --mode incremental --source-set "$CONFIGURATION_SOURCE_SET_NAME"
-    assert_dir_exists "$WORK_BASE_PATH/$CONFIGURATION_SOURCE_SET_PATH"
-    assert_file_exists "$WORK_BASE_PATH/$CONFIGURATION_SOURCE_SET_PATH/ConfigDumpInfo.xml"
-    snapshot_dir "$WORK_BASE_PATH/$CONFIGURATION_SOURCE_SET_PATH" "$dump_root/incremental"
+    rm -rf "$source_root"
+    mkdir -p "$source_root"
 
-    rm -f "$WORK_BASE_PATH/$CONFIGURATION_SOURCE_SET_PATH/Catalogs/Справочник1.xml"
-    run_cli dump --mode partial --source-set "$CONFIGURATION_SOURCE_SET_NAME" --object Catalog.Справочник1
-    assert_file_exists "$WORK_BASE_PATH/$CONFIGURATION_SOURCE_SET_PATH/Catalogs/Справочник1.xml"
-    snapshot_dir "$WORK_BASE_PATH/$CONFIGURATION_SOURCE_SET_PATH" "$dump_root/partial"
+    local full_json="$OUTPUT_ROOT/json/dump-full-applied.json"
+    run_cli_json_to_file "$full_json" dump --mode full --source-set "$CONFIGURATION_SOURCE_SET_NAME"
+    assert_json_dump_applied "$full_json" "FULL"
+    assert_file_exists "$source_root/Configuration.xml"
+    assert_source_has_no_cdfi
+    assert_private_cdfi_exists
 
-    rm -f "$WORK_BASE_PATH/$EXTENSION_SOURCE_SET_PATH/ConfigDumpInfo.xml"
-    run_cli dump --mode incremental --source-set "$EXTENSION_SOURCE_SET_NAME" --extension "$EXTENSION_SOURCE_SET_NAME"
-    assert_file_exists "$WORK_BASE_PATH/$EXTENSION_SOURCE_SET_PATH/ConfigDumpInfo.xml"
-    snapshot_dir "$WORK_BASE_PATH/$EXTENSION_SOURCE_SET_PATH" "$dump_root/extension-incremental"
+    printf 'local-only source change\n' > "$source_root/LocalOnly.txt"
+    snapshot_dir "$source_root" "$conflict_before"
+    snapshot_dir "$WORK_PATH/ib-state/v1" "$state_before"
+
+    local incremental_json="$OUTPUT_ROOT/json/dump-incremental-conflict.json"
+    run_cli_json_expect_conflict "$incremental_json" dump --mode incremental --source-set "$CONFIGURATION_SOURCE_SET_NAME"
+    assert_json_dump_conflict "$incremental_json" "INCREMENTAL" "LocalOnly.txt"
+    diff -qr "$conflict_before" "$source_root"
+    diff -qr "$state_before" "$WORK_PATH/ib-state/v1"
+
+    local partial_json="$OUTPUT_ROOT/json/dump-partial-conflict.json"
+    run_cli_json_expect_conflict "$partial_json" dump --mode partial --source-set "$CONFIGURATION_SOURCE_SET_NAME" --object Document.Документ1
+    assert_json_dump_conflict "$partial_json" "PARTIAL" "LocalOnly.txt"
+    diff -qr "$conflict_before" "$source_root"
+    diff -qr "$state_before" "$WORK_PATH/ib-state/v1"
+    assert_source_has_no_cdfi
+    assert_private_cdfi_exists
 }
 
 if [[ -z "$DESIGNER_CONFIG_PATH" ]]; then
@@ -543,18 +648,14 @@ if ! extract_connection_file_path >/dev/null; then
     die "Live Designer config must use file-based infobase.connection ('File=...' or raw '/F ...'): $DESIGNER_CONFIG_PATH"
 fi
 
-declare -A SOURCE_SET_NAME_BY_TYPE=()
-declare -A SOURCE_SET_PATH_BY_TYPE=()
-required_types=(
-    CONFIGURATION
-    EXTENSION
-)
-if [[ "$BUILDER_BACKEND" == "DESIGNER" ]]; then
-    required_types+=(
-        EXTERNAL_DATA_PROCESSORS
-        EXTERNAL_REPORTS
-    )
-fi
+CONFIGURATION_SOURCE_SET_NAME=""
+CONFIGURATION_SOURCE_SET_PATH=""
+EXTENSION_SOURCE_SET_NAME=""
+EXTENSION_SOURCE_SET_PATH=""
+EXTERNAL_PROCESSOR_SOURCE_SET_NAME=""
+EXTERNAL_PROCESSOR_SOURCE_SET_PATH=""
+EXTERNAL_REPORT_SOURCE_SET_NAME=""
+EXTERNAL_REPORT_SOURCE_SET_PATH=""
 
 while IFS=$'\t' read -r source_set_name source_set_type source_set_path; do
     source_set_name="$(strip_shell_quotes "$source_set_name")"
@@ -565,28 +666,36 @@ while IFS=$'\t' read -r source_set_name source_set_type source_set_path; do
         die "Each source-set must define name, type, and path: $DESIGNER_CONFIG_PATH"
     fi
 
-    if [[ -n "${SOURCE_SET_NAME_BY_TYPE[$source_set_type]:-}" ]]; then
-        die "Live Designer config must define only one source-set with type '$source_set_type': $DESIGNER_CONFIG_PATH"
-    fi
-
-    SOURCE_SET_NAME_BY_TYPE["$source_set_type"]="$source_set_name"
-    SOURCE_SET_PATH_BY_TYPE["$source_set_type"]="$source_set_path"
+    case "$source_set_type" in
+        CONFIGURATION)
+            [[ -z "$CONFIGURATION_SOURCE_SET_NAME" ]] || die "Live Designer config must define only one source-set with type '$source_set_type': $DESIGNER_CONFIG_PATH"
+            CONFIGURATION_SOURCE_SET_NAME="$source_set_name"
+            CONFIGURATION_SOURCE_SET_PATH="$source_set_path"
+            ;;
+        EXTENSION)
+            [[ -z "$EXTENSION_SOURCE_SET_NAME" ]] || die "Live Designer config must define only one source-set with type '$source_set_type': $DESIGNER_CONFIG_PATH"
+            EXTENSION_SOURCE_SET_NAME="$source_set_name"
+            EXTENSION_SOURCE_SET_PATH="$source_set_path"
+            ;;
+        EXTERNAL_DATA_PROCESSORS)
+            [[ -z "$EXTERNAL_PROCESSOR_SOURCE_SET_NAME" ]] || die "Live Designer config must define only one source-set with type '$source_set_type': $DESIGNER_CONFIG_PATH"
+            EXTERNAL_PROCESSOR_SOURCE_SET_NAME="$source_set_name"
+            EXTERNAL_PROCESSOR_SOURCE_SET_PATH="$source_set_path"
+            ;;
+        EXTERNAL_REPORTS)
+            [[ -z "$EXTERNAL_REPORT_SOURCE_SET_NAME" ]] || die "Live Designer config must define only one source-set with type '$source_set_type': $DESIGNER_CONFIG_PATH"
+            EXTERNAL_REPORT_SOURCE_SET_NAME="$source_set_name"
+            EXTERNAL_REPORT_SOURCE_SET_PATH="$source_set_path"
+            ;;
+    esac
 done < <(extract_source_sets)
 
-for source_set_type in "${required_types[@]}"; do
-    if [[ -z "${SOURCE_SET_NAME_BY_TYPE[$source_set_type]:-}" ]]; then
-        die "Live Designer config must declare a source-set with type '$source_set_type': $DESIGNER_CONFIG_PATH"
-    fi
-done
-
-CONFIGURATION_SOURCE_SET_NAME="${SOURCE_SET_NAME_BY_TYPE[CONFIGURATION]}"
-CONFIGURATION_SOURCE_SET_PATH="${SOURCE_SET_PATH_BY_TYPE[CONFIGURATION]}"
-EXTENSION_SOURCE_SET_NAME="${SOURCE_SET_NAME_BY_TYPE[EXTENSION]}"
-EXTENSION_SOURCE_SET_PATH="${SOURCE_SET_PATH_BY_TYPE[EXTENSION]}"
-EXTERNAL_PROCESSOR_SOURCE_SET_NAME="${SOURCE_SET_NAME_BY_TYPE[EXTERNAL_DATA_PROCESSORS]:-}"
-EXTERNAL_PROCESSOR_SOURCE_SET_PATH="${SOURCE_SET_PATH_BY_TYPE[EXTERNAL_DATA_PROCESSORS]:-}"
-EXTERNAL_REPORT_SOURCE_SET_NAME="${SOURCE_SET_NAME_BY_TYPE[EXTERNAL_REPORTS]:-}"
-EXTERNAL_REPORT_SOURCE_SET_PATH="${SOURCE_SET_PATH_BY_TYPE[EXTERNAL_REPORTS]:-}"
+[[ -n "$CONFIGURATION_SOURCE_SET_NAME" ]] || die "Live Designer config must declare a source-set with type 'CONFIGURATION': $DESIGNER_CONFIG_PATH"
+[[ -n "$EXTENSION_SOURCE_SET_NAME" ]] || die "Live Designer config must declare a source-set with type 'EXTENSION': $DESIGNER_CONFIG_PATH"
+if [[ "$BUILDER_BACKEND" == "DESIGNER" ]]; then
+    [[ -n "$EXTERNAL_PROCESSOR_SOURCE_SET_NAME" ]] || die "Live Designer config must declare a source-set with type 'EXTERNAL_DATA_PROCESSORS': $DESIGNER_CONFIG_PATH"
+    [[ -n "$EXTERNAL_REPORT_SOURCE_SET_NAME" ]] || die "Live Designer config must declare a source-set with type 'EXTERNAL_REPORTS': $DESIGNER_CONFIG_PATH"
+fi
 
 WORK_BASE_PATH="$OUTPUT_ROOT/workspace/project-root"
 WORK_CONFIG_PATH="$WORK_BASE_PATH/v8project.yaml"
@@ -605,16 +714,26 @@ mkdir -p \
     "$WORK_BASE_PATH" \
     "$OUTPUT_ROOT/artifacts/external-processor" \
     "$OUTPUT_ROOT/artifacts/external-report" \
+    "$OUTPUT_ROOT/json" \
     "$OUTPUT_ROOT/launch"
 
 cp -R "$FIXTURE_BASE_PATH/." "$WORK_BASE_PATH/"
 materialize_live_config "$DESIGNER_CONFIG_PATH" "$WORK_CONFIG_PATH" "$OUTPUT_ROOT" "$WORK_BASE_PATH"
 
 DESIGNER_CONFIG_PATH="$WORK_CONFIG_PATH"
+WORK_PATH="$(extract_yaml_scalar "workPath")"
 
-for source_set_type in "${required_types[@]}"; do
-    source_set_path="${SOURCE_SET_PATH_BY_TYPE[$source_set_type]}"
-    if [[ ! -d "$WORK_BASE_PATH/$source_set_path" ]]; then
+rm -f \
+    "$WORK_BASE_PATH/$CONFIGURATION_SOURCE_SET_PATH/ConfigDumpInfo.xml" \
+    "$WORK_BASE_PATH/$EXTENSION_SOURCE_SET_PATH/ConfigDumpInfo.xml"
+assert_source_has_no_cdfi
+
+for source_set_path in \
+    "$CONFIGURATION_SOURCE_SET_PATH" \
+    "$EXTENSION_SOURCE_SET_PATH" \
+    "$EXTERNAL_PROCESSOR_SOURCE_SET_PATH" \
+    "$EXTERNAL_REPORT_SOURCE_SET_PATH"; do
+    if [[ -n "$source_set_path" && ! -d "$WORK_BASE_PATH/$source_set_path" ]]; then
         die "Configured source-set path does not exist under fixture project root: $source_set_path"
     fi
 done
@@ -639,6 +758,8 @@ print_stage "build incremental no-op"
 run_cli_json_to_file "$incremental_build_json" build
 assert_json_step_ok "$incremental_build_json" "$CONFIGURATION_SOURCE_SET_NAME"
 assert_json_step_ok "$incremental_build_json" "$EXTENSION_SOURCE_SET_NAME"
+assert_source_has_no_cdfi
+assert_private_cdfi_exists
 
 if [[ "$BUILDER_BACKEND" == "DESIGNER" ]]; then
     partial_candidate="$WORK_BASE_PATH/$CONFIGURATION_SOURCE_SET_PATH/CommonModules/ОбщийМодуль1/Ext/Module.bsl"
@@ -705,6 +826,8 @@ if [[ "$BUILDER_BACKEND" == "DESIGNER" ]]; then
         echo "READY: $artifact"
     done
 
+    run_designer_runtime_state_steps
+
     print_stage "launch smoke"
     run_launch_smoke
 else
@@ -714,10 +837,6 @@ else
     run_cli dump --mode incremental
     print_stage "dump partial"
     run_cli dump --mode partial --object Catalog.Items
-fi
-
-if [[ "$DESIGNER_SMOKE_PROFILE" == "extended" ]]; then
-    run_extended_steps
 fi
 
 echo

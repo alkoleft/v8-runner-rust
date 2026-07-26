@@ -20,6 +20,8 @@ pub mod context;
 pub mod convert_sources;
 /// Dump orchestration use case.
 pub mod dump_config;
+mod dump_execution;
+mod dump_shadow;
 /// Shared extension identity helpers.
 pub mod extension_identity;
 /// Shared discovery and preparation helpers for external artifacts.
@@ -44,8 +46,12 @@ pub mod request;
 pub mod result;
 /// Test orchestration use case.
 pub mod run_tests;
+mod runtime_state;
+mod shadow_merge;
 /// Read-only source-set runtime indexes shared by orchestrating use cases.
 pub(crate) mod source_inventory;
+mod source_publication;
+mod source_transaction;
 /// Shared staged publication mechanics for full-replacement use-case outputs.
 mod staged_publication;
 /// Shared internal preparation for tool extensions.

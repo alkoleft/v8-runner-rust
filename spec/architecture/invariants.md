@@ -82,15 +82,17 @@
 
 ## Dump And Artifacts Publication
 
-1. Full-replacement `dump` и `artifacts` publication не должны писать напрямую в существующий target.
-2. Full dump и package/external artifacts publication должны идти через staging path рядом с target и backup старого target.
-3. Platform failure до publish должен сохранять старый target.
-4. Publish failure должен пытаться rollback backup -> target и surfaced rollback context, если восстановление не удалось.
-5. Cleanup backup/staging после успешного publish выполняется best-effort; cleanup failure становится warning/degraded success, а не failed publish.
-6. `dump incremental` и `dump partial` являются non-atomic update modes и не получают staging replacement guarantee.
-7. Orphan cleanup должен удалять только stale v8-runner staging/backup paths с matching target identity.
+1. Package/external artifacts full replacement не должен писать напрямую в существующий target и проходит через sibling staging/backup.
+2. Любой `dump` (`full`, `incremental`, `partial`) выполняет platform export только в private shadow; platform не получает project source как dump target.
+3. Dump publication работает по managed-file manifest и не заменяет source root целиком.
+4. B/S/D conflict или TOCTOU mismatch блокирует весь source-set до первой записи и не продвигает private generation.
+5. Source journal хранит byte-exact backups и обеспечивает restart rollback; мгновенная multi-file filesystem atomicity не обещается.
+6. Source publication и runtime-state commit связывает точная пара `(generation, DumpTransactionId)`; совпавшей generation с другим token недостаточно для forward recovery.
+7. `ConfigDumpInfo.xml`, symlinks, nested `workPath` и unmanaged entries не публикуются в source tree.
+8. Artifacts publish failure должен пытаться rollback backup -> target; cleanup после success выполняется best-effort.
+9. Orphan cleanup должен удалять только stale v8-runner staging/backup paths с matching target identity.
 
-См. [ADR-0015](../decisions/0015-atomarnaya-publikatsiya-dump-artifacts-cherez-staging-backup.md).
+См. [ADR-0015](../decisions/0015-atomarnaya-publikatsiya-dump-artifacts-cherez-staging-backup.md) и [ADR-0023](../decisions/0023-izolirovat-runtime-state-po-infobase-i-ispolzovat-private-shadow.md).
 
 ## Pipeline Execution Outcome
 
@@ -118,14 +120,16 @@
 ## Change Detection And Partial Load
 
 1. Change detection выполняется on-demand во время build/export/load decision, без background watcher.
-2. Persistent state хранится в per-context `redb` storages под `workPath/hash-storages`.
-3. Для `format=DESIGNER` используется один `designer-<sourceSetName>` context на source-set.
-4. Для `format=EDT` используются два context на source-set: `edt-<sourceSetName>` для export decision и `designer-<sourceSetName>` для load decision.
-5. Recoverable scan/storage ошибки должны деградировать в full execution или full rescan; hard storage и concurrent generation errors должны surfaced as failures.
-6. Partial load является conservative file-level strategy: `Configuration.xml`, deletions, unsafe expansion, empty expanded set или превышение threshold ведут к full load.
-7. Prepared snapshot коммитится только после successful platform export/load step.
+2. Persistent state хранится только под `workPath/ib-state/v1/<infobase-fingerprint>/<source-set>-<context-fingerprint>`; fingerprints opaque и не редактируются вручную.
+3. Legacy `workPath/hash-storages` не мигрируется и не переиспользуется; отсутствие scoped state означает full bootstrap, а не `NoChanges`.
+4. Логические Designer, EDT и tool-extension contexts изолируются по ИБ, source identity, format, backend и role.
+5. Designer build работает с private source transaction: source CDFI игнорируется, валидный private CDFI может быть seeded, а platform никогда не меняет source tree.
+6. CDFI, baseline и source observation становятся видимыми одной recoverable generation только после successful platform pipeline.
+7. Recoverable scan/storage ошибки должны деградировать в full execution или full rescan; hard storage и concurrent generation errors должны surfaced as failures.
+8. Partial load является conservative file-level strategy: `Configuration.xml`, deletions, unsafe expansion, empty expanded set или превышение threshold ведут к full load.
+9. Receipt lists являются независимыми audit dimensions: одинаковая запись может быть одновременно `processed` и `skipped` для applied operation; inconsistent overlap запрещён.
 
-См. [ADR-0012](../decisions/0012-on-demand-change-detection-i-faylovaya-partial-load-strategiya.md).
+См. [ADR-0012](../decisions/0012-on-demand-change-detection-i-faylovaya-partial-load-strategiya.md) и [ADR-0023](../decisions/0023-izolirovat-runtime-state-po-infobase-i-ispolzovat-private-shadow.md).
 
 ## Shared EDT
 
