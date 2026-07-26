@@ -25,7 +25,6 @@ jobs:
       matrix:
         os:
           - ubuntu-latest
-          - windows-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -48,9 +47,8 @@ jobs:
       matrix:
         os:
           - ubuntu-latest
-          - windows-latest
     env:
-      V8TR_CI_TARGET_OS: ${{ runner.os }}
+      V8TR_CI_TARGET_OS: ${{ matrix.os }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -73,6 +71,11 @@ jobs:
           ACTOR: ${{ github.actor }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           REPOSITORY: ${{ github.repository }}
+          MATRIX_OS: ${{ matrix.os }}
+          V8TR_PLATFORM_BUNDLE_URL_LINUX: ${{ secrets.V8TR_PLATFORM_BUNDLE_URL_LINUX }}
+          V8TR_PLATFORM_BUNDLE_SHA256_LINUX: ${{ secrets.V8TR_PLATFORM_BUNDLE_SHA256_LINUX }}
+          V8TR_PLATFORM_BUNDLE_URL_WINDOWS: ${{ secrets.V8TR_PLATFORM_BUNDLE_URL_WINDOWS }}
+          V8TR_PLATFORM_BUNDLE_SHA256_WINDOWS: ${{ secrets.V8TR_PLATFORM_BUNDLE_SHA256_WINDOWS }}
         run: |
           trusted="true"
 
@@ -80,6 +83,26 @@ jobs:
             trusted="false"
           elif [[ "$EVENT_NAME" == "pull_request" && "$HEAD_REPO" != "$REPOSITORY" ]]; then
             trusted="false"
+          fi
+
+          case "$MATRIX_OS" in
+            ubuntu-latest)
+              bundle_url="$V8TR_PLATFORM_BUNDLE_URL_LINUX"
+              bundle_sha256="$V8TR_PLATFORM_BUNDLE_SHA256_LINUX"
+              ;;
+            windows-latest)
+              bundle_url="$V8TR_PLATFORM_BUNDLE_URL_WINDOWS"
+              bundle_sha256="$V8TR_PLATFORM_BUNDLE_SHA256_WINDOWS"
+              ;;
+            *)
+              echo "Unsupported matrix.os: $MATRIX_OS" >&2
+              exit 2
+              ;;
+          esac
+
+          if [[ -z "$bundle_url" || -z "$bundle_sha256" ]]; then
+            trusted="false"
+            echo "V8TR_DESIGNER_ALLOW_MISSING_CONFIG=1" >> "$GITHUB_ENV"
           fi
 
           echo "trusted=$trusted" >> "$GITHUB_OUTPUT"

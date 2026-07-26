@@ -951,6 +951,7 @@ pub(crate) fn normalize_check_syntax_edt_request(
     SyntaxRequest {
         target: SyntaxTargetRequest::Edt {
             projects: normalize_edt_projects(request.project_name.as_deref()),
+            exception_file: None,
         },
     }
 }
@@ -2150,7 +2151,10 @@ mod tests {
         let requests = service.port.syntax_requests.borrow();
         assert_eq!(
             requests[0].1.target,
-            SyntaxTargetRequest::Edt { projects: vec![] }
+            SyntaxTargetRequest::Edt {
+                projects: vec![],
+                exception_file: None
+            }
         );
     }
 

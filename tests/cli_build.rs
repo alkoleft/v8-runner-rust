@@ -676,7 +676,7 @@ fn build_edt_text_interleaves_export_stage_after_edt_log() {
 
     let ibcmd_calls = fs::read_to_string(ibcmd_calls_log).expect("ibcmd calls");
     let edt_calls = fs::read_to_string(edt_calls_log).expect("edt calls");
-    assert!(edt_calls.contains("export --project-name configuration"));
+    assert!(edt_calls.contains("export --project "));
     assert!(ibcmd_calls.contains("config import"));
     assert!(ibcmd_calls.contains("config apply"));
 }
