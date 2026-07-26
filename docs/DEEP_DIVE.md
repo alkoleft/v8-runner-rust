@@ -40,7 +40,11 @@ MCP DTO в одном слое.
 
 Change detection выполняется on-demand во время build/export/load decision и не требует
 background watcher. `build --source-set <NAME>` ограничивает анализ, export/load decision и
-runtime snapshot commit только указанным source-set.
+runtime snapshot commit выбранным source-set и транзитивным замыканием его `dependsOn`.
+
+`dependsOn` задаёт directed acyclic graph по stable `source-set.name`. Resolver выполняет
+dependencies раньше dependent, выбирая одновременно готовые nodes в прежнем canonical order.
+Если `dependsOn` нигде не задан, старый порядок и single-source scoped build сохраняются.
 
 ## Пайплайн `build`
 
@@ -59,14 +63,18 @@ runtime snapshot commit только указанным source-set.
 4. Load/apply generated files через `DESIGNER` или `IBCMD`.
 
 Пайплайн намеренно не является атомарным across many `source-set`: поздний failure не откатывает
-уже успешные ранние шаги.
+уже успешные ранние шаги. `build` использует fail-fast policy: failure любого source-set (в том
+числе dependency) останавливает platform execution для всех оставшихся selected nodes, включая
+независимые. Они остаются в structured result как `skipped` с причиной
+`aborted after previous failure`.
 
 ## Проверка и тесты
 
 `test` и `syntax` проектируются как часть того же локального цикла, а не как отдельная
 эксплуатационная подсистема.
 
-- `test` всегда сначала делает `build`, затем запускает YaXUnit или Vanessa Automation.
+- `test` всегда сначала делает полный dependency-aware `build`, затем запускает YaXUnit или
+  Vanessa Automation. Test runner не стартует, если prerequisite build graph завершился ошибкой.
 - `syntax designer-*` работает только для `DESIGNER` source format.
 - `syntax edt` использует EDT `validate` и привязан к `format=EDT`.
 - Таймауты и interruption metadata должны проходить через общий command-level contract, а не

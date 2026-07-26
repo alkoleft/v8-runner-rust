@@ -215,6 +215,10 @@ pub struct SourceSetConfig {
 
     /// Path relative to the project base path (for DESIGNER) or EDT project path.
     pub path: PathBuf,
+
+    /// Immediate source-set dependencies, addressed by source-set name.
+    #[serde(default, rename = "dependsOn", skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]

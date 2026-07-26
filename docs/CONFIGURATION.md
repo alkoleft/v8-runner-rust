@@ -104,6 +104,7 @@ artifact без привязки к release tag.
 
 - top-level app keys: `workPath`, `execution_timeout`, `format`, `builder`, `infobase`,
   `source-set`, `build`, `tools`, `mcp`, `tests`;
+- `source-set[]` использует camelCase key `dependsOn`;
 - `build` использует `partialLoadThreshold`;
 - `mcp.*` и `tests.*` используют `snake_case`;
 - canonical key для EDT tool section: `tools.edt_cli`;
@@ -135,6 +136,8 @@ source-set:
   - name: ext
     type: EXTENSION
     path: ext
+    dependsOn:
+      - main
 
 build:
   partialLoadThreshold: 20
@@ -339,6 +342,7 @@ Credentials самой информационной базы.
 - `name`
 - `type`
 - `path`
+- опциональный `dependsOn` — список имён непосредственных зависимостей
 
 `path` задаётся относительно каталога primary `v8project.yaml`, если он не абсолютный.
 
@@ -353,6 +357,11 @@ Validation rules:
 
 - `name` должен быть уникальным и безопасным path segment;
 - `EXTENSION` требует хотя бы один `CONFIGURATION`, но external-only config допустим;
+- `dependsOn` не может содержать неизвестное имя, текущий `source-set` или дубликат;
+- dependency target должен иметь `type=CONFIGURATION` или `type=EXTENSION`;
+- граф не может содержать циклы;
+- если хотя бы один `dependsOn` задан, каждое `EXTENSION` должно транзитивно разрешаться ровно
+  в один `CONFIGURATION`; отсутствие или несколько configuration roots отклоняются;
 - для `format=DESIGNER` ordinary source-set должен указывать на корректный Designer root;
 - для `format=DESIGNER` external source-set должен быть aggregate root с top-level XML
   descriptors matching declared `type`;
@@ -374,8 +383,10 @@ Validation rules:
 Порог между partial и full load.
 
 CLI selector `v8-runner build --source-set <name>` использует `source-set[].name` как stable
-runtime identity и не добавляет отдельное поле конфигурации. Если selector не задан, `build`
-обрабатывает все `source-set`.
+runtime identity и не добавляет отдельное поле конфигурации. Если выбранный `source-set` имеет
+`dependsOn`, `build` также включает его транзитивные зависимости и выполняет каждую ровно один
+раз до dependent. Если selector не задан, `build` обрабатывает весь граф в stable topological
+order; для конфигов без `dependsOn` сохраняется прежний canonical order.
 
 ### `tests`
 

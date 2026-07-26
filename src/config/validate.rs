@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::Path;
 use thiserror::Error;
@@ -40,6 +40,40 @@ pub enum ConfigValidationError {
 
     #[error("source-set name contains unsafe path or filename characters: {0}")]
     InvalidSourceSetName(String),
+
+    #[error("source-set '{source_set}' depends on unknown source-set '{dependency}'")]
+    UnknownSourceSetDependency {
+        source_set: String,
+        dependency: String,
+    },
+
+    #[error("source-set '{source_set}' cannot depend on itself")]
+    SelfSourceSetDependency { source_set: String },
+
+    #[error("source-set '{source_set}' declares dependency '{dependency}' more than once")]
+    DuplicateSourceSetDependency {
+        source_set: String,
+        dependency: String,
+    },
+
+    #[error(
+        "source-set '{source_set}' dependency '{dependency}' must reference CONFIGURATION or EXTENSION source-set"
+    )]
+    UnsupportedSourceSetDependency {
+        source_set: String,
+        dependency: String,
+    },
+
+    #[error("source-set dependency cycle: {path}")]
+    SourceSetDependencyCycle { path: String },
+
+    #[error("source-set '{source_set}' dependencies do not resolve to a CONFIGURATION source-set")]
+    MissingSourceSetConfigurationRoot { source_set: String },
+
+    #[error(
+        "source-set '{source_set}' dependencies must resolve to exactly one CONFIGURATION source-set; found [{roots}]"
+    )]
+    AmbiguousSourceSetConfigurationRoots { source_set: String, roots: String },
 
     #[error("tools.client_mcp.extension.name must not duplicate project source-set name: {0}")]
     ToolExtensionNameDuplicatesSourceSet(String),
@@ -265,22 +299,26 @@ fn validate_source_sets(config: &AppConfig) -> Result<(), ConfigValidationError>
     }
 
     let mut names = HashSet::<String>::new();
+    for source_set in &config.source_sets {
+        validate_source_set_name(&source_set.name)?;
+        if config.format == SourceFormat::Edt && is_reserved_workdir_name(&source_set.name) {
+            return Err(ConfigValidationError::ReservedSourceSetName(
+                source_set.name.clone(),
+            ));
+        }
+
+        if !names.insert(source_set.name.clone()) {
+            return Err(ConfigValidationError::DuplicateSourceSetName(
+                source_set.name.clone(),
+            ));
+        }
+    }
+
+    validate_source_set_dependencies(config)?;
+
     let mut resolved_paths = HashSet::<String>::new();
     let mut edt_source_paths = Vec::new();
     for ss in &config.source_sets {
-        validate_source_set_name(&ss.name)?;
-        if config.format == SourceFormat::Edt && is_reserved_workdir_name(&ss.name) {
-            return Err(ConfigValidationError::ReservedSourceSetName(
-                ss.name.clone(),
-            ));
-        }
-
-        if !names.insert(ss.name.clone()) {
-            return Err(ConfigValidationError::DuplicateSourceSetName(
-                ss.name.clone(),
-            ));
-        }
-
         let full_path = if ss.path.is_absolute() {
             ss.path.clone()
         } else {
@@ -324,6 +362,202 @@ fn validate_source_sets(config: &AppConfig) -> Result<(), ConfigValidationError>
 
     if config.format == SourceFormat::Edt {
         validate_edt_runtime_paths(config, &edt_source_paths)?;
+    }
+
+    Ok(())
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DependencyVisit {
+    Visiting,
+    Visited,
+}
+
+struct DependencyFrame<'a> {
+    source_set: &'a SourceSetConfig,
+    next_dependency: usize,
+}
+
+fn validate_source_set_dependencies(config: &AppConfig) -> Result<(), ConfigValidationError> {
+    if config
+        .source_sets
+        .iter()
+        .all(|source_set| source_set.depends_on.is_empty())
+    {
+        return Ok(());
+    }
+
+    let source_sets = config
+        .source_sets
+        .iter()
+        .map(|source_set| (source_set.name.as_str(), source_set))
+        .collect::<HashMap<_, _>>();
+
+    for source_set in &config.source_sets {
+        let mut dependencies = HashSet::new();
+        for dependency in &source_set.depends_on {
+            if dependency == &source_set.name {
+                return Err(ConfigValidationError::SelfSourceSetDependency {
+                    source_set: source_set.name.clone(),
+                });
+            }
+            if !dependencies.insert(dependency.as_str()) {
+                return Err(ConfigValidationError::DuplicateSourceSetDependency {
+                    source_set: source_set.name.clone(),
+                    dependency: dependency.clone(),
+                });
+            }
+            let Some(dependency_source_set) = source_sets.get(dependency.as_str()) else {
+                return Err(ConfigValidationError::UnknownSourceSetDependency {
+                    source_set: source_set.name.clone(),
+                    dependency: dependency.clone(),
+                });
+            };
+            if !matches!(
+                dependency_source_set.purpose,
+                SourceSetPurpose::Configuration | SourceSetPurpose::Extension
+            ) {
+                return Err(ConfigValidationError::UnsupportedSourceSetDependency {
+                    source_set: source_set.name.clone(),
+                    dependency: dependency.clone(),
+                });
+            }
+        }
+    }
+
+    let dependency_order = source_set_dependency_postorder(&config.source_sets, &source_sets)?;
+    validate_source_set_configuration_roots(&dependency_order)?;
+
+    Ok(())
+}
+
+fn source_set_dependency_postorder<'a>(
+    source_sets_in_order: &'a [SourceSetConfig],
+    source_sets_by_name: &HashMap<&'a str, &'a SourceSetConfig>,
+) -> Result<Vec<&'a SourceSetConfig>, ConfigValidationError> {
+    let mut visits = HashMap::new();
+    let mut path = Vec::new();
+    let mut order = Vec::with_capacity(source_sets_in_order.len());
+
+    for source_set in source_sets_in_order {
+        let name = source_set.name.as_str();
+        if visits.get(name) == Some(&DependencyVisit::Visited) {
+            continue;
+        }
+
+        visits.insert(name, DependencyVisit::Visiting);
+        path.push(name);
+        let mut stack = vec![DependencyFrame {
+            source_set,
+            next_dependency: 0,
+        }];
+
+        while !stack.is_empty() {
+            let next_dependency = {
+                let Some(frame) = stack.last_mut() else {
+                    break;
+                };
+                match frame.source_set.depends_on.get(frame.next_dependency) {
+                    Some(dependency) => {
+                        frame.next_dependency += 1;
+                        Some((frame.source_set, dependency.as_str()))
+                    }
+                    None => None,
+                }
+            };
+
+            let Some((dependent, dependency)) = next_dependency else {
+                let Some(completed) = stack.pop() else {
+                    break;
+                };
+                path.pop();
+                visits.insert(completed.source_set.name.as_str(), DependencyVisit::Visited);
+                order.push(completed.source_set);
+                continue;
+            };
+
+            match visits.get(dependency).copied() {
+                Some(DependencyVisit::Visiting) => {
+                    let mut cycle = path
+                        .iter()
+                        .copied()
+                        .skip_while(|candidate| *candidate != dependency)
+                        .collect::<Vec<_>>();
+                    cycle.push(dependency);
+                    return Err(ConfigValidationError::SourceSetDependencyCycle {
+                        path: cycle.join(" -> "),
+                    });
+                }
+                Some(DependencyVisit::Visited) => {}
+                None => {
+                    let dependency_source_set = source_sets_by_name
+                        .get(dependency)
+                        .copied()
+                        .ok_or_else(|| ConfigValidationError::UnknownSourceSetDependency {
+                            source_set: dependent.name.clone(),
+                            dependency: dependency.to_owned(),
+                        })?;
+                    visits.insert(dependency, DependencyVisit::Visiting);
+                    path.push(dependency);
+                    stack.push(DependencyFrame {
+                        source_set: dependency_source_set,
+                        next_dependency: 0,
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(order)
+}
+
+fn validate_source_set_configuration_roots(
+    dependency_order: &[&SourceSetConfig],
+) -> Result<(), ConfigValidationError> {
+    let mut roots_by_source_set = HashMap::<&str, Vec<&str>>::new();
+
+    for source_set in dependency_order {
+        let roots = if source_set.purpose == SourceSetPurpose::Configuration {
+            vec![source_set.name.as_str()]
+        } else {
+            let mut roots = Vec::new();
+            let mut unique_roots = HashSet::new();
+            for dependency in &source_set.depends_on {
+                let dependency_roots =
+                    roots_by_source_set
+                        .get(dependency.as_str())
+                        .ok_or_else(|| ConfigValidationError::UnknownSourceSetDependency {
+                            source_set: source_set.name.clone(),
+                            dependency: dependency.clone(),
+                        })?;
+                for root in dependency_roots {
+                    if unique_roots.insert(*root) {
+                        roots.push(*root);
+                    }
+                }
+            }
+            roots
+        };
+
+        if source_set.purpose == SourceSetPurpose::Extension {
+            match roots.as_slice() {
+                [] => {
+                    return Err(ConfigValidationError::MissingSourceSetConfigurationRoot {
+                        source_set: source_set.name.clone(),
+                    });
+                }
+                [_root] => {}
+                [_first, _second, ..] => {
+                    return Err(
+                        ConfigValidationError::AmbiguousSourceSetConfigurationRoots {
+                            source_set: source_set.name.clone(),
+                            roots: roots.join(", "),
+                        },
+                    );
+                }
+            }
+        }
+        roots_by_source_set.insert(source_set.name.as_str(), roots);
     }
 
     Ok(())
@@ -953,6 +1187,7 @@ fn validate_tool_extension_source(
                 name: extension.name.clone(),
                 purpose: SourceSetPurpose::Extension,
                 path: source.path.clone(),
+                depends_on: Vec::new(),
             };
             validate_ordinary_edt_source_set_layout(&source_set, &source.path).map_err(|error| {
                 ConfigValidationError::ToolExtensionSourceLayoutInvalid(error.to_string())
@@ -987,7 +1222,7 @@ fn validate_tool_extension_edt_runtime_path(
 
 #[cfg(test)]
 mod tests {
-    use super::{validate, ConfigValidationError};
+    use super::{validate, validate_source_set_dependencies, ConfigValidationError};
     use crate::config::model::{
         AppConfig, BuildConfig, BuilderBackend, PlatformToolConfig, SourceFormat, SourceSetConfig,
         SourceSetPurpose, TestsConfig, ToolExtensionArtifactConfig, ToolExtensionConfig,
@@ -1022,12 +1257,51 @@ mod tests {
                 name: name.to_owned(),
                 purpose,
                 path: relative_path(base, path),
+                depends_on: Vec::new(),
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig::default(),
             mcp: Default::default(),
             tests: TestsConfig::default(),
         }
+    }
+
+    #[test]
+    fn dependency_validation_handles_deep_chain_without_stack_growth() {
+        const DEPENDENCY_COUNT: usize = 10_000;
+
+        let mut source_sets = Vec::with_capacity(DEPENDENCY_COUNT + 1);
+        source_sets.push(SourceSetConfig {
+            name: "main".to_owned(),
+            purpose: SourceSetPurpose::Configuration,
+            path: PathBuf::from("main"),
+            depends_on: Vec::new(),
+        });
+        source_sets.extend((0..DEPENDENCY_COUNT).map(|index| SourceSetConfig {
+            name: format!("extension-{index}"),
+            purpose: SourceSetPurpose::Extension,
+            path: PathBuf::from(format!("extension-{index}")),
+            depends_on: vec![if index == 0 {
+                "main".to_owned()
+            } else {
+                format!("extension-{}", index - 1)
+            }],
+        }));
+        let config = AppConfig {
+            base_path: PathBuf::from("."),
+            work_path: PathBuf::from("target/dependency-validation"),
+            execution_timeout: 300_000,
+            format: SourceFormat::Designer,
+            builder: BuilderBackend::Designer,
+            infobase: crate::config::model::InfobaseConfig::file("File=/tmp/ib"),
+            source_sets,
+            build: BuildConfig::default(),
+            tools: ToolsConfig::default(),
+            mcp: Default::default(),
+            tests: TestsConfig::default(),
+        };
+
+        validate_source_set_dependencies(&config).expect("deep dependency chain must be valid");
     }
 
     fn write_edt_project(project_dir: &Path, descriptor_xml: Option<&str>) {
@@ -1128,6 +1402,7 @@ mod tests {
                     .strip_prefix(base.path())
                     .expect("relative")
                     .to_path_buf(),
+                depends_on: Vec::new(),
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig {
@@ -1165,6 +1440,7 @@ mod tests {
                     .strip_prefix(base.path())
                     .expect("relative")
                     .to_path_buf(),
+                depends_on: Vec::new(),
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig {
@@ -1202,6 +1478,7 @@ mod tests {
                     .strip_prefix(base.path())
                     .expect("relative")
                     .to_path_buf(),
+                depends_on: Vec::new(),
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig {
@@ -1243,6 +1520,7 @@ mod tests {
                     .strip_prefix(base.path())
                     .expect("relative")
                     .to_path_buf(),
+                depends_on: Vec::new(),
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig::default(),
@@ -1278,6 +1556,7 @@ mod tests {
                     .strip_prefix(base.path())
                     .expect("relative")
                     .to_path_buf(),
+                depends_on: Vec::new(),
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig::default(),
@@ -1313,6 +1592,7 @@ mod tests {
                     .strip_prefix(base.path())
                     .expect("relative")
                     .to_path_buf(),
+                depends_on: Vec::new(),
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig::default(),
@@ -1344,6 +1624,7 @@ mod tests {
                     .strip_prefix(base.path())
                     .expect("relative")
                     .to_path_buf(),
+                depends_on: Vec::new(),
             }],
             build: BuildConfig {
                 partial_load_threshold: 0,
@@ -1381,6 +1662,7 @@ mod tests {
                     .strip_prefix(base.path())
                     .expect("relative")
                     .to_path_buf(),
+                depends_on: Vec::new(),
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig::default(),
@@ -1417,6 +1699,7 @@ mod tests {
                     .strip_prefix(base.path())
                     .expect("relative")
                     .to_path_buf(),
+                depends_on: Vec::new(),
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig::default(),
@@ -1669,6 +1952,7 @@ mod tests {
                         .strip_prefix(base.path())
                         .expect("relative")
                         .to_path_buf(),
+                    depends_on: Vec::new(),
                 },
                 SourceSetConfig {
                     name: "ext".to_owned(),
@@ -1677,6 +1961,7 @@ mod tests {
                         .strip_prefix(base.path())
                         .expect("relative")
                         .to_path_buf(),
+                    depends_on: Vec::new(),
                 },
             ],
             build: BuildConfig::default(),
@@ -1936,6 +2221,7 @@ mod tests {
                     .strip_prefix(base.path())
                     .expect("relative")
                     .to_path_buf(),
+                depends_on: Vec::new(),
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig::default(),
@@ -1966,6 +2252,7 @@ mod tests {
                     .strip_prefix(base.path())
                     .expect("relative")
                     .to_path_buf(),
+                depends_on: Vec::new(),
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig::default(),
@@ -1997,6 +2284,7 @@ mod tests {
                     .strip_prefix(base.path())
                     .expect("relative")
                     .to_path_buf(),
+                depends_on: Vec::new(),
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig::default(),
@@ -2027,6 +2315,7 @@ mod tests {
                     .strip_prefix(base.path())
                     .expect("relative")
                     .to_path_buf(),
+                depends_on: Vec::new(),
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig::default(),
@@ -2087,6 +2376,7 @@ mod tests {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
                 path: std::path::PathBuf::from("designer/main"),
+                depends_on: Vec::new(),
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig::default(),
@@ -2126,6 +2416,7 @@ mod tests {
                     .strip_prefix(base.path())
                     .expect("relative")
                     .to_path_buf(),
+                depends_on: Vec::new(),
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig::default(),
@@ -2171,6 +2462,7 @@ mod tests {
                     .strip_prefix(base.path())
                     .expect("relative")
                     .to_path_buf(),
+                depends_on: Vec::new(),
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig::default(),
@@ -2214,6 +2506,7 @@ mod tests {
                     .strip_prefix(base.path())
                     .expect("relative")
                     .to_path_buf(),
+                depends_on: Vec::new(),
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig::default(),
@@ -2248,6 +2541,7 @@ mod tests {
                     .strip_prefix(base.path())
                     .expect("relative")
                     .to_path_buf(),
+                depends_on: Vec::new(),
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig::default(),
@@ -2283,6 +2577,7 @@ mod tests {
                     .strip_prefix(base.path())
                     .expect("relative")
                     .to_path_buf(),
+                depends_on: Vec::new(),
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig::default(),
@@ -2313,6 +2608,7 @@ mod tests {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
                 path: std::path::PathBuf::from("missing-path"),
+                depends_on: Vec::new(),
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig::default(),
@@ -2348,6 +2644,7 @@ mod tests {
                     .strip_prefix(base.path())
                     .expect("relative")
                     .to_path_buf(),
+                depends_on: Vec::new(),
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig::default(),
@@ -2384,6 +2681,7 @@ mod tests {
                     .strip_prefix(base.path())
                     .expect("relative")
                     .to_path_buf(),
+                depends_on: Vec::new(),
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig::default(),
@@ -2651,6 +2949,7 @@ mod tests {
                     .strip_prefix(base.path())
                     .expect("relative")
                     .to_path_buf(),
+                depends_on: Vec::new(),
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig::default(),
@@ -2699,6 +2998,7 @@ mod tests {
                     .strip_prefix(base.path())
                     .expect("relative")
                     .to_path_buf(),
+                depends_on: Vec::new(),
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig::default(),
@@ -2743,6 +3043,7 @@ mod tests {
                     .strip_prefix(base.path())
                     .expect("relative")
                     .to_path_buf(),
+                depends_on: Vec::new(),
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig::default(),
@@ -2794,6 +3095,7 @@ mod tests {
                     .strip_prefix(base.path())
                     .expect("relative")
                     .to_path_buf(),
+                depends_on: Vec::new(),
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig::default(),

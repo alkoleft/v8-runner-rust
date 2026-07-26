@@ -507,6 +507,9 @@ struct SourceSetSchema {
     purpose: SourceSetPurposeSchema,
     /// Source path relative to the primary config directory or an EDT project path.
     path: PathBuf,
+    /// Names of immediate source-set dependencies.
+    #[serde(default, rename = "dependsOn", skip_serializing_if = "Vec::is_empty")]
+    depends_on: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -1097,6 +1100,12 @@ mod tests {
             &["SourceSetSchema"],
             "type",
             "Source-set type",
+        );
+        assert_property_description_contains(
+            &main_schema,
+            &["SourceSetSchema"],
+            "dependsOn",
+            "immediate source-set dependencies",
         );
         assert_property_description_contains(
             &main_schema,

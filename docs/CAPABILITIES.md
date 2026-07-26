@@ -170,9 +170,11 @@ v8-runner extensions [--name <SOURCE_SET>...]
 v8-runner build [--source-set <NAME>] [--full-rebuild]
 ```
 
-- Без `--source-set` обрабатывает все configured `source-set` в canonical order.
-- С `--source-set` project stage анализирует и строит только указанный `source-set`; неизвестное
-  имя отклоняется как validation error.
+- Без `--source-set` обрабатывает все configured `source-set`: при наличии `dependsOn` в stable
+  topological order, иначе в прежнем canonical order.
+- С `--source-set` project stage строит выбранный `source-set` и транзитивное замыкание его
+  `dependsOn`; каждая зависимость выполняется один раз раньше dependent. Неизвестное имя
+  отклоняется как validation error.
 - Для `DESIGNER` выбирает incremental, partial или full path по изменённым файлам выбранного scope.
 - Для `EDT` сначала анализирует и экспортирует выбранные EDT `source-set`, затем грузит generated
   Designer files выбранным backend.
@@ -186,7 +188,8 @@ v8-runner build [--source-set <NAME>] [--full-rebuild]
 - `tools.client_mcp.extension` не является project `source-set`; `--source-set` выбирает только
   project source-set.
 - Не является атомарной multi-source-set операцией: ранние успешные шаги не откатываются, если
-  поздний шаг падает.
+  поздний шаг падает. После failure оставшиеся selected source-set отмечаются `skipped` и не
+  запускаются.
 
 ## Проверка и валидация
 
@@ -199,7 +202,8 @@ v8-runner test va
 v8-runner test va --feature login --filter-tag @smoke
 ```
 
-- Всегда сначала запускает `build`.
+- Всегда сначала запускает полный `build`; при `dependsOn` prerequisite source-set загружаются
+  раньше dependent, а test runner запускается только после успешного завершения всего build graph.
 - `test yaxunit module <NAME>` требует непустое имя модуля.
 - `test va` использует профиль из `tests.va.profile`; `--feature`, `--filter-tag`,
   `--ignore-tag` и `--scenario-filter` переопределяют соответствующие списки выбранного профиля

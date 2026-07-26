@@ -328,11 +328,13 @@ mod tests {
                     name: "external".to_owned(),
                     purpose: SourceSetPurpose::ExternalDataProcessors,
                     path: PathBuf::from("designer/external"),
+                    depends_on: Vec::new(),
                 },
                 SourceSetConfig {
                     name: "reports".to_owned(),
                     purpose: SourceSetPurpose::ExternalReports,
                     path: PathBuf::from("designer/reports"),
+                    depends_on: Vec::new(),
                 },
             ],
             build: BuildConfig::default(),
@@ -358,11 +360,13 @@ mod tests {
             name: "external".to_owned(),
             purpose: SourceSetPurpose::ExternalDataProcessors,
             path: PathBuf::from("designer/external"),
+            depends_on: Vec::new(),
         };
         let report = SourceSetConfig {
             name: "reports".to_owned(),
             purpose: SourceSetPurpose::ExternalReports,
             path: PathBuf::from("designer/reports"),
+            depends_on: Vec::new(),
         };
 
         assert_eq!(

@@ -70,10 +70,12 @@ v8-runner init
 ## Default Use-Case Routing
 
 - Source files changed and infobase may be stale: run `v8-runner build`.
-- Only one source-set changed: use commands that accept `--source-set <NAME>` instead of rebuilding or materializing everything.
+- Only one source-set changed: use commands that accept `--source-set <NAME>`; for `build`, its
+  transitive `dependsOn` prerequisites are included automatically.
 - Branch switch, rebase, large object moves, stale source-backed tool extension state, or suspicious incremental state: run `v8-runner build --full-rebuild`.
 - Syntax check: inspect `format` and `builder`, then choose `syntax designer-modules`, `syntax designer-config`, or `syntax edt`.
-- Behavior validation: run the relevant `v8-runner test ...` command; tests build first.
+- Behavior validation: run the relevant `v8-runner test ...` command; tests build the full
+  dependency graph first and start the runner only after successful build completion.
 - Missing local YAxUnit, Vanessa Automation, or onec-client-mcp-devkit setup: run
   `v8-runner tools download yaxunit --sources`, `v8-runner tools download vanessa`, and
   `v8-runner tools download client-mcp --sources` for source-backed setup. Omit

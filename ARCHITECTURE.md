@@ -68,6 +68,10 @@ This result grammar is governed by [ADR-0016](spec/decisions/0016-edinyy-executi
 `v8project.yaml`, loaded into `AppConfig` and accepted by `config::validate`, is the main project configuration contract.
 `source-set.name` is a stable identity for runtime state, generated directories, diagnostics, and source-set selection.
 The supported `source-set[].type` contract and validation boundary are governed by [ADR-0017](spec/decisions/0017-v8project-yaml-source-set-kak-glavnyy-konfiguratsionnyy-kontrakt.md).
+`source-set[].dependsOn` declares immediate graph edges by stable name. Config validation rejects
+unknown/self/duplicate/unsupported edges, cycles, and extension graphs without exactly one
+configuration root. Build orchestration resolves a stable topological order and expands scoped
+selection to its transitive dependency closure according to [ADR-0023](spec/decisions/0023-zavisimosti-source-set-i-stabilnyy-poryadok-build.md).
 `config init` must autodetect source-set types only from marker content: Designer `CONFIGURATION` / `EXTENSION` come from `Configuration.xml`, ordinary EDT `CONFIGURATION` / `EXTENSION` come from `.project` natures plus `DT-INF/PROJECT.PMF` (`EXTENSION` also requires `Base-Project`) and `src/Configuration/Configuration.mdo`, while EDT external `.epf`/`.erf` sources are discovered only through homogeneous aggregate roots of valid child projects classified by canonical `src/root.xml`, never through recursive descriptor scans, per-artifact fallback, or phantom source-set generation.
 
 The typed config model now splits MCP knobs into active HTTP/session settings and shared execution guardrails:
@@ -113,6 +117,9 @@ Important staging note:
 
 - `builder=DESIGNER` uses the existing `DesignerDsl`.
 - `builder=IBCMD` uses `IbcmdDsl` with `config import/apply` for build and `config export` for dump; for EDT build the EDT export step still produces Designer-format files first, and for EDT dump the reverse path first updates an internal Designer snapshot before EDT import/publication.
+- Dependency resolution happens above backend dispatch, so Designer, IBCMD and EDT-export build
+  paths consume the same ordered selection. A failed node prevents later selected nodes from
+  reaching platform DSL while preserving skipped steps in the existing result contract.
 - Builder backends are expected to stay interchangeable for implemented builder scenarios. Functionality added for the Designer builder should also be available through the IBCMD builder, or the gap must be documented explicitly. Future Designer agent mode should be added behind the same use-case contract.
 - Server infobase support is a target contract for all tools; file-only behavior must be documented as a current gap rather than treated as the permanent architecture.
 

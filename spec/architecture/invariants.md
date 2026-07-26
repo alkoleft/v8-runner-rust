@@ -41,8 +41,14 @@
 14. `v8project.local.yaml` является optional local overlay рядом с primary config, применяется после `v8project.yaml` и до CLI overrides, не является самостоятельным `--config` entrypoint и не должен менять `source-set`, `format` или `builder`.
 15. `basePath` не является public key в `v8project.yaml`; внутренний project base path считается равным каталогу primary config.
 16. Tool extensions, включая `tools.client_mcp.extension`, не являются project `source-set`; их подготовка выполняется через общий механизм подготовки расширений на стадии `build`, а не на стадии `launch`.
+17. `source-set[].dependsOn` задаёт immediate dependency edges по stable name; graph validation
+    выполняется до platform DSL, а build использует единый stable topological resolver для всех
+    backend paths.
+18. Scoped `build --source-set <NAME>` включает transitive dependency closure; failure dependency
+    не допускает platform execution dependent, а result сохраняет оставшиеся nodes как skipped без
+    добавления отдельной requested/expanded metadata.
 
-См. [ADR-0017](../decisions/0017-v8project-yaml-source-set-kak-glavnyy-konfiguratsionnyy-kontrakt.md), [ADR-0018](../decisions/0018-perenesti-kontrakt-informatsionnoy-bazy-v-infobase.md), [ADR-0019](../decisions/0019-sozdavat-servernuyu-infobazu-cherez-ibcmd-pri-init-pri-otsutstvii.md), [ADR-0021](../decisions/0021-lokalnyy-overlay-config.md) и [ADR-0022](../decisions/0022-universalnyy-mehanizm-podgotovki-rasshireniy-i-client-mcp-extension.md).
+См. [ADR-0017](../decisions/0017-v8project-yaml-source-set-kak-glavnyy-konfiguratsionnyy-kontrakt.md), [ADR-0018](../decisions/0018-perenesti-kontrakt-informatsionnoy-bazy-v-infobase.md), [ADR-0019](../decisions/0019-sozdavat-servernuyu-infobazu-cherez-ibcmd-pri-init-pri-otsutstvii.md), [ADR-0021](../decisions/0021-lokalnyy-overlay-config.md), [ADR-0022](../decisions/0022-universalnyy-mehanizm-podgotovki-rasshireniy-i-client-mcp-extension.md) и [ADR-0023](../decisions/0023-zavisimosti-source-set-i-stabilnyy-poryadok-build.md).
 
 ## Workspace Lock
 

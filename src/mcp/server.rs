@@ -1520,6 +1520,7 @@ mod tests {
                 name: String::from("main"),
                 purpose: SourceSetPurpose::Configuration,
                 path: PathBuf::from("."),
+                depends_on: Vec::new(),
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig {

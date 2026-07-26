@@ -1268,11 +1268,13 @@ exit 0"#,
                     name: "main".to_owned(),
                     purpose: SourceSetPurpose::Configuration,
                     path: PathBuf::from("main"),
+                    depends_on: Vec::new(),
                 },
                 SourceSetConfig {
                     name: "ext".to_owned(),
                     purpose: SourceSetPurpose::Extension,
                     path: PathBuf::from("ext"),
+                    depends_on: Vec::new(),
                 },
             ],
             build: BuildConfig::default(),
@@ -1597,6 +1599,7 @@ exit 0"#,
             name: "main2".to_owned(),
             purpose: SourceSetPurpose::Configuration,
             path: PathBuf::from("main"),
+            depends_on: Vec::new(),
         });
 
         let error = resolve_target(

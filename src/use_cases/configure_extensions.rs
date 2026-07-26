@@ -297,11 +297,13 @@ mod tests {
                     name: "configuration".to_owned(),
                     purpose: SourceSetPurpose::Configuration,
                     path: PathBuf::from("configuration"),
+                    depends_on: Vec::new(),
                 },
                 SourceSetConfig {
                     name: "client_mcp".to_owned(),
                     purpose: SourceSetPurpose::Extension,
                     path: PathBuf::from("exts/client-mcp"),
+                    depends_on: Vec::new(),
                 },
             ],
             build: BuildConfig::default(),

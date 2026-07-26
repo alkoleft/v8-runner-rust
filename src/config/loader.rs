@@ -439,6 +439,31 @@ mod tests {
         )
     }
 
+    fn dependency_config(source_sets: &str) -> String {
+        format!(
+            "workPath: work\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: \"File=build/ib\"\nsource-set:\n{source_sets}"
+        )
+    }
+
+    fn load_dependency_config(
+        source_sets: &str,
+    ) -> Result<crate::config::model::AppConfig, ConfigLoadError> {
+        let dir = tempdir().expect("tempdir");
+        let config_path = write_minimal_project_config(
+            &dir.path().join("project"),
+            &dependency_config(source_sets),
+        );
+        load_config(config_path.to_str(), None)
+    }
+
+    fn assert_dependency_error(source_sets: &str, expected: &str) {
+        let error = load_dependency_config(source_sets).expect_err("dependency graph must fail");
+        assert_eq!(
+            error.to_string(),
+            format!("config validation failed: {expected}")
+        );
+    }
+
     #[test]
     fn load_config_defaults_missing_base_path_to_primary_config_dir() {
         let dir = tempdir().expect("tempdir");
@@ -453,6 +478,88 @@ mod tests {
         assert_eq!(
             config.infobase.connection,
             format!("File={}", config.base_path.join("build/ib").display())
+        );
+    }
+
+    #[test]
+    fn load_config_accepts_valid_source_set_dependency_graph() {
+        let config = load_dependency_config(
+            "  - name: main\n    type: CONFIGURATION\n    path: main\n  - name: yaxunit\n    type: EXTENSION\n    path: yaxunit\n    dependsOn:\n      - main\n  - name: tests\n    type: EXTENSION\n    path: tests\n    dependsOn:\n      - yaxunit\n",
+        )
+        .expect("valid dependency graph");
+
+        let serialized = serde_yaml::to_value(config).expect("serialize config");
+        assert_eq!(
+            serialized["source-set"][2]["dependsOn"],
+            serde_yaml::Value::Sequence(vec![serde_yaml::Value::String("yaxunit".to_owned())])
+        );
+    }
+
+    #[test]
+    fn load_config_keeps_source_set_dependencies_optional() {
+        let config = load_dependency_config(
+            "  - name: main\n    type: CONFIGURATION\n    path: main\n  - name: tests\n    type: EXTENSION\n    path: tests\n",
+        )
+        .expect("legacy config without dependency graph");
+
+        let serialized = serde_yaml::to_value(config).expect("serialize config");
+        assert!(serialized["source-set"][0].get("dependsOn").is_none());
+        assert!(serialized["source-set"][1].get("dependsOn").is_none());
+    }
+
+    #[test]
+    fn load_config_rejects_unknown_source_set_dependency() {
+        assert_dependency_error(
+            "  - name: main\n    type: CONFIGURATION\n    path: main\n  - name: tests\n    type: EXTENSION\n    path: tests\n    dependsOn:\n      - missing\n",
+            "source-set 'tests' depends on unknown source-set 'missing'",
+        );
+    }
+
+    #[test]
+    fn load_config_rejects_self_source_set_dependency() {
+        assert_dependency_error(
+            "  - name: main\n    type: CONFIGURATION\n    path: main\n  - name: tests\n    type: EXTENSION\n    path: tests\n    dependsOn:\n      - tests\n",
+            "source-set 'tests' cannot depend on itself",
+        );
+    }
+
+    #[test]
+    fn load_config_rejects_duplicate_source_set_dependency() {
+        assert_dependency_error(
+            "  - name: main\n    type: CONFIGURATION\n    path: main\n  - name: tests\n    type: EXTENSION\n    path: tests\n    dependsOn:\n      - main\n      - main\n",
+            "source-set 'tests' declares dependency 'main' more than once",
+        );
+    }
+
+    #[test]
+    fn load_config_rejects_external_artifact_source_set_dependency() {
+        assert_dependency_error(
+            "  - name: main\n    type: CONFIGURATION\n    path: main\n  - name: processors\n    type: EXTERNAL_DATA_PROCESSORS\n    path: processors\n  - name: tests\n    type: EXTENSION\n    path: tests\n    dependsOn:\n      - processors\n",
+            "source-set 'tests' dependency 'processors' must reference CONFIGURATION or EXTENSION source-set",
+        );
+    }
+
+    #[test]
+    fn load_config_rejects_source_set_dependency_cycle_with_full_path() {
+        assert_dependency_error(
+            "  - name: main\n    type: CONFIGURATION\n    path: main\n    dependsOn:\n      - tests\n  - name: yaxunit\n    type: EXTENSION\n    path: yaxunit\n    dependsOn:\n      - main\n  - name: tests\n    type: EXTENSION\n    path: tests\n    dependsOn:\n      - yaxunit\n",
+            "source-set dependency cycle: main -> tests -> yaxunit -> main",
+        );
+    }
+
+    #[test]
+    fn load_config_rejects_ambiguous_source_set_configuration_roots() {
+        assert_dependency_error(
+            "  - name: main-a\n    type: CONFIGURATION\n    path: main-a\n  - name: main-b\n    type: CONFIGURATION\n    path: main-b\n  - name: tests\n    type: EXTENSION\n    path: tests\n    dependsOn:\n      - main-a\n      - main-b\n",
+            "source-set 'tests' dependencies must resolve to exactly one CONFIGURATION source-set; found [main-a, main-b]",
+        );
+    }
+
+    #[test]
+    fn load_config_rejects_missing_source_set_configuration_root() {
+        assert_dependency_error(
+            "  - name: main\n    type: CONFIGURATION\n    path: main\n  - name: yaxunit\n    type: EXTENSION\n    path: yaxunit\n  - name: tests\n    type: EXTENSION\n    path: tests\n    dependsOn:\n      - yaxunit\n",
+            "source-set 'yaxunit' dependencies do not resolve to a CONFIGURATION source-set",
         );
     }
 

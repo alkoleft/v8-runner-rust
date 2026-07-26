@@ -28,6 +28,23 @@ fn write_build_script(path: &Path, fail_pattern: Option<&str>) {
     write_script(path, &body);
 }
 
+fn write_recording_build_script(path: &Path, calls_log: &Path, fail_pattern: Option<&str>) {
+    let pattern_branch = fail_pattern
+        .map(|pattern| {
+            format!(
+                "if printf '%s' \"$args\" | grep -F -q -- '{}'; then exit 17; fi",
+                pattern
+            )
+        })
+        .unwrap_or_default();
+    let body = format!(
+        "args=\"$*\"\nout=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"/Out\" ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nprintf '%s\\n' \"$args\" >> '{}'\nif [ -n \"$out\" ]; then printf 'designer log for %s\\n' \"$args\" > \"$out\"; fi\n{}\nexit 0",
+        calls_log.display(),
+        pattern_branch
+    );
+    write_script(path, &body);
+}
+
 fn write_ibcmd_script(path: &Path, calls_log: &Path, fail_pattern: Option<&str>) {
     let pattern_branch = fail_pattern
         .map(|pattern| {
@@ -210,6 +227,39 @@ fn setup_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
     write_config(&config_path, &base_path, &work_path, &binary_path);
 
     (dir, config_path, binary_path, work_path)
+}
+
+fn setup_dependency_project() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
+    let dir = temp_workspace();
+    let base_path = dir.path().join("project");
+    let work_path = dir.path().join("work");
+    let config_path = dir.path().join("v8project.yaml");
+    let binary_path = dir.path().join("1cv8");
+    let calls_log = dir.path().join("build.calls.log");
+
+    for source_set in ["main", "yaxunit", "TESTS"] {
+        let source_path = base_path.join(source_set);
+        fs::create_dir_all(&source_path).expect("source-set directory");
+        fs::write(
+            source_path.join("Configuration.xml"),
+            format!("<Configuration name=\"{source_set}\" />\n"),
+        )
+        .expect("source-set marker");
+    }
+    fs::create_dir_all(&work_path).expect("work");
+    write_recording_build_script(&binary_path, &calls_log, None);
+
+    fs::write(
+        &config_path,
+        format!(
+            "workPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\nbuild:\n  partialLoadThreshold: 20\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: project/main\n  - name: TESTS\n    type: EXTENSION\n    path: project/TESTS\n    dependsOn:\n      - yaxunit\n  - name: yaxunit\n    type: EXTENSION\n    path: project/yaxunit\n    dependsOn:\n      - main\ntools:\n  platform:\n    path: '{}'\n",
+            work_path.display(),
+            binary_path.display(),
+        ),
+    )
+    .expect("config");
+
+    (dir, config_path, binary_path, calls_log)
 }
 
 fn setup_ibcmd_project() -> (
@@ -616,6 +666,175 @@ fn build_source_set_json_limits_steps_to_requested_source_set() {
     assert_eq!(steps.len(), 1);
     assert_eq!(steps[0]["source_set"], "ext");
     assert_eq!(steps[0]["mode"], "full");
+}
+
+#[test]
+fn build_source_set_expands_main_yaxunit_tests_dependency_chain() {
+    let (dir, config_path, _binary_path, calls_log) = setup_dependency_project();
+
+    let output = v8_runner_command()
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--json-message",
+            "build",
+            "--source-set",
+            "TESTS",
+            "--full-rebuild",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(
+        output.status.success(),
+        "status={:?}\nstdout={}\nstderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
+    let source_sets = payload["data"]["steps"]
+        .as_array()
+        .expect("steps")
+        .iter()
+        .map(|step| step["source_set"].as_str().expect("source-set"))
+        .collect::<Vec<_>>();
+    let update_order = fs::read_to_string(&calls_log)
+        .expect("build calls")
+        .lines()
+        .filter(|line| line.contains("/UpdateDBCfg"))
+        .map(|line| {
+            if line.contains("-Extension yaxunit") {
+                "yaxunit"
+            } else if line.contains("-Extension TESTS") {
+                "TESTS"
+            } else {
+                "main"
+            }
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(source_sets, vec!["main", "yaxunit", "TESTS"]);
+    assert_eq!(update_order, vec!["main", "yaxunit", "TESTS"]);
+    let data = payload["data"].as_object().expect("data");
+    for metadata_key in [
+        "requestedSourceSets",
+        "expandedSourceSets",
+        "requested_source_sets",
+        "expanded_source_sets",
+    ] {
+        assert!(!data.contains_key(metadata_key));
+    }
+
+    fs::write(&calls_log, "").expect("clear build calls");
+    fs::write(
+        dir.path()
+            .join("project")
+            .join("TESTS")
+            .join("Configuration.xml"),
+        "<Configuration name=\"TESTS\" changed=\"true\" />\n",
+    )
+    .expect("change dependent source-set");
+
+    let incremental = v8_runner_command()
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--json-message",
+            "build",
+            "--source-set",
+            "TESTS",
+        ])
+        .output()
+        .expect("run incremental command");
+
+    assert!(
+        incremental.status.success(),
+        "status={:?}\nstdout={}\nstderr={}",
+        incremental.status.code(),
+        String::from_utf8_lossy(&incremental.stdout),
+        String::from_utf8_lossy(&incremental.stderr)
+    );
+    let incremental_payload: Value =
+        serde_json::from_slice(&incremental.stdout).expect("incremental json");
+    let incremental_modes = incremental_payload["data"]["steps"]
+        .as_array()
+        .expect("incremental steps")
+        .iter()
+        .map(|step| {
+            (
+                step["source_set"].as_str().expect("source-set"),
+                step["mode"].as_str().expect("mode"),
+            )
+        })
+        .collect::<Vec<_>>();
+    let incremental_updates = fs::read_to_string(calls_log)
+        .expect("incremental build calls")
+        .lines()
+        .filter(|line| line.contains("/UpdateDBCfg"))
+        .map(|line| {
+            if line.contains("-Extension yaxunit") {
+                "yaxunit"
+            } else if line.contains("-Extension TESTS") {
+                "TESTS"
+            } else {
+                "main"
+            }
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        incremental_modes,
+        vec![
+            ("main", "skipped"),
+            ("yaxunit", "skipped"),
+            ("TESTS", "full")
+        ]
+    );
+    assert_eq!(incremental_updates, vec!["TESTS"]);
+}
+
+#[test]
+fn build_dependency_failure_prevents_dependent_source_set_execution() {
+    let (_dir, config_path, binary_path, calls_log) = setup_dependency_project();
+    write_recording_build_script(
+        &binary_path,
+        &calls_log,
+        Some("/UpdateDBCfg -Extension yaxunit"),
+    );
+
+    let output = v8_runner_command()
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--json-message",
+            "build",
+            "--source-set",
+            "TESTS",
+            "--full-rebuild",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(4));
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
+    let source_sets = payload["data"]["steps"]
+        .as_array()
+        .expect("steps")
+        .iter()
+        .map(|step| step["source_set"].as_str().expect("source-set"))
+        .collect::<Vec<_>>();
+    let calls = fs::read_to_string(calls_log).expect("build calls");
+
+    assert_eq!(source_sets, vec!["main", "yaxunit", "TESTS"]);
+    assert_eq!(payload["data"]["steps"][2]["mode"], "skipped");
+    assert_eq!(payload["data"]["steps"][2]["ok"], false);
+    assert_eq!(
+        payload["data"]["steps"][2]["message"],
+        "aborted after previous failure"
+    );
+    assert!(!calls.contains("-Extension TESTS"), "calls:\n{calls}");
 }
 
 #[test]

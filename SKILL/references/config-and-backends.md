@@ -38,6 +38,11 @@ settings before CLI overrides.
 
 `source-set.name` is the stable identity for ordering, diagnostics, runtime contexts, generated directories, and command selection.
 Relative `source-set.path` values are resolved from the directory containing the primary `v8project.yaml`.
+Optional `source-set.dependsOn` lists immediate dependencies by name. A scoped
+`build --source-set <NAME>` includes the transitive dependency closure and orders dependencies
+before dependents. When any dependency is declared, every extension must resolve transitively to
+exactly one configuration root; unknown, self, duplicate, external source-set targets and cycles are
+validation errors.
 
 Supported `source-set.type` values:
 

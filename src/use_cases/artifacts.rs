@@ -1337,11 +1337,13 @@ mod tests {
                     name: "configuration".to_owned(),
                     purpose: SourceSetPurpose::Configuration,
                     path: PathBuf::from("configuration"),
+                    depends_on: Vec::new(),
                 },
                 SourceSetConfig {
                     name: "ext-sales".to_owned(),
                     purpose: SourceSetPurpose::Extension,
                     path: PathBuf::from("extensions/ext-sales"),
+                    depends_on: Vec::new(),
                 },
             ],
             build: BuildConfig::default(),
@@ -1386,6 +1388,7 @@ mod tests {
             name: name.to_owned(),
             purpose,
             path: PathBuf::from(name),
+            depends_on: Vec::new(),
         });
     }
 

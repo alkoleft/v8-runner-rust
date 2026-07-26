@@ -1,6 +1,8 @@
 # Testing
 
-Use tests when behavior matters. Test commands build first, so do not run a separate `build` unless the user specifically asked for a build-only diagnosis.
+Use tests when behavior matters. Test commands build the full configured source-set graph first,
+including `dependsOn` ordering, so do not run a separate `build` unless the user specifically
+asked for a build-only diagnosis. A failed prerequisite prevents the test runner from starting.
 
 ## YaXUnit
 

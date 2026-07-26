@@ -2519,6 +2519,7 @@ mod tests {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
                 path: Path::new("src").to_path_buf(),
+                depends_on: Vec::new(),
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig {

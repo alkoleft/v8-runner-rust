@@ -1117,6 +1117,7 @@ mod tests {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
                 path: Path::new(".").to_path_buf(),
+                depends_on: Vec::new(),
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig {
@@ -1146,11 +1147,13 @@ mod tests {
                     name: "main".to_owned(),
                     purpose: SourceSetPurpose::Configuration,
                     path: Path::new("main-edt").to_path_buf(),
+                    depends_on: Vec::new(),
                 },
                 SourceSetConfig {
                     name: "ext".to_owned(),
                     purpose: SourceSetPurpose::Extension,
                     path: Path::new("ext-edt").to_path_buf(),
+                    depends_on: Vec::new(),
                 },
             ],
             build: BuildConfig::default(),

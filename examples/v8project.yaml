@@ -24,6 +24,8 @@ source-set:
   # - name: my-extension
   #   type: EXTENSION
   #   path: extensions/my-extension
+  #   dependsOn:
+  #     - main
 
 # Build pipeline settings (optional)
 build:

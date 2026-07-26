@@ -168,6 +168,15 @@ fn write_config(
     fs::write(path, config).expect("config");
 }
 
+fn write_dependency_test_config(path: &Path, work_path: &Path, install_dir: &Path) {
+    let config = format!(
+        "workPath: '{}'\nformat: DESIGNER\nbuilder: DESIGNER\ninfobase:\n  connection: 'File=/tmp/ib'\n  password: secret\ntests:\n  execution_timeout_seconds: 5\nsource-set:\n  - name: main\n    type: CONFIGURATION\n    path: main\n  - name: TESTS\n    type: EXTENSION\n    path: TESTS\n    dependsOn:\n      - yaxunit\n  - name: yaxunit\n    type: EXTENSION\n    path: yaxunit\n    dependsOn:\n      - main\ntools:\n  platform:\n    path: '{}'\n",
+        work_path.display(),
+        install_dir.display(),
+    );
+    fs::write(path, config).expect("config");
+}
+
 fn setup_project(
     work_dir_name: &str,
     report_xml: &str,
@@ -410,6 +419,83 @@ fn test_all_full_json_runs_build_first_and_returns_report() {
         "ok"
     );
     assert_eq!(payload["data"]["retained_paths"], Value::Null);
+}
+
+#[test]
+fn test_yaxunit_builds_dependency_chain_before_enterprise_launch() {
+    let (dir, config_path, build_calls, _test_calls, captured_config) = setup_project(
+        "work",
+        JUNIT_SMOKE_REPORT_FIXTURE,
+        "12:00:00.000 [INF] ok",
+        0,
+        false,
+        5,
+        None,
+    );
+    write_test_script(
+        &dir.path().join("platform").join("bin").join("1cv8c"),
+        &build_calls,
+        &captured_config,
+        JUNIT_SMOKE_REPORT_FIXTURE,
+        "12:00:00.000 [INF] ok",
+        0,
+        None,
+    );
+    let project_path = config_path.parent().expect("project path");
+    for source_set in ["yaxunit", "TESTS"] {
+        let source_path = project_path.join(source_set);
+        fs::create_dir_all(&source_path).expect("source-set directory");
+        fs::write(
+            source_path.join("Configuration.xml"),
+            format!("<Configuration name=\"{source_set}\" />\n"),
+        )
+        .expect("source-set marker");
+    }
+    write_dependency_test_config(
+        &config_path,
+        &dir.path().join("work"),
+        &dir.path().join("platform"),
+    );
+
+    let output = v8_runner_command()
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--json-message",
+            "test",
+            "yaxunit",
+            "all",
+        ])
+        .output()
+        .expect("run");
+
+    assert!(
+        output.status.success(),
+        "status={:?}\nstdout={}\nstderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let event_order = fs::read_to_string(build_calls)
+        .expect("build and test calls")
+        .lines()
+        .filter(|line| line.contains("/UpdateDBCfg") || line.contains("RunUnitTests="))
+        .map(|line| {
+            if line.contains("RunUnitTests=") {
+                "enterprise"
+            } else if line.contains("-Extension yaxunit") {
+                "yaxunit"
+            } else if line.contains("-Extension TESTS") {
+                "TESTS"
+            } else {
+                "main"
+            }
+        })
+        .collect::<Vec<_>>();
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
+
+    assert_eq!(event_order, vec!["main", "yaxunit", "TESTS", "enterprise"]);
+    assert_eq!(payload["data"]["report"]["summary"]["total"], 1);
 }
 
 #[test]

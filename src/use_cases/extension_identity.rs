@@ -21,6 +21,7 @@ mod tests {
             name: "SalesAddon".to_owned(),
             purpose: SourceSetPurpose::Extension,
             path: PathBuf::from("extensions/sales-project"),
+            depends_on: Vec::new(),
         };
 
         assert_eq!(platform_extension_name(&source_set), "SalesAddon");

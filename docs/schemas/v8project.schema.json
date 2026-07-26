@@ -322,6 +322,13 @@
     "SourceSetSchema": {
       "additionalProperties": false,
       "properties": {
+        "dependsOn": {
+          "description": "Names of immediate source-set dependencies.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "name": {
           "description": "Source-set name used by CLI filters and diagnostics.",
           "type": "string"

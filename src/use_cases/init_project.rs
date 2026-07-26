@@ -775,11 +775,13 @@ mod tests {
                     name: "ext".to_owned(),
                     purpose: SourceSetPurpose::Extension,
                     path: PathBuf::from("ext"),
+                    depends_on: Vec::new(),
                 },
                 SourceSetConfig {
                     name: "main".to_owned(),
                     purpose: SourceSetPurpose::Configuration,
                     path: PathBuf::from("main"),
+                    depends_on: Vec::new(),
                 },
             ],
             build: BuildConfig::default(),
@@ -985,6 +987,7 @@ mod tests {
             name: "main".to_owned(),
             purpose: SourceSetPurpose::Configuration,
             path: PathBuf::from("main"),
+            depends_on: Vec::new(),
         }];
         config.tools.edt_cli.path = Some(edt_script);
         config.tools.edt_cli.interactive_mode = false;
@@ -1038,6 +1041,7 @@ mod tests {
             name: "main".to_owned(),
             purpose: SourceSetPurpose::Configuration,
             path: PathBuf::from("main"),
+            depends_on: Vec::new(),
         }];
         config.tools.edt_cli.path = Some(edt_script);
         config.tools.edt_cli.interactive_mode = false;
@@ -1093,6 +1097,7 @@ mod tests {
             name: "main".to_owned(),
             purpose: SourceSetPurpose::Configuration,
             path: PathBuf::from("main"),
+            depends_on: Vec::new(),
         }];
         config.tools.edt_cli.path = Some(edt_script);
         config.tools.edt_cli.interactive_mode = false;

@@ -26,6 +26,7 @@
 - [ADR-0020: Упростить CLI-only `convert` до repo-aware конвертации текущих исходников проекта](0020-dobavit-cli-only-convert-dlya-dvustoronney-konvertatsii-edt-i-designer.md) — `accepted`, `2026-04-22`
 - [ADR-0021: Ввести локальный overlay для `v8project.yaml`](0021-lokalnyy-overlay-config.md) — `accepted`, `2026-05-02`
 - [ADR-0022: Ввести общий механизм подготовки расширений и использовать его для `client_mcp`](0022-universalnyy-mehanizm-podgotovki-rasshireniy-i-client-mcp-extension.md) — `accepted`, `2026-05-02`
+- [ADR-0023: Ввести зависимости source-set и стабильный порядок build](0023-zavisimosti-source-set-i-stabilnyy-poryadok-build.md) — `accepted`, `2026-07-26`
 
 ## Правила обновления
 

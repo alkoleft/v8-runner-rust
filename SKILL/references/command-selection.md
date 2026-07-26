@@ -34,6 +34,8 @@ Limit build to one configured source-set:
 v8-runner build --source-set <NAME>
 ```
 
+This scoped build includes the selected source-set's transitive `dependsOn` prerequisites.
+
 Recover after branch switches, rebases, large object moves, or suspicious incremental state:
 
 ```bash

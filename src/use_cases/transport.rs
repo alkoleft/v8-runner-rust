@@ -66,6 +66,7 @@ mod tests {
                 name: "main".to_owned(),
                 purpose: SourceSetPurpose::Configuration,
                 path: PathBuf::from("main"),
+                depends_on: Vec::new(),
             }],
             build: BuildConfig::default(),
             tools: ToolsConfig::default(),
