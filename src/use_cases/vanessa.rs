@@ -19,6 +19,7 @@ pub(crate) struct VanessaLaunch {
 pub(crate) struct VanessaTestArtifacts<'a> {
     pub(crate) run_dir: &'a Path,
     pub(crate) junit_dir: &'a Path,
+    pub(crate) allure_results_dir: &'a Path,
     pub(crate) runner_log: &'a Path,
 }
 
@@ -33,6 +34,13 @@ pub(crate) fn prepare_test_launch(
 
     fs::create_dir_all(artifacts.junit_dir)
         .map_err(|error| AppError::Runtime(format!("failed to create JUnit directory: {error}")))?;
+    set_dir_permissions(artifacts.junit_dir)
+        .map_err(|error| AppError::Runtime(format!("failed to chmod JUnit directory: {error}")))?;
+    fs::create_dir_all(artifacts.allure_results_dir).map_err(|error| {
+        AppError::Runtime(format!("failed to create Allure directory: {error}"))
+    })?;
+    set_dir_permissions(artifacts.allure_results_dir)
+        .map_err(|error| AppError::Runtime(format!("failed to chmod Allure directory: {error}")))?;
 
     let runtime_params_path = artifacts.run_dir.join("va-params.json");
     validate_params_payload_path(&runtime_params_path, "test va")?;
@@ -230,6 +238,11 @@ fn apply_test_overlay(object: &mut Map<String, Value>, artifacts: VanessaTestArt
         "КаталогВыгрузкиJUnit".to_owned(),
         Value::String(artifacts.junit_dir.display().to_string()),
     );
+    object.insert("ДелатьОтчетВФорматеАллюр".to_owned(), Value::Bool(true));
+    object.insert(
+        "КаталогВыгрузкиAllure".to_owned(),
+        Value::String(artifacts.allure_results_dir.display().to_string()),
+    );
     apply_logging_overlay(
         object,
         artifacts.runner_log,
@@ -331,4 +344,40 @@ fn set_file_permissions(path: &Path) -> std::io::Result<()> {
         fs::set_permissions(path, permissions)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{apply_test_overlay, VanessaTestArtifacts};
+    use serde_json::{Map, Value};
+    use std::path::Path;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_overlay_enables_junit_and_allure_reports() {
+        let dir = tempdir().expect("tempdir");
+        let run_dir = dir.path().join("run");
+        let junit_dir = run_dir.join("junit");
+        let allure_results_dir = run_dir.join("allure-results");
+        let runner_log = run_dir.join("runner.log");
+        let mut payload = Map::new();
+
+        apply_test_overlay(
+            &mut payload,
+            VanessaTestArtifacts {
+                run_dir: Path::new(&run_dir),
+                junit_dir: Path::new(&junit_dir),
+                allure_results_dir: Path::new(&allure_results_dir),
+                runner_log: Path::new(&runner_log),
+            },
+        );
+
+        let payload = Value::Object(payload);
+        assert_eq!(payload["ДелатьОтчетВФорматеjUnit"], true);
+        assert_eq!(payload["ДелатьОтчетВФорматеАллюр"], true);
+        assert_eq!(
+            payload["КаталогВыгрузкиAllure"],
+            allure_results_dir.display().to_string()
+        );
+    }
 }

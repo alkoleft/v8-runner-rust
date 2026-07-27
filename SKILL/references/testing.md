@@ -87,10 +87,23 @@ v8-runner syntax edt
 
 ## Artifacts
 
-Preserve failed test artifacts under:
+Each YaXUnit or Vanessa Automation test run retains its diagnostics under:
 
 ```text
 workPath/temp/<runner-id>/runs/<run-id>/
 ```
+
+Supported current/latest native runners produce JUnit XML and Allure results together. In
+`--json-message`, read the summary from `data.execution.metrics` and every existing typed path
+from `data.execution.artifacts.items`; `data.retained_paths` is only a compatibility projection.
+Missing, empty, or malformed JUnit and missing or empty Allure results are `invalid_output`
+infrastructure failures. Successful and failed run directories remain until explicitly removed;
+internal cleanup markers are never public artifacts. A missing file-infobase rejected by
+`--no-build` preflight creates no run directory because validation precedes artifact preparation.
+Optional runner diagnostics may appear under `error-details/` and `screenshots/` in the run
+directory. These directories are not pre-created; existing regular files are inventoried as
+`error_details` and `screenshot`, respectively. Their inventory has one shared cap of 100 regular
+files, scanning `error-details/` before `screenshots/`; when a category is truncated, its directory
+path is retained as the fallback artifact with that category's kind and role.
 
 In final answers, include the command, pass/fail result, and artifact path when present.

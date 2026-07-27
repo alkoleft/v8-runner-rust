@@ -185,3 +185,36 @@ fn change_checklist_covers_mcp_workspace_lock_and_config_contract() {
         );
     }
 }
+
+#[test]
+fn windows_runner_log_materialization_keeps_reparse_and_atomic_replace_guards() {
+    let source = read("src/use_cases/run_tests.rs");
+    let open = extract_between(&source, "fn open_file_no_follow", "fn create_private_file");
+    for required in [
+        "FILE_FLAG_OPEN_REPARSE_POINT",
+        "GetFileInformationByHandle",
+        "FILE_ATTRIBUTE_REPARSE_POINT",
+    ] {
+        assert!(
+            open.contains(required),
+            "Windows no-follow open must use '{required}'"
+        );
+    }
+
+    let replace = extract_between(&source, "fn replace_file", "#[cfg(test)]");
+    for required in [
+        "MoveFileExW",
+        "MOVEFILE_REPLACE_EXISTING",
+        "MOVEFILE_WRITE_THROUGH",
+        "fs::canonicalize(parent)",
+    ] {
+        assert!(
+            replace.contains(required),
+            "Windows atomic replacement must use '{required}'"
+        );
+    }
+    assert!(
+        !replace.contains("fs::remove_file(destination)"),
+        "Windows replacement must not expose a remove-then-rename gap"
+    );
+}

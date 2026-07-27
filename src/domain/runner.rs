@@ -87,6 +87,7 @@ pub enum RunnerKind {
 #[serde(rename_all = "snake_case")]
 pub enum RunnerOutputFormat {
     JunitXml,
+    AllureResults,
     PlainTextLog,
     Json,
     Binary,

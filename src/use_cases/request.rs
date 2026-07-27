@@ -74,6 +74,7 @@ impl TestRequest {
                 kind: RunnerKind::YaXUnit,
                 output_formats: vec![
                     RunnerOutputFormat::JunitXml,
+                    RunnerOutputFormat::AllureResults,
                     RunnerOutputFormat::PlainTextLog,
                 ],
                 backend_hint: Some("enterprise".to_owned()),
@@ -82,7 +83,7 @@ impl TestRequest {
             timeouts: ExecutionTimeouts::default(),
             policy: ExecutionPolicy {
                 retain_artifacts_on_failure: true,
-                retain_artifacts_on_success: false,
+                retain_artifacts_on_success: true,
             },
             launch: LaunchOptions::default(),
         }
@@ -660,8 +661,9 @@ mod tests {
     use super::{
         DesignerClientScope, DesignerClientScopes, DesignerConfigCheck, DesignerConfigChecks,
         DesignerConfigSyntaxRequest, DesignerModulesSyntaxRequest, ExtendedModulesDetail,
-        ExtendedModulesPolicy, SyntaxExtensionScope,
+        ExtendedModulesPolicy, SyntaxExtensionScope, TestRequest,
     };
+    use crate::domain::runner::RunnerOutputFormat;
     use crate::use_cases::result::UseCaseErrorKind;
 
     #[test]
@@ -691,6 +693,21 @@ mod tests {
         );
         assert_eq!(request.extension_scope().extension(), Some("Ext"));
         assert!(request.extension_scope().includes_all_extensions());
+    }
+
+    #[test]
+    fn default_test_execution_retains_junit_and_allure_results() {
+        let execution = TestRequest::default_execution();
+
+        assert_eq!(
+            execution.profile.output_formats,
+            vec![
+                RunnerOutputFormat::JunitXml,
+                RunnerOutputFormat::AllureResults,
+                RunnerOutputFormat::PlainTextLog,
+            ]
+        );
+        assert!(execution.policy.retain_artifacts_on_success);
     }
 
     #[test]

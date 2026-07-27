@@ -519,6 +519,7 @@ fn build_vanessa_run_all_execution(
             kind: RunnerKind::Vanessa,
             output_formats: vec![
                 RunnerOutputFormat::JunitXml,
+                RunnerOutputFormat::AllureResults,
                 RunnerOutputFormat::PlainTextLog,
             ],
             backend_hint: Some("enterprise".to_owned()),
@@ -530,7 +531,7 @@ fn build_vanessa_run_all_execution(
         ),
         policy: ExecutionPolicy {
             retain_artifacts_on_failure: true,
-            retain_artifacts_on_success: false,
+            retain_artifacts_on_success: true,
         },
         launch: LaunchOptions {
             c: Some("StartFeaturePlayer;VAParams={params_path}".to_owned()),
@@ -999,7 +1000,7 @@ mod tests {
     use crate::domain::launch::{
         LaunchMode, LaunchResult, PlatformResolution, PlatformResolutionSource,
     };
-    use crate::domain::runner::RunnerKind;
+    use crate::domain::runner::{RunnerKind, RunnerOutputFormat};
     use crate::domain::syntax::{SyntaxCheckResult, SyntaxCheckStatus, SyntaxIssueSummary};
     use crate::domain::test::{
         RetainedPaths, TestCase, TestOutputMode, TestReport, TestRunResult, TestStatus, TestSuite,
@@ -1021,6 +1022,17 @@ mod tests {
         SyntaxTargetRequest, TestRequest, TestScopeRequest,
     };
     use crate::use_cases::result::{UseCaseError, UseCaseErrorKind, UseCaseFailure, UseCaseResult};
+
+    fn assert_serialized_test_execution_contract(data: &serde_json::Value) {
+        assert_eq!(data["execution"]["metrics"]["total"], 3);
+        let artifacts = data["execution"]["artifacts"]["items"]
+            .as_array()
+            .expect("artifact items");
+        assert!(artifacts.iter().any(|item| item["kind"] == "junit_xml"));
+        assert!(artifacts
+            .iter()
+            .any(|item| item["kind"] == "allure_results"));
+    }
 
     #[derive(Default)]
     struct StubPort {
@@ -1187,7 +1199,7 @@ mod tests {
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].0.command(), CommandName::Build);
         assert_eq!(requests[0].0.transport(), ExecutionTransport::McpStdio);
-        assert_eq!(requests[0].1.full_rebuild, true);
+        assert!(requests[0].1.full_rebuild);
         assert_eq!(requests[0].1.source_set.as_deref(), Some("main"));
     }
 
@@ -1261,10 +1273,18 @@ mod tests {
         assert_eq!(response.data["report"]["summary"]["passed"], 2);
         assert_eq!(response.data["report"]["summary"]["failed"], 1);
         assert!(response.error.is_none());
+        assert_serialized_test_execution_contract(&response.data);
         let requests = service.port.test_requests.borrow();
-        assert_eq!(requests[0].1.full, true);
+        assert!(requests[0].1.full);
         assert_eq!(requests[0].1.scope, TestScopeRequest::All);
         assert_eq!(requests[0].1.execution.profile.kind, RunnerKind::YaXUnit);
+        assert!(requests[0]
+            .1
+            .execution
+            .profile
+            .output_formats
+            .contains(&RunnerOutputFormat::AllureResults));
+        assert!(requests[0].1.execution.policy.retain_artifacts_on_success);
     }
 
     #[test]
@@ -1296,11 +1316,19 @@ mod tests {
             .expect("success");
 
         assert!(response.ok);
+        assert_serialized_test_execution_contract(&response.data);
         let requests = service.port.test_requests.borrow();
-        assert_eq!(requests[0].1.full, true);
+        assert!(requests[0].1.full);
         assert_eq!(requests[0].1.scope, TestScopeRequest::All);
         assert_eq!(requests[0].1.execution.profile.kind, RunnerKind::Vanessa);
         assert_eq!(requests[0].1.execution.profile.id, "acceptance");
+        assert!(requests[0]
+            .1
+            .execution
+            .profile
+            .output_formats
+            .contains(&RunnerOutputFormat::AllureResults));
+        assert!(requests[0].1.execution.policy.retain_artifacts_on_success);
         assert_eq!(
             requests[0].1.execution.launch.c.as_deref(),
             Some("StartFeaturePlayer;VAParams={params_path}")
@@ -2557,11 +2585,11 @@ mod tests {
     fn sample_test_result(ok: bool) -> TestRunResult {
         let retained = RetainedPaths {
             run_dir: PathBuf::from("/tmp/run"),
-            config_json: PathBuf::from("/tmp/config.json"),
-            junit_xml: PathBuf::from("/tmp/junit.xml"),
-            yaxunit_log: PathBuf::from("/tmp/yaxunit.log"),
-            platform_log: PathBuf::from("/tmp/platform.log"),
-            sentinel: PathBuf::from("/tmp/sentinel"),
+            config_json: Some(PathBuf::from("/tmp/config.json")),
+            junit_xml: Some(PathBuf::from("/tmp/junit.xml")),
+            allure_results: Some(PathBuf::from("/tmp/allure-results")),
+            yaxunit_log: Some(PathBuf::from("/tmp/yaxunit.log")),
+            platform_log: Some(PathBuf::from("/tmp/platform.log")),
         };
         let report = TestReport {
             summary: TestSummary {

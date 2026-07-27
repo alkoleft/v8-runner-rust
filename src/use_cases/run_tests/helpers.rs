@@ -38,13 +38,17 @@ pub(super) fn make_test_result(
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::time::Instant;
 
-    use super::enterprise_error_kind;
+    use super::{enterprise_error_kind, interrupted_test_failure};
+    use crate::domain::artifact::{ArtifactKind, ArtifactRef, ArtifactSet, ARTIFACT_ROLE_RUN_DIR};
     use crate::domain::execution::ExecutionStatus;
-    use crate::domain::test::TestErrorKind;
+    use crate::domain::test::{TestErrorKind, TestOutputMode, TestTarget};
     use crate::platform::enterprise::EnterpriseError;
     use crate::platform::process::ProcessError;
     use crate::support::error::AppError;
+    use crate::use_cases::context::{CommandName, ExecutionContext};
+    use tokio_util::sync::CancellationToken;
 
     fn assert_process_mapping(
         process_error: ProcessError,
@@ -142,6 +146,44 @@ mod tests {
         assert!(interruption.is_some());
         assert_eq!(status, ExecutionStatus::TimedOut);
     }
+
+    #[test]
+    fn cancellation_after_artifact_creation_retains_existing_inventory() {
+        // Break caught: cancellation after run-directory allocation dropped retained artifacts.
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let context = ExecutionContext::cli(CommandName::Test).with_cancellation(cancellation);
+        let run_dir = tempfile::tempdir().expect("run dir");
+        let mut artifacts = ArtifactSet::with_root(run_dir.path());
+        artifacts.push(
+            ArtifactRef::new(ArtifactKind::RunDirectory, run_dir.path())
+                .with_role(ARTIFACT_ROLE_RUN_DIR),
+        );
+
+        let failure = interrupted_test_failure(
+            &context,
+            &TestTarget::All,
+            &TestOutputMode::Compact,
+            &[],
+            &[],
+            Instant::now(),
+            Some(artifacts),
+        )
+        .expect("cancelled failure");
+        let result = failure.payload.expect("cancelled result");
+
+        assert_eq!(result.execution.status, ExecutionStatus::Cancelled);
+        assert_eq!(result.execution.interruptions.len(), 1);
+        assert!(result.execution.errors.is_empty());
+        let retained = result.execution.artifacts.expect("retained artifacts");
+        assert_eq!(retained.root_dir, Some(run_dir.path().to_path_buf()));
+        assert_eq!(retained.items.len(), 1);
+        assert_eq!(retained.items[0].kind, ArtifactKind::RunDirectory);
+        assert_eq!(
+            retained.items[0].role.as_deref(),
+            Some(ARTIFACT_ROLE_RUN_DIR)
+        );
+    }
 }
 
 pub(super) fn succeeded_step(
@@ -203,16 +245,20 @@ pub(super) fn interrupted_test_failure(
     warnings: &[String],
     steps: &[StepResult],
     started: Instant,
+    retained_paths: Option<ArtifactSet>,
 ) -> Option<super::TestExecutionFailure> {
     let interruption = context.interruption()?;
     let message = interruption_message(context, interruption);
-    let outcome = ExecutionOutcome::new(command_interruption_status(interruption))
-        .with_diagnostics(vec![message.clone()])
-        .with_interruptions(vec![command_interruption_details(
-            interruption,
-            "command_boundary",
-            message.clone(),
-        )]);
+    let outcome = with_retained_artifacts(
+        ExecutionOutcome::new(command_interruption_status(interruption))
+            .with_diagnostics(vec![message.clone()])
+            .with_interruptions(vec![command_interruption_details(
+                interruption,
+                "command_boundary",
+                message.clone(),
+            )]),
+        retained_paths,
+    );
     let result = make_test_result(
         target.clone(),
         mode.clone(),

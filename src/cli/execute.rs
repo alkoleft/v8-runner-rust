@@ -1036,6 +1036,7 @@ fn build_vanessa_execution(
             kind: RunnerKind::Vanessa,
             output_formats: vec![
                 RunnerOutputFormat::JunitXml,
+                RunnerOutputFormat::AllureResults,
                 RunnerOutputFormat::PlainTextLog,
             ],
             backend_hint: Some("enterprise".to_owned()),
@@ -1047,7 +1048,7 @@ fn build_vanessa_execution(
         ),
         policy: ExecutionPolicy {
             retain_artifacts_on_failure: true,
-            retain_artifacts_on_success: false,
+            retain_artifacts_on_success: true,
         },
         launch: LaunchOptions::default(),
     };
@@ -1877,21 +1878,30 @@ fn append_retained_test_artifacts(details: &mut Vec<String>, result: &TestRunRes
         details,
         format!("[artifact] run_dir -> {}", paths.run_dir.display()),
     );
-    push_unique_detail(
-        details,
-        format!("[artifact] report -> {}", paths.junit_xml.display()),
-    );
-    push_unique_detail(
-        details,
-        format!("[artifact] runner_log -> {}", paths.yaxunit_log.display()),
-    );
-    push_unique_detail(
-        details,
-        format!(
-            "[diagnostic] platform_log -> {}",
-            paths.platform_log.display()
-        ),
-    );
+    if let Some(junit_xml) = paths.junit_xml {
+        push_unique_detail(
+            details,
+            format!("[artifact] report -> {}", junit_xml.display()),
+        );
+    }
+    if let Some(allure_results) = paths.allure_results {
+        push_unique_detail(
+            details,
+            format!("[artifact] allure_results -> {}", allure_results.display()),
+        );
+    }
+    if let Some(yaxunit_log) = paths.yaxunit_log {
+        push_unique_detail(
+            details,
+            format!("[artifact] runner_log -> {}", yaxunit_log.display()),
+        );
+    }
+    if let Some(platform_log) = paths.platform_log {
+        push_unique_detail(
+            details,
+            format!("[diagnostic] platform_log -> {}", platform_log.display()),
+        );
+    }
 }
 
 fn should_hide_success_test_diagnostic(diagnostic: &str) -> bool {
@@ -2483,7 +2493,7 @@ mod tests {
     use crate::domain::load::{
         CompatibilityState, LoadExecutionMetadata, LoadMode, LoadResult, LoadTargetKind,
     };
-    use crate::domain::runner::{LaunchOptions, RunnerKind};
+    use crate::domain::runner::{LaunchOptions, RunnerKind, RunnerOutputFormat};
     use crate::output::presenter::{ColorMode, Presenter};
     use crate::support::fs::acquire_advisory_lock;
     use crate::support::temp::platform_logs_dir;
@@ -2616,6 +2626,12 @@ mod tests {
 
         assert_eq!(request.execution.profile.kind, RunnerKind::Vanessa);
         assert_eq!(request.execution.profile.id, "smoke");
+        assert!(request
+            .execution
+            .profile
+            .output_formats
+            .contains(&RunnerOutputFormat::AllureResults));
+        assert!(request.execution.policy.retain_artifacts_on_success);
         assert_eq!(request.build_policy, TestBuildPolicy::BuildFirst);
         assert_eq!(request.scope, TestScopeRequest::All);
         assert_eq!(request.execution.timeouts.total_ms, Some(300_000));

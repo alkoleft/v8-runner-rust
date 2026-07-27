@@ -12,8 +12,10 @@ case "$CI_SCOPE" in
   contract)
     case "$TARGET_OS_LABEL" in
       Windows|MINGW*|MSYS*|CYGWIN*)
-        echo "Windows contract scope runs compile/check smoke; full cargo test remains Linux-owned until the Windows test suite is hardened."
+        echo "Windows contract scope runs compile/check smoke plus targeted platform-specific tests; full cargo test remains Linux-owned until the Windows test suite is hardened."
         cargo check --locked --all-targets
+        cargo test --locked --bin v8-runner materialize_vanessa_runner_log
+        cargo test --locked --bin v8-runner windows_atomic_replace_supports_extended_length_paths
         ;;
       *)
         cargo test --locked

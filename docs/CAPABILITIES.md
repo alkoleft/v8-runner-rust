@@ -214,6 +214,22 @@ v8-runner test [--no-build] va --feature login --filter-tag @smoke
   `test va` или MCP `run_all_tests` с `runner=vanessa`, а не дефолтный YaXUnit-runner.
 - `--full` включает полный вывод успешных кейсов и расширенные stack traces.
 - `tests.*.timeouts.total_ms` остаётся активным пользовательским контрактом таймаутов.
+- Поддерживаемые current/latest YaXUnit и Vanessa Automation одновременно создают JUnit и
+  Allure results; вручную подставленный старый runner без обоих отчётов считается несовместимым.
+- Каждый запуск, дошедший до подготовки runner, сохраняется в
+  `workPath/temp/<runner-id>/runs/<run-id>/`. Успешные и неуспешные результаты остаются там до
+  явного удаления пользователем. Ошибка file-infobase preflight в `--no-build` возникает раньше
+  и поэтому не создаёт run directory.
+- В `--json-message` summary находится в `data.execution.metrics`, а все существующие пути и их
+  точные kinds — в `data.execution.artifacts.items`; `data.retained_paths` остаётся compatibility
+  projection основных путей.
+- Runner может дополнительно сохранить диагностические файлы в `error-details/` и снимки экрана
+  в `screenshots/` внутри run directory. Эти каталоги не создаются заранее; в inventory публикуются
+  не более 100 обычных файлов суммарно для обеих категорий, сначала `error-details`, затем
+  `screenshots`. При усечении категории публикуется и путь к её каталогу с тем же kind и role,
+  чтобы оставшиеся файлы были доступны без раздувания inventory.
+- Отсутствующий, пустой или некорректный JUnit либо отсутствующий/пустой Allure — это
+  инфраструктурная ошибка `invalid_output`, а не успешный или обычный test failure.
 
 ### `syntax`
 

@@ -1,6 +1,6 @@
 ---
 source: tests/cli_test.rs
-assertion_line: 694
+assertion_line: 1686
 expression: full_snapshot
 ---
 Object {
@@ -14,9 +14,9 @@ Object {
             "artifacts": Object {
                 "items": Array [
                     Object {
-                        "kind": String("run_directory"),
-                        "path": String("<run_dir>"),
-                        "role": String("run_dir"),
+                        "kind": String("allure_results"),
+                        "path": String("<allure_results>"),
+                        "role": String("allure_results"),
                     },
                     Object {
                         "kind": String("config"),
@@ -24,14 +24,9 @@ Object {
                         "role": String("config"),
                     },
                     Object {
-                        "kind": String("report"),
+                        "kind": String("junit_xml"),
                         "path": String("<junit_xml>"),
-                        "role": String("report"),
-                    },
-                    Object {
-                        "kind": String("runner_log"),
-                        "path": String("<yaxunit_log>"),
-                        "role": String("runner_log"),
+                        "role": String("junit_xml"),
                     },
                     Object {
                         "kind": String("platform_log"),
@@ -39,9 +34,14 @@ Object {
                         "role": String("platform_log"),
                     },
                     Object {
-                        "kind": String("sentinel"),
-                        "path": String("<sentinel>"),
-                        "role": String("sentinel"),
+                        "kind": String("run_directory"),
+                        "path": String("<run_dir>"),
+                        "role": String("run_dir"),
+                    },
+                    Object {
+                        "kind": String("runner_log"),
+                        "path": String("<yaxunit_log>"),
+                        "role": String("runner_log"),
                     },
                 ],
                 "root_dir": String("<run_dir>"),
@@ -135,11 +135,11 @@ Object {
             },
         },
         "retained_paths": Object {
+            "allure_results": String("<allure_results>"),
             "config_json": String("<config_json>"),
             "junit_xml": String("<junit_xml>"),
             "platform_log": String("<platform_log>"),
             "run_dir": String("<run_dir>"),
-            "sentinel": String("<sentinel>"),
             "yaxunit_log": String("<yaxunit_log>"),
         },
         "target": Object {
@@ -158,20 +158,20 @@ Object {
     "steps": Array [
         Object {
             "duration_ms": String("<duration>"),
-            "kind": String("platform_command"),
-            "message": String("build completed"),
-            "name": String("build"),
-            "ok": Bool(true),
-            "status": String("succeeded"),
-        },
-        Object {
-            "duration_ms": String("<duration>"),
             "kind": String("prepare_workspace"),
             "message": String("created <run_dir>"),
             "name": String("prepare_artifacts"),
             "ok": Bool(true),
             "status": String("succeeded"),
             "target": String("<run_dir>"),
+        },
+        Object {
+            "duration_ms": String("<duration>"),
+            "kind": String("platform_command"),
+            "message": String("build completed"),
+            "name": String("build"),
+            "ok": Bool(true),
+            "status": String("succeeded"),
         },
         Object {
             "duration_ms": String("<duration>"),
@@ -194,11 +194,20 @@ Object {
         Object {
             "duration_ms": String("<duration>"),
             "kind": String("parse_output"),
-            "message": String("parsed 2 test cases"),
+            "message": String("parsed 2 test cases from native JUnit reports"),
             "name": String("parse_junit"),
             "ok": Bool(true),
             "status": String("succeeded"),
-            "target": String("<junit_xml>"),
+            "target": String("<junit_dir>"),
+        },
+        Object {
+            "duration_ms": String("<duration>"),
+            "kind": String("parse_output"),
+            "message": String("validated native Allure results"),
+            "name": String("validate_allure"),
+            "ok": Bool(true),
+            "status": String("succeeded"),
+            "target": String("<allure_results>"),
         },
         Object {
             "duration_ms": String("<duration>"),
