@@ -236,8 +236,12 @@ pub struct LoadArgs {
 #[command(next_help_heading = "Command options")]
 pub struct ExtensionsArgs {
     /// Extension source-set name to update. Repeat to target multiple extensions.
-    #[arg(long = "name")]
+    #[arg(long = "name", conflicts_with = "extensions")]
     pub names: Vec<String>,
+
+    /// Installed platform extension name to update. Repeat to target multiple extensions.
+    #[arg(long = "extension", conflicts_with = "names")]
+    pub extensions: Vec<String>,
 }
 
 #[derive(Args, Debug)]
@@ -630,11 +634,46 @@ mod tests {
         .expect("parse");
 
         match cli.command {
-            Command::Extensions(ExtensionsArgs { names }) => {
+            Command::Extensions(ExtensionsArgs { names, .. }) => {
                 assert_eq!(names, vec!["client_mcp", "tests"]);
             }
             _ => panic!("unexpected command"),
         }
+    }
+
+    #[test]
+    fn parses_extensions_command_with_platform_extension_names_in_requested_order() {
+        let cli = Cli::try_parse_from([
+            "v8-runner",
+            "extensions",
+            "--extension",
+            "SalesAddon",
+            "--extension",
+            "TestsAddon",
+        ])
+        .expect("parse");
+
+        match cli.command {
+            Command::Extensions(ExtensionsArgs { extensions, .. }) => {
+                assert_eq!(extensions, vec!["SalesAddon", "TestsAddon"]);
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn extensions_command_rejects_mixing_source_set_and_platform_extension_selectors() {
+        let error = Cli::try_parse_from([
+            "v8-runner",
+            "extensions",
+            "--name",
+            "client_mcp",
+            "--extension",
+            "SalesAddon",
+        ])
+        .expect_err("selectors must conflict");
+
+        assert!(error.to_string().contains("cannot be used with"));
     }
 
     #[test]

@@ -117,7 +117,11 @@ Do not replace extension-specific synchronization with a full rebuild unless the
 ```bash
 v8-runner extensions
 v8-runner extensions --name <SOURCE_SET>
+v8-runner extensions --extension <PLATFORM_NAME>
 ```
+
+`--name` selects configured extension source-sets. CLI-only `--extension` selects installed
+platform extensions by their exact names and can be repeated; it cannot be combined with `--name`.
 
 ## Launch
 

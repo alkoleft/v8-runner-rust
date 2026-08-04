@@ -111,6 +111,14 @@ Update selected extension source-sets:
 v8-runner extensions --name <SOURCE_SET>
 ```
 
+Update installed extensions that are not selected through `v8project.yaml`:
+
+```bash
+v8-runner extensions --extension <PLATFORM_NAME>
+```
+
+`--extension` is CLI-only, can be repeated, and cannot be combined with `--name`.
+
 ## Dump, Convert, Load, And Artifacts
 
 Bring infobase changes back into Git-visible files:

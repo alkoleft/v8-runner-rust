@@ -287,7 +287,8 @@ fn execute_extensions(
     clean_before_execution: bool,
     cancellation: CancellationToken,
 ) -> Result<(), UseCaseError> {
-    let request = map_extensions_request(args);
+    let request = map_extensions_request(args)
+        .map_err(|error| render_pre_dispatch_error(presenter, CommandName::Extensions, error))?;
     let context = cli_context(config, CommandName::Extensions, cancellation);
     with_cli_workspace_lock(
         config,
@@ -833,10 +834,25 @@ fn map_build_request(args: &BuildArgs) -> BuildRequest {
     }
 }
 
-fn map_extensions_request(args: &ExtensionsArgs) -> ConfigureExtensionsRequest {
-    ConfigureExtensionsRequest {
-        names: args.names.clone(),
+fn map_extensions_request(
+    args: &ExtensionsArgs,
+) -> Result<ConfigureExtensionsRequest, UseCaseError> {
+    if !args.names.is_empty() && !args.extensions.is_empty() {
+        return Err(UseCaseError::new(
+            UseCaseErrorKind::Validation,
+            "--name cannot be used with --extension",
+        ));
     }
+
+    let selector = if !args.extensions.is_empty() {
+        crate::use_cases::request::ExtensionSelector::platform_names(args.extensions.clone())?
+    } else if !args.names.is_empty() {
+        crate::use_cases::request::ExtensionSelector::SourceSets(args.names.clone())
+    } else {
+        crate::use_cases::request::ExtensionSelector::ConfiguredAll
+    };
+
+    Ok(ConfigureExtensionsRequest { selector })
 }
 
 fn map_tools_download_target(args: &ToolsDownloadArgs) -> ToolDownloadTarget {
@@ -2675,9 +2691,11 @@ mod tests {
         assert_eq!(
             map_extensions_request(&ExtensionsArgs {
                 names: vec!["client_mcp".to_owned()],
+                extensions: vec![],
             })
-            .names,
-            vec!["client_mcp"]
+            .expect("request")
+            .selector,
+            crate::use_cases::request::ExtensionSelector::SourceSets(vec!["client_mcp".to_owned()])
         );
         assert_eq!(
             map_dump_request(&DumpArgs {
@@ -2820,6 +2838,47 @@ mod tests {
     }
 
     #[test]
+    fn maps_extensions_request_to_direct_platform_selector_without_normalizing_name() {
+        let request = map_extensions_request(&ExtensionsArgs {
+            names: vec![],
+            extensions: vec![" SalesAddon ".to_owned(), "TestsAddon".to_owned()],
+        })
+        .expect("valid direct selector");
+
+        assert!(matches!(
+            request.selector,
+            crate::use_cases::request::ExtensionSelector::PlatformNames(names)
+                if names == [" SalesAddon ", "TestsAddon"]
+        ));
+    }
+
+    #[test]
+    fn maps_extensions_request_rejects_duplicate_direct_platform_names() {
+        let error = map_extensions_request(&ExtensionsArgs {
+            names: vec![],
+            extensions: vec!["SalesAddon".to_owned(), "SalesAddon".to_owned()],
+        })
+        .expect_err("duplicate direct selector");
+
+        assert_eq!(error.kind(), UseCaseErrorKind::Validation);
+        assert!(error.message().contains("duplicate --extension"));
+    }
+
+    #[test]
+    fn maps_extensions_request_rejects_blank_or_control_character_direct_platform_names() {
+        for name in ["   ", "Sales\nAddon"] {
+            let error = map_extensions_request(&ExtensionsArgs {
+                names: vec![],
+                extensions: vec![name.to_owned()],
+            })
+            .expect_err("invalid direct selector");
+
+            assert_eq!(error.kind(), UseCaseErrorKind::Validation);
+            assert!(error.message().contains("invalid --extension"));
+        }
+    }
+
+    #[test]
     fn maps_artifacts_request_keeps_blank_extension_in_cfe_mode() {
         let artifacts = map_artifacts_request_with_config(
             &sample_config(Path::new("/tmp/work")),
@@ -2954,7 +3013,10 @@ mod tests {
     fn resolves_command_name() {
         assert_eq!(command_name(&Command::Init), CommandName::Init);
         assert_eq!(
-            command_name(&Command::Extensions(ExtensionsArgs { names: vec![] })),
+            command_name(&Command::Extensions(ExtensionsArgs {
+                names: vec![],
+                extensions: vec![],
+            })),
             CommandName::Extensions
         );
         assert_eq!(

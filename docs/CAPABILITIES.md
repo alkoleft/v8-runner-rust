@@ -158,11 +158,14 @@ v8-runner tools download client-mcp [--sources] [--force]
 ### `extensions`
 
 ```bash
-v8-runner extensions [--name <SOURCE_SET>...]
+v8-runner extensions [--name <SOURCE_SET>... | --extension <PLATFORM_NAME>...]
 ```
 
-- Работает только с `source-set`, у которых `type=EXTENSION`.
-- Без `--name` обрабатывает все extension `source-set` из конфига.
+- Без прямого selector работает только с `source-set`, у которых `type=EXTENSION`.
+- Без селектора обрабатывает все extension `source-set` из конфига.
+- `--name` выбирает configured extension `source-set`; `--extension` выбирает установленное в ИБ
+  platform extension по его точному имени, без lookup в конфиге. Эти селекторы взаимоисключающие;
+  `--extension` можно повторять, а пустые, control-character и повторяющиеся значения отклоняются.
 - Возвращает пошаговый результат по каждому целевому расширению.
 
 ### `build`

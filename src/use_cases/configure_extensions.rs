@@ -11,7 +11,7 @@ use crate::use_cases::extension_identity::platform_extension_name;
 use crate::use_cases::ibcmd_diagnostics::format_ibcmd_failure_details;
 use crate::use_cases::interruption;
 use crate::use_cases::progress::log_live_stage;
-use crate::use_cases::request::ConfigureExtensionsRequest;
+use crate::use_cases::request::{ConfigureExtensionsRequest, ExtensionSelector};
 use crate::use_cases::result::{UseCaseFailure, UseCaseResult};
 use tracing::{debug, info};
 
@@ -230,23 +230,27 @@ fn resolve_targets(
         })
         .collect::<Vec<_>>();
 
-    if args.names.is_empty() {
-        return Ok(available.into_iter().map(|(_, name)| name).collect());
+    match &args.selector {
+        ExtensionSelector::ConfiguredAll => {
+            Ok(available.into_iter().map(|(_, name)| name).collect())
+        }
+        ExtensionSelector::SourceSets(requested_names) => {
+            let mut targets = Vec::new();
+            for requested in requested_names {
+                let Some((_, resolved)) = available
+                    .iter()
+                    .find(|(name, _)| *name == requested.as_str())
+                else {
+                    return Err(AppError::Validation(format!(
+                        "unknown extension source-set '{requested}'"
+                    )));
+                };
+                targets.push(resolved.clone());
+            }
+            Ok(targets)
+        }
+        ExtensionSelector::PlatformNames(names) => Ok(names.clone()),
     }
-
-    let mut targets = Vec::new();
-    for requested in &args.names {
-        let Some((_, resolved)) = available
-            .iter()
-            .find(|(name, _)| *name == requested.as_str())
-        else {
-            return Err(AppError::Validation(format!(
-                "unknown extension source-set '{requested}'"
-            )));
-        };
-        targets.push(resolved.clone());
-    }
-    Ok(targets)
 }
 
 #[cfg(test)]
@@ -329,8 +333,8 @@ mod tests {
         .expect("project file");
         let config = sample_config(dir.path(), dir.path(), Path::new("/tmp/ibcmd"));
 
-        let targets = resolve_targets(&config, &ConfigureExtensionsRequest { names: vec![] })
-            .expect("targets");
+        let targets =
+            resolve_targets(&config, &ConfigureExtensionsRequest::default()).expect("targets");
 
         assert_eq!(targets, vec!["client_mcp"]);
     }
@@ -378,7 +382,7 @@ mod tests {
         let result = execute(
             &ExecutionContext::cli(CommandName::Extensions),
             &config,
-            &ConfigureExtensionsRequest { names: vec![] },
+            &ConfigureExtensionsRequest::default(),
         )
         .expect("execute");
 
@@ -417,7 +421,7 @@ mod tests {
         let result = execute(
             &ExecutionContext::cli(CommandName::Extensions),
             &config,
-            &ConfigureExtensionsRequest { names: vec![] },
+            &ConfigureExtensionsRequest::default(),
         )
         .expect("execute");
 
@@ -449,7 +453,7 @@ mod tests {
         let failure = execute(
             &ExecutionContext::cli(CommandName::Extensions),
             &config,
-            &ConfigureExtensionsRequest { names: vec![] },
+            &ConfigureExtensionsRequest::default(),
         )
         .expect_err("failure");
 
@@ -487,7 +491,7 @@ mod tests {
         let failure = execute(
             &ExecutionContext::cli(CommandName::Extensions).with_cancellation(cancellation),
             &config,
-            &ConfigureExtensionsRequest { names: vec![] },
+            &ConfigureExtensionsRequest::default(),
         )
         .expect_err("interrupted execution");
         let payload = failure.payload.expect("payload");

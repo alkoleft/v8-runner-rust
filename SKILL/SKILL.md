@@ -81,7 +81,9 @@ v8-runner init
   `--sources` on `yaxunit` or `client-mcp` to download `.cfe` artifacts when
   `builder=DESIGNER`.
 - Vanessa Automation debugging or scenario authoring: use `v8-runner launch mcp va --wait-ready ...` to start the client MCP server with VA loaded and verify the VA MCP tools before driving `.feature` workflows.
-- Extension properties need synchronization: use `v8-runner extensions` or `extensions --name <SOURCE_SET>`.
+- Extension properties need synchronization: use `v8-runner extensions`, `extensions --name <SOURCE_SET>`,
+  or CLI-only `extensions --extension <PLATFORM_NAME>` for an installed extension that is not selected
+  through a configured source-set. Do not combine `--name` and `--extension`.
 - Infobase changes need to become Git-visible files: check `git status`, then run the relevant `v8-runner dump ...` command.
 - Source files need conversion between Designer and EDT: use `v8-runner convert`; this is CLI-only and does not use the infobase.
 - Existing `.cf` or `.cfe` artifacts need to be applied to an infobase: use `v8-runner load ...`.

@@ -648,11 +648,45 @@ pub struct LaunchRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct InitRequest;
 
+/// Explicit extension target selection for extension property updates.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ExtensionSelector {
+    /// Updates all configured extension source-sets.
+    #[default]
+    ConfiguredAll,
+    /// Updates extension source-sets selected by their configuration names.
+    SourceSets(Vec<String>),
+    /// Updates installed platform extensions selected by their platform names.
+    PlatformNames(Vec<String>),
+}
+
+impl ExtensionSelector {
+    /// Builds a direct platform-name selector without altering user-provided names.
+    pub fn platform_names(names: Vec<String>) -> Result<Self, UseCaseError> {
+        let mut seen = std::collections::HashSet::new();
+        for name in &names {
+            if name.trim().is_empty() || name.chars().any(char::is_control) {
+                return Err(UseCaseError::new(
+                    UseCaseErrorKind::Validation,
+                    "invalid --extension value: platform extension name must be nonblank and contain no control characters",
+                ));
+            }
+            if !seen.insert(name.as_str()) {
+                return Err(UseCaseError::new(
+                    UseCaseErrorKind::Validation,
+                    format!("duplicate --extension value '{name}'"),
+                ));
+            }
+        }
+        Ok(Self::PlatformNames(names))
+    }
+}
+
 /// Transport-neutral request for extension property updates.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ConfigureExtensionsRequest {
-    /// Optional source-set names to update. Empty means all extension source-sets.
-    pub names: Vec<String>,
+    /// Requested extension target selection.
+    pub selector: ExtensionSelector,
 }
 
 #[cfg(test)]
