@@ -72,6 +72,7 @@ v8-runner init
 - Source files changed and infobase may be stale: run `v8-runner build`.
 - Only one source-set changed: use commands that accept `--source-set <NAME>` instead of rebuilding or materializing everything.
 - Branch switch, rebase, large object moves, stale source-backed tool extension state, or suspicious incremental state: run `v8-runner build --full-rebuild`.
+- A failed Designer build restores the prior `ConfigDumpInfo.xml` automatically. In JSON/MCP output, inspect `data.cdfi_recovery` for the tracked path, prior-file state, changed-entry count, action, and cleanup warning. A retained `snapshot_path` is a real recovery artifact; `original_existed: false` means manual repair concerns the tracked path instead.
 - Syntax check: inspect `format` and `builder`, then choose `syntax designer-modules`, `syntax designer-config`, or `syntax edt`.
 - Behavior validation: run the relevant `v8-runner test ...` command; tests build first unless the
   caller explicitly requests `--no-build` for an already prepared infobase.

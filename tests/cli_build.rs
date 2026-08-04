@@ -13,6 +13,11 @@ const V8_EXTENSION_NATURE: &str = "com._1c.g5.v8.dt.core.V8ExtensionNature";
 const EDT_RUNTIME_VERSION: &str = "8.3.27";
 
 fn write_build_script(path: &Path, fail_pattern: Option<&str>) {
+    let cdfi_mutation_branch = (fail_pattern == Some("/LoadConfigFromFiles"))
+        .then_some(
+            "if [ -n \"$load_dir\" ]; then printf '<ConfigDumpInfo>mutated by fake Designer</ConfigDumpInfo>\\n' > \"$load_dir/ConfigDumpInfo.xml\"; fi",
+        )
+        .unwrap_or_default();
     let pattern_branch = fail_pattern
         .map(|pattern| {
             format!(
@@ -22,8 +27,8 @@ fn write_build_script(path: &Path, fail_pattern: Option<&str>) {
         })
         .unwrap_or_default();
     let body = format!(
-        "args=\"$*\"\nout=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"/Out\" ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$out\" ]; then printf 'designer log for %s\\n' \"$args\" > \"$out\"; fi\n{}\nexit 0",
-        pattern_branch
+        "args=\"$*\"\nout=\"\"\nload_dir=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"/Out\" ]; then out=\"$arg\"; fi\n  if [ \"$prev\" = \"/LoadConfigFromFiles\" ]; then load_dir=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nif [ -n \"$out\" ]; then printf 'designer log for %s\\n' \"$args\" > \"$out\"; fi\n{}\n{}\nexit 0",
+        cdfi_mutation_branch, pattern_branch
     );
     write_script(path, &body);
 }
@@ -409,6 +414,47 @@ fn build_json_failure_returns_step_payload() {
         .as_str()
         .expect("message")
         .contains("exit code 17"));
+}
+
+#[test]
+fn build_json_failure_reports_successful_cdfi_recovery() {
+    let (dir, config_path, binary_path, _work_path) = setup_project();
+    let cdfi_path = dir
+        .path()
+        .join("project")
+        .join("main")
+        .join("ConfigDumpInfo.xml");
+    let original_cdfi = b"\xEF\xBB\xBF<ConfigDumpInfo>original</ConfigDumpInfo>\r\n";
+    fs::write(&cdfi_path, original_cdfi).expect("original CDFI");
+    write_build_script(&binary_path, Some("/LoadConfigFromFiles"));
+
+    let output = v8_runner_command()
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--json-message",
+            "build",
+            "--full-rebuild",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(!output.status.success());
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(payload["data"]["cdfi_recovery"]["action"], "restored");
+    assert_eq!(
+        payload["data"]["cdfi_recovery"]["tracked_path"],
+        fs::canonicalize(&cdfi_path)
+            .expect("canonical CDFI")
+            .display()
+            .to_string()
+    );
+    assert_eq!(payload["data"]["cdfi_recovery"]["original_existed"], true);
+    assert_eq!(payload["data"]["cdfi_recovery"]["changed_entry_count"], 1);
+    assert!(payload["data"]["cdfi_recovery"]["snapshot_path"].is_null());
+    assert!(payload["data"]["cdfi_recovery"]["cleanup_warning"].is_null());
+    assert!(payload["data"]["cdfi_recovery"]["failure"].is_null());
+    assert_eq!(fs::read(cdfi_path).expect("restored CDFI"), original_cdfi);
 }
 
 #[test]

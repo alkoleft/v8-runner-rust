@@ -22,7 +22,7 @@ use crate::domain::artifact::{
     ArtifactRef, ArtifactSet, ARTIFACT_ROLE_PACKAGE_FILE, ARTIFACT_ROLE_PLATFORM_LOG,
 };
 use crate::domain::artifacts::{ArtifactBuildMetadata, ArtifactBuildMode, ArtifactsResult};
-use crate::domain::build::{BuildMode, BuildResult};
+use crate::domain::build::{BuildMode, BuildResult, CdfiRecoveryAction};
 use crate::domain::convert::{ConvertDirection, ConvertResult, ConvertScope};
 use crate::domain::dump::{DumpMode, DumpResult};
 use crate::domain::execution::{
@@ -1645,7 +1645,7 @@ fn test_report(result: &TestRunResult) -> Option<&TestReport> {
 }
 
 fn render_build_text(result: &BuildResult, presenter: &Presenter, succeeded: bool) {
-    let summary = if !succeeded {
+    let mut summary = if !succeeded {
         TimelineItem::new(TimelineStatus::Failed, "Build failed")
     } else if result
         .steps
@@ -1656,6 +1656,32 @@ fn render_build_text(result: &BuildResult, presenter: &Presenter, succeeded: boo
     } else {
         TimelineItem::new(TimelineStatus::Succeeded, "Build completed successfully")
     };
+    if let Some(recovery) = result.cdfi_recovery.as_deref() {
+        let action_label = match recovery.action {
+            CdfiRecoveryAction::NotNeeded => "not needed",
+            CdfiRecoveryAction::Restored => "restored",
+            CdfiRecoveryAction::RemovedCreatedFile => "removed created file",
+            CdfiRecoveryAction::Failed => "failed",
+        };
+        if let Some(failure) = recovery.failure.as_deref() {
+            summary = summary.with_detail(format!(
+                "CDFI recovery {action_label} for {}: {failure}",
+                recovery.tracked_path.display()
+            ));
+        }
+        if let Some(warning) = recovery.cleanup_warning.as_deref() {
+            summary = summary.with_detail(format!(
+                "CDFI recovery cleanup warning for {}: {warning}",
+                recovery.tracked_path.display()
+            ));
+        }
+        if let Some(snapshot_path) = recovery.snapshot_path.as_ref() {
+            summary = summary.with_detail(format!(
+                "retained CDFI recovery snapshot: {}",
+                snapshot_path.display()
+            ));
+        }
+    }
     presenter.print_timeline(&[summary]);
 }
 

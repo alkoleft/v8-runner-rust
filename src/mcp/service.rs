@@ -992,7 +992,9 @@ mod tests {
         AppConfig, BuildConfig, BuilderBackend, PlatformToolConfig, SourceFormat, SourceSetConfig,
         SourceSetPurpose, TestsConfig, ToolsConfig,
     };
-    use crate::domain::build::{BuildMode, BuildResult, BuildStep};
+    use crate::domain::build::{
+        BuildMode, BuildResult, BuildStep, CdfiRecoveryAction, CdfiRecoverySummary,
+    };
     use crate::domain::dump::{DumpMode, DumpResult};
     use crate::domain::execution::{ExecutionStepKind, StepResult};
     use crate::domain::issue::{Issue, IssueSeverity, ModuleIssue};
@@ -1164,6 +1166,7 @@ mod tests {
                 duration_ms: 17,
             }],
             duration_ms: 42,
+            cdfi_recovery: None,
         }));
         let config = sample_config();
         let service = McpService::with_port(&config, port);
@@ -1205,6 +1208,15 @@ mod tests {
                     duration_ms: 9,
                 }],
                 duration_ms: 19,
+                cdfi_recovery: Some(Box::new(CdfiRecoverySummary {
+                    tracked_path: "/src/ConfigDumpInfo.xml".into(),
+                    original_existed: true,
+                    changed_entry_count: Some(1),
+                    action: CdfiRecoveryAction::Failed,
+                    snapshot_path: Some("/work/cdfi-recovery/ConfigDumpInfo.xml".into()),
+                    cleanup_warning: None,
+                    failure: Some("permission denied".to_owned()),
+                })),
             },
         )));
         let config = sample_config();
@@ -1221,6 +1233,19 @@ mod tests {
                 assert_eq!(failure.response.command, "build");
                 assert_eq!(failure.response.duration_ms, 19);
                 assert_eq!(failure.response.data["steps"][0]["ok"], false);
+                assert_eq!(failure.response.data["cdfi_recovery"]["action"], "failed");
+                assert_eq!(
+                    failure.response.data["cdfi_recovery"]["tracked_path"],
+                    "/src/ConfigDumpInfo.xml"
+                );
+                assert_eq!(
+                    failure.response.data["cdfi_recovery"]["changed_entry_count"],
+                    1
+                );
+                assert_eq!(
+                    failure.response.data["cdfi_recovery"]["snapshot_path"],
+                    "/work/cdfi-recovery/ConfigDumpInfo.xml"
+                );
                 assert_eq!(
                     failure
                         .response
@@ -2478,6 +2503,7 @@ mod tests {
                 ok: true,
                 steps: vec![],
                 duration_ms: 0,
+                cdfi_recovery: None,
             })),
         );
 
@@ -2506,6 +2532,7 @@ mod tests {
                 ok: true,
                 steps: vec![],
                 duration_ms: 0,
+                cdfi_recovery: None,
             })),
         );
 

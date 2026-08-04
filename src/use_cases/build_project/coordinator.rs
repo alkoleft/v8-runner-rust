@@ -23,6 +23,7 @@ pub(super) fn run_build_designer(
                         ok: false,
                         steps: vec![],
                         duration_ms: started.elapsed().as_millis() as u64,
+                        cdfi_recovery: None,
                     },
                 ));
             }
@@ -42,6 +43,7 @@ pub(super) fn run_build_designer(
     let mut utilities = PlatformUtilities::from_config(config);
     let mut designer_binary: Option<PathBuf> = None;
     let mut steps = Vec::new();
+    let mut cdfi_recovery = None;
 
     for (index, source_set) in ordered_source_sets.iter().enumerate() {
         let Some(source_context) = inventory.designer_context(&source_set.name).cloned() else {
@@ -175,25 +177,30 @@ pub(super) fn run_build_designer(
                     partial_paths.as_deref(),
                     &commit,
                 ) {
-                    Ok(warnings) => push_build_step(
-                        &mut steps,
-                        &source_set.name,
-                        mode,
-                        true,
-                        merge_step_message(message, &warnings),
-                        step_started.elapsed().as_millis() as u64,
-                    ),
+                    Ok(outcome) => {
+                        push_build_step(
+                            &mut steps,
+                            &source_set.name,
+                            mode,
+                            true,
+                            merge_step_message(message, &outcome.warnings),
+                            step_started.elapsed().as_millis() as u64,
+                        );
+                        retain_cdfi_recovery(&mut cdfi_recovery, outcome.cdfi_recovery);
+                    }
                     Err(error) => {
-                        let result = fail_from_source_set_index(
+                        let mut result = fail_from_source_set_index(
                             started,
                             steps,
                             &ordered_source_sets,
                             index,
                             source_set,
                             mode,
-                            error.to_string(),
+                            error.error.to_string(),
                         );
-                        return Err(BuildExecutionFailure::with_payload(error, result));
+                        result.cdfi_recovery =
+                            merge_cdfi_recovery(cdfi_recovery, error.cdfi_recovery);
+                        return Err(BuildExecutionFailure::with_payload(error.error, result));
                     }
                 }
             }
@@ -204,6 +211,7 @@ pub(super) fn run_build_designer(
         ok: true,
         steps,
         duration_ms: started.elapsed().as_millis() as u64,
+        cdfi_recovery,
     })
 }
 
@@ -230,6 +238,7 @@ pub(super) fn run_build_ibcmd(
                         ok: false,
                         steps: vec![],
                         duration_ms: started.elapsed().as_millis() as u64,
+                        cdfi_recovery: None,
                     },
                 ));
             }
@@ -375,6 +384,7 @@ pub(super) fn run_build_ibcmd(
         ok: true,
         steps,
         duration_ms: started.elapsed().as_millis() as u64,
+        cdfi_recovery: None,
     })
 }
 
@@ -395,6 +405,7 @@ pub(super) fn run_build_edt(
                 ok: false,
                 steps: vec![],
                 duration_ms: 0,
+                cdfi_recovery: None,
             },
         ));
     }
@@ -411,6 +422,7 @@ pub(super) fn run_build_edt(
                         ok: false,
                         steps: vec![],
                         duration_ms: started.elapsed().as_millis() as u64,
+                        cdfi_recovery: None,
                     },
                 ));
             }
@@ -429,6 +441,7 @@ pub(super) fn run_build_edt(
     let mut edt_binary: Option<PathBuf> = None;
     let mut interactive_edt = None;
     let mut steps = Vec::new();
+    let mut cdfi_recovery = None;
 
     for (index, source_set) in ordered_source_sets.iter().enumerate() {
         let Some(edt_context) = inventory.edt_context(&source_set.name).cloned() else {
@@ -927,28 +940,35 @@ pub(super) fn run_build_edt(
                             partial_paths.as_deref(),
                             &commit,
                         )
+                        .map(BuildStepOutcome::from)
+                        .map_err(|error| Box::new(BuildStepFailure::from(error)))
                     }
                 };
                 match load_result {
-                    Ok(warnings) => push_build_step(
-                        &mut steps,
-                        &source_set.name,
-                        mode,
-                        true,
-                        merge_step_message(message, &warnings),
-                        load_started.elapsed().as_millis() as u64,
-                    ),
+                    Ok(outcome) => {
+                        push_build_step(
+                            &mut steps,
+                            &source_set.name,
+                            mode,
+                            true,
+                            merge_step_message(message, &outcome.warnings),
+                            load_started.elapsed().as_millis() as u64,
+                        );
+                        retain_cdfi_recovery(&mut cdfi_recovery, outcome.cdfi_recovery);
+                    }
                     Err(error) => {
-                        let result = fail_from_source_set_index(
+                        let mut result = fail_from_source_set_index(
                             started,
                             steps,
                             &ordered_source_sets,
                             index,
                             source_set,
                             mode,
-                            error.to_string(),
+                            error.error.to_string(),
                         );
-                        return Err(BuildExecutionFailure::with_payload(error, result));
+                        result.cdfi_recovery =
+                            merge_cdfi_recovery(cdfi_recovery, error.cdfi_recovery);
+                        return Err(BuildExecutionFailure::with_payload(error.error, result));
                     }
                 }
             }
@@ -959,5 +979,53 @@ pub(super) fn run_build_edt(
         ok: true,
         steps,
         duration_ms: started.elapsed().as_millis() as u64,
+        cdfi_recovery,
     })
+}
+
+fn retain_cdfi_recovery(
+    current: &mut Option<Box<CdfiRecoverySummary>>,
+    candidate: Option<Box<CdfiRecoverySummary>>,
+) {
+    let Some(candidate) = candidate else {
+        return;
+    };
+    if current
+        .as_ref()
+        .is_none_or(|summary| summary.cleanup_warning.is_none())
+    {
+        *current = Some(candidate);
+    }
+}
+
+fn merge_cdfi_recovery(
+    prior: Option<Box<CdfiRecoverySummary>>,
+    current: Option<Box<CdfiRecoverySummary>>,
+) -> Option<Box<CdfiRecoverySummary>> {
+    let Some(mut current) = current else {
+        return prior;
+    };
+    let Some(prior) = prior.filter(|summary| summary.cleanup_warning.is_some()) else {
+        return Some(current);
+    };
+
+    let mut prior_diagnostic = format!(
+        "earlier CDFI cleanup warning for {}: {}",
+        prior.tracked_path.display(),
+        prior.cleanup_warning.as_deref().unwrap_or_default()
+    );
+    if let Some(snapshot_path) = prior.snapshot_path.as_ref() {
+        prior_diagnostic.push_str(&format!(
+            "; retained earlier CDFI recovery snapshot: {}",
+            snapshot_path.display()
+        ));
+    }
+    match current.cleanup_warning.as_mut() {
+        Some(warning) => {
+            warning.push_str("; ");
+            warning.push_str(&prior_diagnostic);
+        }
+        None => current.cleanup_warning = Some(prior_diagnostic),
+    }
+    Some(current)
 }

@@ -24,6 +24,7 @@ claude-set-api.sh
 .idea/
 .mcp.json
 .tmp/
+.worktrees/
 .vscode/
 
 # OS-specific files
