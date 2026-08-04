@@ -285,6 +285,7 @@ v8-runner load --path <FILE> [--mode <load|merge>] [--settings <FILE>] [--extens
 - Поддерживает `.cf` и `.cfe`.
 - Работает только для `format=DESIGNER` и `builder=DESIGNER`.
 - `.cfe` требует `--extension`.
+- Если probe сообщает, что расширение отсутствует, `load --path <artifact>.cfe --mode load --extension <NAME>` создаёт его только из Designer-артефакта: выполняет `/LoadCfg` и затем `/UpdateDBCfg` с `-Extension <NAME>`. Команда не создаёт schema/MCP-объекты и не запускает build исходников.
 - `--mode merge` требует `--settings <FILE>`.
 - `load --mode update` не поддержан; используйте `load` или `merge`.
 

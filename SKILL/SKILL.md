@@ -84,7 +84,7 @@ v8-runner init
 - Extension properties need synchronization: use `v8-runner extensions` or `extensions --name <SOURCE_SET>`.
 - Infobase changes need to become Git-visible files: check `git status`, then run the relevant `v8-runner dump ...` command.
 - Source files need conversion between Designer and EDT: use `v8-runner convert`; this is CLI-only and does not use the infobase.
-- Existing `.cf` or `.cfe` artifacts need to be applied to an infobase: use `v8-runner load ...`.
+- Existing `.cf` or `.cfe` artifacts need to be applied to an infobase: use `v8-runner load ...`. To create a missing extension, only Designer artifact loading is supported: `v8-runner load --path <artifact>.cfe --mode load --extension <NAME>`; it does not create schema/MCP objects or build extension sources.
 - Release artifacts need to be exported or external artifacts published: use `v8-runner make ...` or the `artifacts` alias.
 - Need a 1C UI session: use `v8-runner launch designer`, `launch thin`, `launch thick`, or `launch ordinary`.
 - Need an observable local external EPF runtime gate: use `launch thin --execute <file.epf> --output <out> --stderr-output <stderr> --wait-for-exit --wait-timeout-ms <ms>`. This opt-in mode is limited to explicit `.epf` files, reports PID/exit-or-timeout/artifacts, treats timeout as a CLI failure after terminating the client group, and rejects raw or configured `/C`, `/Execute`, and `/Out` aliases; callers must inspect the reported exit code because non-zero EPF exit is observational rather than a CLI failure; plain launch remains asynchronous.

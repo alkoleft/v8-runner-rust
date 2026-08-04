@@ -194,6 +194,76 @@ fn merge_cfe_json_success_requires_extension_and_settings() {
 }
 
 #[test]
+fn load_cfe_json_creates_missing_extension_from_artifact() {
+    let (_dir, config_path, _binary_path, base_path, calls_log) = setup_project();
+    fs::write(base_path.join("release.cfe"), "cfe").expect("artifact");
+
+    let output = v8_runner_command()
+        .args([
+            "--config",
+            &config_path.display().to_string(),
+            "--json-message",
+            "load",
+            "--path",
+            "release.cfe",
+            "--mode",
+            "load",
+            "--extension",
+            "NewExt",
+        ])
+        .output()
+        .expect("run command");
+
+    assert!(output.status.success());
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["command"], "load");
+    assert_eq!(payload["data"]["mode"], "load");
+    assert_eq!(payload["data"]["artifact_type"], "extension_cfe");
+    assert_eq!(payload["data"]["extension"], "NewExt");
+    assert_eq!(
+        payload["data"]["execution"]["payload"]["target_kind"],
+        "extension"
+    );
+    assert_eq!(
+        payload["data"]["execution"]["payload"]["compatibility_state"],
+        "not_supported"
+    );
+    assert_eq!(payload["data"]["execution"]["payload"]["applied"], true);
+    assert_eq!(
+        payload["data"]["execution"]["payload"]["update_db_cfg_ran"],
+        true
+    );
+
+    let calls = fs::read_to_string(calls_log).expect("calls");
+    let calls = calls.lines().collect::<Vec<_>>();
+    let probe = calls
+        .iter()
+        .position(|call| {
+            call.contains("/CompareCfg")
+                && call.contains("ExtensionConfiguration")
+                && call.contains("ExtensionDBConfiguration")
+                && call.contains("-FirstName NewExt")
+                && call.contains("-SecondName NewExt")
+        })
+        .expect("extension compatibility probe");
+    let load = calls
+        .iter()
+        .position(|call| {
+            call.contains("/LoadCfg") && call.contains("release.cfe -Extension NewExt")
+        })
+        .expect("load call with artifact and extension");
+    let update = calls
+        .iter()
+        .position(|call| call.contains("/UpdateDBCfg -Extension NewExt"))
+        .expect("update call");
+    assert!(
+        probe < load && load < update,
+        "extension probe must precede load, which must precede database update"
+    );
+}
+
+#[test]
 fn load_update_mode_returns_validation_payload() {
     let (_dir, config_path, _binary_path, base_path, _calls_log) = setup_project();
     fs::write(base_path.join("release.cf"), "cf").expect("artifact");
